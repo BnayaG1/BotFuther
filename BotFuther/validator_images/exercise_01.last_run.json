@@ -1,0 +1,189 @@
+{
+  "exercise_type": "beam",
+  "confidence": "high",
+  "image_focus": {
+    "exercise_region": "full",
+    "ignored_regions": "None"
+  },
+  "extraction_protocol": {
+    "STEP_1_BEAM_GEOMETRY": {
+      "L": 15.0,
+      "origin": "left_end_of_beam_axis",
+      "left_end_label": "A",
+      "right_end_label": "B",
+      "segments": [
+        {
+          "from_label": "A",
+          "to_label": "C",
+          "from_x": 0.0,
+          "to_x": 5.2,
+          "length_m": 5.2
+        },
+        {
+          "from_label": "C",
+          "to_label": "D",
+          "from_x": 5.2,
+          "to_x": 10.2,
+          "length_m": 5.0
+        },
+        {
+          "from_label": "D",
+          "to_label": "B",
+          "from_x": 10.2,
+          "to_x": 15.0,
+          "length_m": 4.8
+        }
+      ],
+      "labeled_points": [
+        {
+          "label": "A",
+          "x": 0.0
+        },
+        {
+          "label": "C",
+          "x": 5.2
+        },
+        {
+          "label": "D",
+          "x": 10.2
+        },
+        {
+          "label": "B",
+          "x": 15.0
+        }
+      ],
+      "key_points_m": [
+        0.0,
+        5.2,
+        10.2,
+        15.0
+      ]
+    },
+    "STEP_2_SUPPORTS": {
+      "structure_type": "simply_supported",
+      "supports": [
+        {
+          "label": "A",
+          "type": "pin",
+          "x": 0.0
+        },
+        {
+          "label": "B",
+          "type": "roller",
+          "x": 15.0
+        }
+      ],
+      "internal_hinges": [],
+      "support_mode": "simply_supported"
+    },
+    "STEP_3_POINT_LOADS": {
+      "loads": [
+        {
+          "type": "point",
+          "x": 5.2,
+          "Fy": 2.0
+        },
+        {
+          "type": "point",
+          "x": 10.2,
+          "Fy": 5.0
+        }
+      ]
+    },
+    "STEP_4_DISTRIBUTED_LOADS": {
+      "distributed_loads": []
+    },
+    "STEP_5_VALIDATION_CHECK": {
+      "is_complete": true,
+      "issues": [],
+      "empty_fields": [],
+      "geometry_conflicts": []
+    }
+  },
+  "beam": {
+    "structure_type": "simply_supported",
+    "support_mode": "simply_supported",
+    "internal_hinges": [],
+    "L": 15.0,
+    "origin": "left_end_of_beam_axis",
+    "supports": [
+      {
+        "label": "A",
+        "type": "pin",
+        "x": 0.0
+      },
+      {
+        "label": "B",
+        "type": "roller",
+        "x": 15.0
+      }
+    ],
+    "ra_pos": 0.0,
+    "rb_pos": 15.0,
+    "key_points_m": [
+      0.0,
+      5.2,
+      10.2,
+      15.0
+    ],
+    "segments": [
+      {
+        "from_x": 0.0,
+        "to_x": 5.2,
+        "length_m": 5.2
+      },
+      {
+        "from_x": 5.2,
+        "to_x": 10.2,
+        "length_m": 5.0
+      },
+      {
+        "from_x": 10.2,
+        "to_x": 15.0,
+        "length_m": 4.8
+      }
+    ],
+    "loads": [
+      {
+        "type": "point",
+        "x": 5.2,
+        "Fy": 2.0,
+        "label_at": "C"
+      },
+      {
+        "type": "point",
+        "x": 10.2,
+        "Fy": 5.0,
+        "label_at": "D"
+      }
+    ],
+    "distributed_loads": [],
+    "labeled_points": [
+      {
+        "label": "A",
+        "x": 0.0
+      },
+      {
+        "label": "C",
+        "x": 5.2
+      },
+      {
+        "label": "D",
+        "x": 10.2
+      },
+      {
+        "label": "B",
+        "x": 15.0
+      }
+    ]
+  },
+  "notes": "A simply supported beam with a pin support at A (x=0m) and a roller support at B (x=15.0m). There are two downward point loads: 2t at C (x=5.2m) and 5t at D (x=10.2m). The total beam length is 15.0m.",
+  "uncertainties": [],
+  "extraction_pipeline": "monolithic_fast",
+  "_extraction_quality": {
+    "partial": false,
+    "pipeline": "monolithic_fast",
+    "validation_issues": [],
+    "completeness_issues": []
+  }
+}
