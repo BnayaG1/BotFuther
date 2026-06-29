@@ -1,0 +1,86 @@
+{
+  "exercise_type": "beam",
+  "description_he": "תרגיל מורכב L=12 — מומנטים, 4 עומסים אלכסוניים, UDL, כוח אופקי 64.2t בקצה B",
+  "options": {
+    "x_tol": 0.35,
+    "value_tol": 0.5,
+    "min_loads": 8
+  },
+  "beam": {
+    "L": 12.0,
+    "supports": [
+      {"label": "A", "type": "pin", "x": 0},
+      {"label": "B", "type": "roller", "x": 12}
+    ],
+    "labeled_points": [
+      {"label": "A", "x": 0},
+      {"label": "C", "x": 1},
+      {"label": "D", "x": 2},
+      {"label": "E", "x": 3},
+      {"label": "G", "x": 9},
+      {"label": "H", "x": 10},
+      {"label": "I", "x": 11},
+      {"label": "B", "x": 12}
+    ],
+    "loads": [
+      {
+        "type": "moment",
+        "x": 1,
+        "M": 30,
+        "label_at": "C"
+      },
+      {
+        "type": "inclined",
+        "x": 1,
+        "magnitude_ton": 5,
+        "angle_deg": 30,
+        "incl_dir": "dr",
+        "label_at": "C"
+      },
+      {
+        "type": "inclined",
+        "x": 2,
+        "magnitude_ton": 5,
+        "angle_deg": 30,
+        "incl_dir": "dl",
+        "label_at": "D"
+      },
+      {
+        "type": "distributed",
+        "x1": 3,
+        "x2": 9,
+        "w": 2,
+        "label_at": "E"
+      },
+      {
+        "type": "inclined",
+        "x": 10,
+        "magnitude_ton": 15,
+        "angle_deg": 45,
+        "incl_dir": "dr",
+        "label_at": "H"
+      },
+      {
+        "type": "moment",
+        "x": 11,
+        "M": 18,
+        "label_at": "I"
+      },
+      {
+        "type": "inclined",
+        "x": 11,
+        "magnitude_ton": 10,
+        "angle_deg": 45,
+        "incl_dir": "dr",
+        "label_at": "I"
+      },
+      {
+        "type": "point",
+        "x": 12,
+        "Fx": -64.2,
+        "Fy": 0,
+        "label_at": "B"
+      }
+    ]
+  }
+}
