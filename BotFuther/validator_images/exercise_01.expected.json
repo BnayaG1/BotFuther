@@ -1,0 +1,25 @@
+{
+  "exercise_type": "beam",
+  "description_he": "קורה פשוטה L=15 — שני עומסים נקודתיים אנכיים",
+  "options": {
+    "x_tol": 0.3,
+    "value_tol": 0.35
+  },
+  "beam": {
+    "L": 15.0,
+    "supports": [
+      {"label": "A", "type": "pin", "x": 0},
+      {"label": "B", "type": "roller", "x": 15}
+    ],
+    "labeled_points": [
+      {"label": "A", "x": 0},
+      {"label": "C", "x": 5.2},
+      {"label": "D", "x": 10.2},
+      {"label": "B", "x": 15}
+    ],
+    "loads": [
+      {"type": "point", "x": 5.2, "Fy": 2, "label_at": "C"},
+      {"type": "point", "x": 10.2, "Fy": 5, "label_at": "D"}
+    ]
+  }
+}
