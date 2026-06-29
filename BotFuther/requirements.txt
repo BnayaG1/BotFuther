@@ -1,4 +1,5 @@
 # Beam Solver Telegram Bot
+flask
 numpy
 Pillow
 python-telegram-bot>=21.0
