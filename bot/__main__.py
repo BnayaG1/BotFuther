@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+import asyncio
 import logging
 import sys
 import threading
@@ -14,11 +15,8 @@ from bot.config import (
     ADMIN_USER_IDS,
     APP_DIR,
     TELEGRAM_KEY_NAMES,
-    VISION_ASYNC_ENABLED,
-    VISION_BEAM_CROP,
-    VISION_FAST_FALLBACK_STAGED,
 )
-from bot.env import load_env_files, log_startup_config, require_env, resolve_primary_model
+from bot.env import load_env_files, log_startup_config, require_env
 from bot.gemini_chat import gemini_runtime
 from bot.access import init_access_db
 from bot.handlers import cmd_coupon, cmd_ping, cmd_quota, cmd_reset, cmd_start, on_buy_callback, on_draft_callback, on_error, on_image, on_menu_callback, on_text
@@ -31,6 +29,26 @@ def home(): return "Bot is running!"
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
 log = logging.getLogger("beam_telegram_bot")
+
+_POLLING_KW = {"drop_pending_updates": True, "allowed_updates": Update.ALL_TYPES}
+
+
+async def _run_both_bots(main_app: Application, admin_app: Application) -> None:
+    """שני בוטים ב-asyncio על main thread — run_polling ב-thread נופל ב-Linux."""
+    async with main_app, admin_app:
+        await main_app.start()
+        await admin_app.start()
+        await main_app.updater.start_polling(**_POLLING_KW)
+        await admin_app.updater.start_polling(**_POLLING_KW)
+        log.info("Admin bot polling started (authorized users: %s)", sorted(ADMIN_USER_IDS))
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await main_app.updater.stop()
+            await admin_app.updater.stop()
+            await main_app.stop()
+            await admin_app.stop()
+
 
 def main() -> None:
     env_files = load_env_files()
@@ -59,19 +77,21 @@ def main() -> None:
 
     log.info("Bot is running. Starting Flask and Polling...")
 
-    if ADMIN_BOT_TOKEN and ADMIN_USER_IDS:
-        from bot.admin_bot import run_admin_bot
-
-        threading.Thread(target=run_admin_bot, name="admin-bot", daemon=True).start()
-        log.info("Admin bot thread started")
-    elif ADMIN_BOT_TOKEN:
-        log.warning("ADMIN_BOT_TOKEN set but ADMIN_USER_IDS empty — admin bot not started")
-    
     # הפעלת Flask ב-Thread נפרד
     port = int(os.environ.get("PORT", 8080))
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
-    
-    app_bot.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
+
+    if ADMIN_BOT_TOKEN and ADMIN_USER_IDS:
+        from bot.admin_bot import build_admin_application
+
+        log.info("Admin bot starting (authorized users: %s)", sorted(ADMIN_USER_IDS))
+        admin_app = build_admin_application()
+        asyncio.run(_run_both_bots(app_bot, admin_app))
+    elif ADMIN_BOT_TOKEN:
+        log.warning("ADMIN_BOT_TOKEN set but ADMIN_USER_IDS empty — admin bot not started")
+        app_bot.run_polling(**_POLLING_KW)
+    else:
+        app_bot.run_polling(**_POLLING_KW)
 
 if __name__ == "__main__":
     if str(APP_DIR) not in sys.path:
