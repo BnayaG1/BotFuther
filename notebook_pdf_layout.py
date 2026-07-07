@@ -54,6 +54,9 @@ class NotebookPdfLayout:
 
 DEFAULT_BOT_LAYOUT = NotebookPdfLayout()
 
+# זיז: 3 בלוקי חישוב (Fx, ΣMA, ΣFy) — panel_height_scale נמוך יותר כדי שלא יגלוש עמוד 1
+CANTILEVER_BOT_LAYOUT = NotebookPdfLayout(panel_height_scale=1.05)
+
 
 def grid_gap_mm(squares: int) -> float:
     """מרווח במ\"מ לפי מספר משבצות רשת."""
