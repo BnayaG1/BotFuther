@@ -1897,9 +1897,6 @@ def _plot_m_on_beam_clean(
         fill_alpha=_FILL_ALPHA,
         transparent=transparent,
     )
-    ax.invert_yaxis()
-    ymin, ymax = ax.get_ylim()
-    _draw_beam_reference(ax, Lf, crit, ymin, ymax)
 
 
 def _annotate_step_blocks(
