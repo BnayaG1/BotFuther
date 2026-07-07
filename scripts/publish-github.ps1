@@ -1,7 +1,7 @@
-# Push BotFuther to a private GitHub repo (run from repo root).
+# Push BotFuther to GitHub (run from repo root in an interactive terminal).
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$RepoUrl
+    [string]$RepoUrl = "https://github.com/BnayaG1/BotFuther.git",
+    [switch]$ForceMain
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +24,24 @@ if (git remote get-url origin 2>$null) {
 }
 
 $branch = git branch --show-current
-Write-Host "Pushing branch '$branch' to origin..."
-git push -u origin $branch
-Write-Host "Done. Connect this repo in Railway: New Project -> Deploy from GitHub repo."
+Write-Host "Local branch: $branch"
+
+git fetch origin 2>$null
+$hasMain = git rev-parse --verify origin/main 2>$null
+
+if ($hasMain -and -not $ForceMain) {
+    Write-Host "Remote 'main' exists (old nested layout). Re-run with -ForceMain to replace it."
+    Write-Host "  .\scripts\publish-github.ps1 -ForceMain"
+    exit 1
+}
+
+$pushArgs = @("push", "-u", "origin", "${branch}:main")
+if ($ForceMain) {
+    $pushArgs = @("push", "-u", "origin", "${branch}:main", "--force")
+    Write-Host "Force-pushing to main (replaces old BotFuther/ nested layout)..."
+} else {
+    Write-Host "Pushing to main..."
+}
+
+& git @pushArgs
+Write-Host "Done. Next: Railway -> New Project -> Deploy from GitHub -> select BotFuther"
