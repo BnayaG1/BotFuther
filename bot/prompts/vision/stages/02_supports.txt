@@ -1,0 +1,42 @@
+STEP 2 of 5 — [STEP_2: SUPPORTS]. Output JSON only.
+
+{pipeline_intro}
+
+{handwriting_hint}
+
+Prior context:
+{context}
+
+LINEAR SCAN — Step 2: pin/roller x from dimension chain only.
+
+Task:
+1) Locate EVERY support — pin (צמד), roller (גליל), fixed (ריתום).
+2) Classify structure_type.
+3) List internal_hinges with x [m].
+4) For EACH support: label, type, x [m], dist_from_left_m, dist_from_right_m.
+
+SUPPORT POSITION: x = letter on dimension chain ON beam axis — NOT triangle drawn below.
+- Roller NOT always at beam tip — read overhang past B.
+- dist_from_left_m for support B = x of letter B from left end (e.g. B at x=12 → 12, NOT the previous tick I at 11).
+- Example: C—4.2—A—…—F—2—B with L=16.2 → roller B at x=16.2 only if chain says so.
+
+Output ONLY:
+{{
+  "STEP_2_SUPPORTS": {{
+    "structure_type": "simply_supported" | "cantilever" | "multi_span" | "gerber" | "truss" | "frame",
+    "supports": [
+      {{
+        "label": "A",
+        "type": "pin" | "roller" | "fixed",
+        "x": number,
+        "dist_from_left_m": number,
+        "dist_from_right_m": number
+      }}
+    ],
+    "internal_hinges": [{{"x": number, "label": "string or null"}}],
+    "support_mode": "simply_supported" | "cantilever",
+    "pin_support_label": "string or null",
+    "roller_support_label": "string or null"
+  }}
+}}
+{extra}

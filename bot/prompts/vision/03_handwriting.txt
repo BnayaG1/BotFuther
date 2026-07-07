@@ -1,0 +1,39 @@
+{scan_protocol}
+
+{load_position_projection}
+
+{distributed_loads_protocol}
+
+HANDWRITING / SKETCH (critical):
+- The image is often a handwritten student exercise (Hebrew or Latin digits).
+- FIRST: locate the exercise diagram — beam sketch, supports, load arrows, dimension ticks.
+  IGNORE scratch calculations (ΣFx, ΣFy, Ax=..., boxed answers, equilibrium checks) in margins.
+  Do NOT treat reaction values from student work (e.g. Ax=-8.66) as applied loads.
+- PHOTO ORIENTATION: the beam may be drawn horizontally on paper but photographed rotated (appears vertical).
+  Mentally rotate the page so the beam is horizontal left→right. Read the dimension chain along the beam axis.
+- DIMENSION LINE vs LOADS (critical): numbers written BETWEEN tick marks on the dimension chain (e.g. 1, 1, 1, 3, 3, 1, 1, 1)
+  are segment LENGTHS in meters — NOT load magnitudes. NEVER set w=6 t/m because two adjacent segments show "3".
+  The total L = sum of ALL segment lengths. A lone "12" at the end of the chain is usually total length [m].
+- DISTRIBUTED LOADS: follow distributed_loads_protocol ONLY — never put distributed loads in loads[].
+- POINT / INCLINED LABEL PLACEMENT: for a regular concentrated load, the magnitude is written at the TOP of the arrow (arrowhead / tip region).
+- STACKED LOADS (critical): loads drawn one above the other at the same x are SEPARATE — output each type independently.
+  • Same x: vertical ↓ + horizontal ← → one point with Fy and Fx OR two entries — never drop one.
+  • Same x: moment + inclined + point → separate loads[] entries.
+  • distributed_loads[] is separate from loads[] — never duplicate the same force in both.
+- LABELED POINTS: students mark A, B, C, D… on the dimension chain. Read left-to-right cumulative x.
+  x=0 at the leftmost chain tick. Support x = chain position of label A/B — NOT the triangle below the line.
+  Example: C—4.2—A—4—D—4—E—2—F—2—B → L=16.2 m; pin A at x=4.2, roller B at x=16.2 (on axis, not outside drawing).
+- Read EVERY segment length between consecutive tick marks; SUM all segments to get L. Never invent equal 2m segments.
+- Symbols: triangle+hatching = pin; triangle+circles = roller; wall/hatch = fixed; curved arrow = moment.
+- DUAL UNIT LABELS (critical): diagrams often show kN AND ton together, e.g. "100kn (10t)", "200kn (20t)".
+  ALWAYS use the parenthetical ton value for point loads — NEVER the kN number before it.
+  100 kn (10 t) ↓ → Fy=10; 200 kn (20 t) ← → Fx=-20, direction=left.
+- Horizontal arrow (← or →) = axial force (Fx); vertical arrow (↓ or ↑) = Fy. Do NOT call a horizontal arrow "vertical".
+- Sign convention: Fy>0 downward; Fx>0 toward right (→); Fx<0 toward left (←). Always set "direction": "left"|"right"|"down"|"up" on every concentrated load.
+- At ONE point (e.g. C) there may be TWO separate arrows (vertical + horizontal) — output BOTH components (one point with Fy and Fx, or two entries at the same x).
+- If the page shows only kN without parentheses — convert to ton (÷10) for JSON.
+- List EVERY distinct load (inclined, point, moment) in loads[] — distributed only in distributed_loads[].
+- At one labeled point there may be BOTH a moment (curved arrow) AND an inclined force — output both separately.
+- Horizontal force at the right end B (← 64.2 t) is Fx at x=L, direction=left — NOT a vertical point load.
+- UNCERTAINTY: if handwriting, moment direction (↻/↺), units, or any value is ambiguous — add question_he in uncertainties[] (Hebrew). If everything is clear, uncertainties=[].
+

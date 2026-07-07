@@ -1,0 +1,13 @@
+.env
+.env.local
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+_bot_temp_images/
+*.lock
+coupons.db
+*.db-journal
+learned_extraction_rules.json
+validator_images/**/*.last_run.json
+validator_images/failures/
