@@ -48,14 +48,20 @@ python -m bot.vision_regression
 אל תעלה `.env` או `coupons.db` — רק `.env.example`.
 
 ```powershell
-git init
-git add .
-git commit -m "Prepare Railway deployment"
-git remote add origin https://github.com/YOUR_USER/beam-solver-bot.git
-git push -u origin main
+# אחרי יצירת repo פרטי ב-GitHub:
+.\scripts\publish-github.ps1 -RepoUrl "https://github.com/YOUR_USER/botfuther.git"
+```
+
+או ידנית:
+
+```powershell
+git remote add origin https://github.com/YOUR_USER/botfuther.git
+git push -u origin master
 ```
 
 מומלץ: repo **פרטי**.
+
+פרטים מלאים: [`docs/RAILWAY_SETUP.md`](docs/RAILWAY_SETUP.md)
 
 ### 2. Railway
 
