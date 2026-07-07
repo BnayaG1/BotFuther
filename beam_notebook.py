@@ -26,8 +26,6 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Arc, Polygon
 import numpy as np
 from matplotlib.lines import Line2D
-import streamlit as st
-import streamlit.components.v1 as components
 
 import solver
 from notebook_pdf_layout import (
@@ -3236,6 +3234,9 @@ def render_solved_notebook(
     rb_x: float,
     rb_y: float,
 ) -> None:
+    import streamlit as st
+    import streamlit.components.v1 as components
+
     if not loads:
         st.info("הוסף עומסים על הקורה (בסרגל או בלוח) כדי לראות כאן תרגיל פתור במחברת.")
         st.caption("אם העומסים כבר מופיעים בלוח — לחץ **Apply changes** כדי לשמור אותם לחישוב ולמחברת.")
@@ -3319,6 +3320,9 @@ def build_cantilever_page_html(
 
 
 def render_cantilever_notebook(loads: List[dict], L: float, result: Dict[str, Any]) -> None:
+    import streamlit as st
+    import streamlit.components.v1 as components
+
     if not loads:
         st.info("הוסף עומסים על הקורה כדי לראות כאן תרגיל זיז פתור במחברת.")
         return
