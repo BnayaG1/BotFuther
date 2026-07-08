@@ -18,7 +18,9 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from bot.config import (
+    ADMIN_BOT_TOKEN,
     ADMIN_CHAT_ID,
+    ADMIN_USER_IDS,
     BOT_DISPLAY_NAME,
     COUPON_ACCESS_ENABLED,
     FREE_TRIAL_IMAGES,
@@ -115,6 +117,15 @@ _TEXT_UNHANDLED = (
 _IMAGE_DEDUP_SEC = 120.0
 _recent_image_keys: dict[tuple[int, int], float] = {}
 _coupon_prompt_chats: set[int] = set()
+_bug_report_prompt_chats: set[int] = set()
+
+_BUG_REPORT_FORCE_REPLY = ForceReply(
+    selective=True,
+    input_field_placeholder="תאר/י את התקלה",
+)
+
+_BUG_REPORT_CANCEL = "❌ ביטול דיווח"
+
 
 def telegram_chat_id(update: Update) -> int:
     chat = update.effective_chat
@@ -295,6 +306,91 @@ def build_persistent_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         one_time_keyboard=False,
     )
+
+
+def build_bug_report_cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(_BUG_REPORT_CANCEL)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def _bug_report_admin_text(
+    *,
+    user_id: int,
+    chat_id: int,
+    username: str | None,
+    first_name: str | None,
+    report_text: str,
+) -> str:
+    uname = f"@{username}" if username else "—"
+    name = first_name or "—"
+    body = (report_text or "").strip()
+    return (
+        "🛠️ דיווח תקלה חדש\n"
+        f"משתמש: {name} ({uname})\n"
+        f"user_id: {user_id}\n"
+        f"chat_id: {chat_id}\n"
+        "────────────\n"
+        f"{body}"
+    )
+
+
+async def _forward_bug_report_via_admin_bot(
+    text: str,
+    *,
+    fallback_bot=None,
+) -> bool:
+    """שולח דיווח דרך בוט האדמין לכל ADMIN_USER_IDS. Fallback ל־ADMIN_CHAT_ID בבוט הראשי."""
+    if ADMIN_BOT_TOKEN and ADMIN_USER_IDS:
+        try:
+            from telegram import Bot
+
+            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+            ok_any = False
+            for admin_id in sorted(ADMIN_USER_IDS):
+                try:
+                    await admin_bot.send_message(chat_id=admin_id, text=text)
+                    ok_any = True
+                except Exception as exc:
+                    log.warning(
+                        "Admin-bot bug report failed admin_id=%s: %s",
+                        admin_id,
+                        exc,
+                    )
+            if ok_any:
+                return True
+        except Exception as exc:
+            log.warning("Admin-bot client failed for bug report: %s", exc)
+
+    if fallback_bot is not None and ADMIN_CHAT_ID:
+        try:
+            await fallback_bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+            return True
+        except Exception as exc:
+            log.warning("Fallback bug report to ADMIN_CHAT_ID failed: %s", exc)
+    return False
+
+
+async def _prompt_bug_report(message) -> None:
+    chat_id = int(message.chat_id)
+    _bug_report_prompt_chats.add(chat_id)
+    await message.reply_text(
+        "🛠️ *דיווח על תקלה*\n\n"
+        "כתוב/י כאן במילים שלך מה קרה (או מה לא עובד).\n"
+        "אחרי השליחה הדיווח יועבר אוטומטית לצוות.\n\n"
+        "אפשר לבטל עם «❌ ביטול דיווח».",
+        parse_mode="Markdown",
+        reply_markup=build_bug_report_cancel_keyboard(),
+    )
+    try:
+        await message.reply_text(
+            "כאן אפשר לרשום את פרטי התקלה 👇",
+            reply_markup=_BUG_REPORT_FORCE_REPLY,
+        )
+    except BadRequest:
+        pass
 
 
 _MENU_REPLIES: dict[str, str] = {
@@ -1158,6 +1254,48 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = telegram_chat_id(update)
     text = update.message.text.strip()
 
+    if chat_id in _bug_report_prompt_chats:
+        if text in (_BUG_REPORT_CANCEL, "🛠️ דיווח על תקלה"):
+            if text == _BUG_REPORT_CANCEL:
+                _bug_report_prompt_chats.discard(chat_id)
+                await update.message.reply_text(
+                    "הדיווח בוטל.",
+                    reply_markup=build_persistent_keyboard(),
+                )
+                return
+            # לחיצה חוזרת על הכפתור — פשוט מזכירים לכתוב
+            await update.message.reply_text(
+                "כתוב/י עכשיו את תיאור התקלה, או לחץ/י «❌ ביטול דיווח».",
+                reply_markup=build_bug_report_cancel_keyboard(),
+            )
+            return
+
+        _bug_report_prompt_chats.discard(chat_id)
+        user = update.effective_user
+        report = _bug_report_admin_text(
+            user_id=telegram_user_id(update),
+            chat_id=chat_id,
+            username=user.username if user else None,
+            first_name=user.first_name if user else None,
+            report_text=text,
+        )
+        sent = await _forward_bug_report_via_admin_bot(
+            report, fallback_bot=context.bot
+        )
+        if sent:
+            await update.message.reply_text(
+                "✅ תודה! הדיווח נשלח לצוות. נטפל בזה בהקדם.",
+                reply_markup=build_persistent_keyboard(),
+            )
+        else:
+            log.warning("Bug report could not be delivered (chat=%s)", chat_id)
+            await update.message.reply_text(
+                "קיבלנו את הדיווח מקומית, אבל השליחה לצוות נכשלה זמנית. "
+                "נסי/ה שוב עוד רגע או כתוב/י לנו בוואטסאפ אם דחוף.",
+                reply_markup=build_persistent_keyboard(),
+            )
+        return
+
     if text == "🎟️ קופון":
         await cmd_coupon(update, context)
         return
@@ -1176,10 +1314,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await cmd_reset(update, context)
         return
     if text == "🛠️ דיווח על תקלה":
-        await update.message.reply_text(
-            "תודה! הדיווח התקבל. נטפל בזה בהקדם.",
-            reply_markup=build_persistent_keyboard(),
-        )
+        await _prompt_bug_report(update.message)
         return
 
     pending_edit = get_draft_edit(chat_id)
