@@ -239,6 +239,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if "parse entities" not in str(exc).lower():
             raise
         await update.message.reply_text(text, reply_markup=keyboard)
+    # Telegram מאפשר reply_markup אחד להודעה — שולחים את המקלדת הקבועה בהודעה נפרדת.
+    await update.message.reply_text(
+        "התפריט למטה זמין תמיד 👇",
+        reply_markup=build_persistent_keyboard(),
+    )
 
 
 def build_start_welcome_text() -> str:
