@@ -31,6 +31,7 @@ from bot.access import (
     consume_image_slot,
     coupon_prompt_text_hebrew,
     create_purchase_request,
+    has_active_coupon_access,
     image_access_reply_hebrew,
     looks_like_coupon_code,
     ping_reply_hebrew,
@@ -48,6 +49,17 @@ from bot.purchase import (
     payment_instructions_hebrew,
     package_confirm_text_hebrew,
     purchase_menu_intro_hebrew,
+)
+from bot.formulas import (
+    build_formulas_locked_keyboard,
+    build_formulas_menu_keyboard,
+    build_topic_followup_keyboard,
+    formulas_locked_reply_hebrew,
+    formulas_menu_intro_hebrew,
+    get_topic,
+    parse_formula_callback,
+    topic_image_caption_hebrew,
+    topic_pending_caption_hebrew,
 )
 from bot.draft_editor import (
     add_empty_load,
@@ -225,7 +237,7 @@ def build_start_welcome_text() -> str:
         "סטטיקה הוא מקצוע מאתגר — ולעיתים קרובות לוקח זמן להבין ולהתקדם.\n"
         "הבוט הזה נועד *לייעל ולקצר* את תהליך הלמידה שלך.\n\n"
         "*מה אני עושה?*\n"
-        "אתה שולח/ת **תמונה** של תרגיל סטטיקה (קורה, עומסים, 2 סמכים, ריתום) — "
+        "את/ה שולח/ת **תמונה** של תרגיל סטטיקה (קורה, עומסים, 2 סמכים, ריתום) — "
         "ואני מחזיר טיוטה לאישור ופתרון מחברת מלא.\n\n"
         "*איך מתחילים?*\n"
         "צלם/י את התרגיל או שלח/י כקובץ 📎, ואטפל בשאר.",
@@ -259,6 +271,7 @@ def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
 def build_start_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton("📸 שלח תמונה של תרגיל", callback_data="menu:new")],
+        [InlineKeyboardButton("📐 נוסחאות", callback_data="menu:formulas")],
     ]
     if COUPON_ACCESS_ENABLED:
         rows.append(
@@ -272,8 +285,9 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
 
 def build_persistent_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton("🎟️ קופון"), KeyboardButton("📊 מכסה")],
-        [KeyboardButton("🔄 איפוס תרגיל"), KeyboardButton("🛠️ דיווח על תקלה")],
+        [KeyboardButton("📐 נוסחאות"), KeyboardButton("📊 מכסה")],
+        [KeyboardButton("🎟️ קופון"), KeyboardButton("🔄 איפוס תרגיל")],
+        [KeyboardButton("🛠️ דיווח על תקלה")],
     ]
     return ReplyKeyboardMarkup(
         rows,
@@ -316,6 +330,108 @@ async def _send_purchase_menu(
                 parse_mode="Markdown",
             )
     except BadRequest:
+        if message is not None:
+            await message.reply_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=keyboard
+            )
+
+
+async def _send_formulas_locked(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    message=None,
+    edit_message=None,
+) -> None:
+    text = formulas_locked_reply_hebrew()
+    keyboard = build_formulas_locked_keyboard()
+    try:
+        if edit_message is not None:
+            await edit_message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+            return
+        if message is not None:
+            await message.reply_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+    except BadRequest:
+        if edit_message is not None:
+            try:
+                await edit_message.edit_text(text, reply_markup=keyboard)
+                return
+            except BadRequest:
+                pass
+        if message is not None:
+            await message.reply_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=keyboard
+            )
+
+
+async def _send_formulas_menu(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    user_id: int | None = None,
+    message=None,
+    edit_message=None,
+) -> None:
+    """מציג תפריט נוסחאות רק למנויי קופון; אחרת הודעת נעילה + כפתורי רכישה."""
+    uid = int(user_id) if user_id is not None else None
+    if COUPON_ACCESS_ENABLED and (uid is None or not has_active_coupon_access(uid)):
+        await _send_formulas_locked(
+            context,
+            chat_id,
+            message=message,
+            edit_message=edit_message,
+        )
+        return
+
+    text = formulas_menu_intro_hebrew()
+    keyboard = build_formulas_menu_keyboard()
+    try:
+        if edit_message is not None:
+            await edit_message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+            return
+        if message is not None:
+            await message.reply_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+    except BadRequest:
+        if edit_message is not None:
+            try:
+                await edit_message.edit_text(text, reply_markup=keyboard)
+                return
+            except BadRequest:
+                pass
         if message is not None:
             await message.reply_text(text, reply_markup=keyboard)
         else:
@@ -483,6 +599,16 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _send_purchase_menu(context, chat_id, message=query.message)
         return
+    if action == "formulas":
+        await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _send_formulas_menu(
+            context,
+            chat_id,
+            user_id=telegram_user_id(update),
+            message=query.message,
+        )
+        return
     reply = _MENU_REPLIES.get(action)
     if not reply:
         await query.answer()
@@ -490,6 +616,95 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
     if query.message:
         await query.message.reply_text(reply)
+
+
+async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    parsed = parse_formula_callback(query.data)
+    if parsed is None:
+        await query.answer()
+        return
+    action, payload = parsed
+    chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+    user_id = telegram_user_id(update)
+
+    if action in ("menu",):
+        await query.answer()
+        await _send_formulas_menu(
+            context,
+            chat_id,
+            user_id=user_id,
+            edit_message=query.message,
+            message=query.message,
+        )
+        return
+
+    if action == "back":
+        await query.answer()
+        text = build_start_welcome_text()
+        keyboard = build_start_keyboard()
+        try:
+            if query.message:
+                await query.message.edit_text(
+                    text, reply_markup=keyboard, parse_mode="Markdown"
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown",
+                )
+        except BadRequest:
+            if query.message:
+                await query.message.reply_text(text, reply_markup=keyboard)
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id, text=text, reply_markup=keyboard
+                )
+        return
+
+    if action == "topic":
+        topic = get_topic(payload)
+        if topic is None:
+            await query.answer("נושא לא נמצא.", show_alert=True)
+            return
+        if COUPON_ACCESS_ENABLED and not has_active_coupon_access(user_id):
+            await query.answer("נוסחאות למנויי חבילה בלבד.", show_alert=True)
+            await _send_formulas_locked(context, chat_id, message=query.message)
+            return
+        await query.answer()
+        image_path = topic.image_path()
+        followup = build_topic_followup_keyboard()
+        if image_path is not None:
+            try:
+                with image_path.open("rb") as fh:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=fh,
+                        caption=topic_image_caption_hebrew(topic),
+                        reply_markup=followup,
+                    )
+            except Exception:
+                log.exception("Failed sending formula image for %s", topic.topic_id)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=topic_pending_caption_hebrew(topic),
+                    reply_markup=followup,
+                    parse_mode="Markdown",
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=topic_pending_caption_hebrew(topic),
+                reply_markup=followup,
+                parse_mode="Markdown",
+            )
+        return
+
+    await query.answer()
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -538,6 +753,20 @@ async def cmd_quota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         quota_status_reply_hebrew(result),
         reply_markup=build_persistent_keyboard(),
     )
+
+
+async def cmd_formulas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """פקודת /formulas — תפריט נוסחאות (מופיע גם בתפריט הפקודות של טלגרם)."""
+    if not update.message:
+        return
+    chat_id = telegram_chat_id(update)
+    await _send_formulas_menu(
+        context,
+        chat_id,
+        user_id=telegram_user_id(update),
+        message=update.message,
+    )
+
 
 async def _edit_draft_message_safe(
     context: ContextTypes.DEFAULT_TYPE,
@@ -934,6 +1163,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if text == "📊 מכסה":
         await cmd_quota(update, context)
+        return
+    if text == "📐 נוסחאות":
+        await _send_formulas_menu(
+            context,
+            chat_id,
+            user_id=telegram_user_id(update),
+            message=update.message,
+        )
         return
     if text == "🔄 איפוס תרגיל":
         await cmd_reset(update, context)

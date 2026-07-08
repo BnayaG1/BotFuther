@@ -619,6 +619,15 @@ def check_image_access(user_id: int) -> ImageAccessResult:
         return result
 
 
+def has_active_coupon_access(user_id: int) -> bool:
+    """True אם למשתמש יש חבילה/קופון פעיל (לא ניסיון חינם)."""
+    conn = _connect()
+    now = time.time()
+    with _db_lock:
+        row = _load_coupon_access_unlocked(conn, int(user_id), now)
+        return row is not None
+
+
 def consume_image_slot(user_id: int) -> ImageAccessResult:
     """מאשר תמונה ומגדיל מונה — קוראים לפני עיבוד vision."""
     conn = _connect()
