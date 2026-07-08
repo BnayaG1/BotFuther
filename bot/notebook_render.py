@@ -62,24 +62,27 @@ def render_notebook_png_bytes(extracted: dict, solved: dict) -> bytes | None:
     try:
         import beam_notebook
         import solver
+        # טען את beam_notebook מחדש מהדיסק כדי למנוע מצב שבו תהליך רץ
+        # ממשיך להשתמש בגרסה ישנה של פריסת PDF/גרפים (בעיית גלישה/קיטוע).
+        nb = beam_notebook._load_live_notebook_module()
 
         if tool_name == "beam_solve_cantilever":
             result = solver.solve_cantilever_beam(loads, L)
-            _, _, pdf_bytes = beam_notebook.build_cantilever_page_html(
+            _, _, pdf_bytes = nb.build_cantilever_page_html(
                 loads, L, result, wide_layout=True
             )
-            return beam_notebook._pdf_to_png_bytes(
-                pdf_bytes, dpi=beam_notebook._BOT_EXPORT_DPI
+            return nb._pdf_to_png_bytes(
+                pdf_bytes, dpi=nb._BOT_EXPORT_DPI
             )
 
         support_mode, ra_pos, rb_pos = resolve_beam_support_geometry(beam)
         if support_mode == "cantilever":
             result = solver.solve_cantilever_beam(loads, L)
-            _, _, pdf_bytes = beam_notebook.build_cantilever_page_html(
+            _, _, pdf_bytes = nb.build_cantilever_page_html(
                 loads, L, result, wide_layout=True
             )
-            return beam_notebook._pdf_to_png_bytes(
-                pdf_bytes, dpi=beam_notebook._BOT_EXPORT_DPI
+            return nb._pdf_to_png_bytes(
+                pdf_bytes, dpi=nb._BOT_EXPORT_DPI
             )
 
         ra_x, ra_y, rb_x, rb_y = _reactions_ton_from_solved(solved)
@@ -87,11 +90,11 @@ def render_notebook_png_bytes(extracted: dict, solved: dict) -> bytes | None:
             ra_x, ra_y, rb_x, rb_y = solver.compute_reactions(
                 loads, L, ra_pos, rb_pos
             )
-        _, _, pdf_bytes = beam_notebook.build_page_html(
+        _, _, pdf_bytes = nb.build_page_html(
             loads, L, ra_pos, rb_pos, ra_x, ra_y, rb_x, rb_y, wide_layout=True
         )
-        return beam_notebook._pdf_to_png_bytes(
-            pdf_bytes, dpi=beam_notebook._BOT_EXPORT_DPI
+        return nb._pdf_to_png_bytes(
+            pdf_bytes, dpi=nb._BOT_EXPORT_DPI
         )
     except Exception as exc:
         log.warning("Notebook render failed: %s", exc)
