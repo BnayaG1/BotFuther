@@ -9,6 +9,7 @@ import solver
 
 from notebook.html.math_format import _clean_math_text, _join_calc_terms
 from notebook.html.primitives import _nb_step_html
+from notebook.constants import _U_MOMENT
 
 
 def _point_calc_grid_html(
@@ -28,6 +29,15 @@ def _point_calc_grid_html(
 
     def _fmt(v: float) -> str:
         return str(solver.format_number(float(v)))
+
+    def _chain_step(prev: float, cur: float) -> str:
+        """צעד בדיאגרמה בפורמט קומפקטי: +a / -a / +0."""
+        d = float(cur - prev)
+        if abs(d) < 1e-9:
+            return "+0"
+        if d > 0:
+            return f"+{_fmt(abs(d))}"
+        return f"-{_fmt(abs(d))}"
 
     def _term_join(terms: List[str]) -> str:
         return _join_calc_terms(terms)
@@ -158,24 +168,19 @@ def _point_calc_grid_html(
 
         return _term_join(n_terms), _term_join(q_terms), _term_join(m_terms)
 
-    _re_labeled_num = re.compile(r"(?:Ax|Ay|By|Fx|Fy|Ma|R|M)\(([^)]*)\)")
-
-    def _expr_numbers_only(expr: str) -> str:
-        """נקודה ראשונה בכל עמודה — רק מספרים, בלי Ay/Ax וכו'."""
-        return _re_labeled_num.sub(r"\1", expr)
-
-    def _val_with_unit(val: float) -> str:
+    def _val_with_unit(val: float, *, unit: str = "t") -> str:
         s = _fmt(val)
         if abs(val) < 1e-9:
             return s
-        return f"{s}t"
+        return f"{s}{unit}"
 
     n_rows: List[str] = []
     q_rows: List[str] = []
     m_rows: List[str] = []
-    prev_n: float | None = None
-    prev_q: float | None = None
-    prev_m: float | None = None
+    # מהשורה השנייה: המשוואה מתחילה מתוצאת השורה הקודמת (+/-Δ עד הנקודה הנוכחית)
+    prev_printed_n: float | None = None
+    prev_printed_q: float | None = None
+    prev_printed_m: float | None = None
     for r in rows:
         x = float(r["x"])
         lab = str(r.get("label", ""))
@@ -189,33 +194,68 @@ def _point_calc_grid_html(
         m_val = float(r["M"])
         lab_esc = html_lib.escape(lab)
 
-        def _diagram_step(prev: float | None, cur: float) -> str:
-            """קפיצה בדיאגרמה: ערך לפני הנקודה ± גודל השינוי (כמו בגרף)."""
-            if prev is None:
-                return _fmt(cur)
-            d = cur - prev
-            if abs(d) < 1e-9:
-                return _fmt(cur)
-            if d > 0:
-                return f"{_fmt(prev)}+{_fmt(abs(d))}"
-            return f"{_fmt(prev)}-{_fmt(abs(d))}"
+        def _point_row(sym: str, chain: str, val: float, *, unit: str = "t") -> str:
+            # כלל: אם הביטוי הוא 0 בשורה הראשונה — להציג רק "= 0" (בלי יחידות, בלי '=' נוסף)
+            if abs(val) < 1e-9 and chain.strip() == "0":
+                return f"{sym}<sub>{lab_esc}</sub> = 0"
+            val_esc = html_lib.escape(_val_with_unit(val, unit=unit))
+            chain_esc = html_lib.escape(_clean_math_text(chain))
+            return f"{sym}<sub>{lab_esc}</sub> = {chain_esc} = {val_esc}"
 
-        def _point_row(sym: str, expr: str, prev: float | None, val: float) -> str:
-            val_esc = html_lib.escape(_val_with_unit(val))
-            if prev is None:
-                expr_esc = html_lib.escape(_clean_math_text(_expr_numbers_only(expr)))
-                return f"{sym}<sub>{lab_esc}</sub> = {expr_esc} = {val_esc}"
-            step_esc = html_lib.escape(_clean_math_text(_diagram_step(prev, val)))
-            return f"{sym}<sub>{lab_esc}</sub> = {step_esc} = {val_esc}"
+        def _step_eq(prev: float, cur: float) -> str:
+            """משוואה משורה 2+: תוצאה קודמת ± Δ עד הערך בנקודה הנוכחית."""
+            return f"{_fmt(prev)}{_chain_step(prev, cur)}"
 
-        if prev_n is None or abs(n_val - prev_n) > 1e-9:
-            n_rows.append(_nb_step_html(_point_row("N", n_expr, prev_n, n_val), "nb-line"))
-        if prev_q is None or abs(q_val - prev_q) > 1e-9:
-            q_rows.append(_nb_step_html(_point_row("Q", q_expr, prev_q, q_val), "nb-line"))
-        if prev_m is None or abs(m_val - prev_m) > 1e-9:
-            m_rows.append(_nb_step_html(_point_row("M", m_expr, prev_m, m_val), "nb-line"))
+        # N
+        if prev_printed_n is None:
+            if abs(n_val) < 1e-9:
+                n_rows.append(_nb_step_html(_point_row("N", "0", n_val, unit="t"), "nb-line"))
+            else:
+                n_rows.append(
+                    _nb_step_html(_point_row("N", f"0{_chain_step(0.0, n_val)}", n_val, unit="t"), "nb-line")
+                )
+            prev_printed_n = n_val
+        elif abs(n_val - prev_printed_n) > 1e-9:
+            n_rows.append(
+                _nb_step_html(_point_row("N", _step_eq(prev_printed_n, n_val), n_val, unit="t"), "nb-line")
+            )
+            prev_printed_n = n_val
 
-        prev_n, prev_q, prev_m = n_val, q_val, m_val
+        # Q
+        if prev_printed_q is None:
+            if abs(q_val) < 1e-9:
+                q_rows.append(_nb_step_html(_point_row("Q", "0", q_val, unit="t"), "nb-line"))
+            else:
+                q_rows.append(
+                    _nb_step_html(_point_row("Q", f"0{_chain_step(0.0, q_val)}", q_val, unit="t"), "nb-line")
+                )
+            prev_printed_q = q_val
+        elif abs(q_val - prev_printed_q) > 1e-9:
+            q_rows.append(
+                _nb_step_html(_point_row("Q", _step_eq(prev_printed_q, q_val), q_val, unit="t"), "nb-line")
+            )
+            prev_printed_q = q_val
+
+        # M
+        if prev_printed_m is None:
+            if abs(m_val) < 1e-9:
+                m_rows.append(_nb_step_html(_point_row("M", "0", m_val, unit=_U_MOMENT), "nb-line"))
+            else:
+                m_rows.append(
+                    _nb_step_html(
+                        _point_row("M", f"0{_chain_step(0.0, m_val)}", m_val, unit=_U_MOMENT),
+                        "nb-line",
+                    )
+                )
+            prev_printed_m = m_val
+        elif abs(m_val - prev_printed_m) > 1e-9:
+            m_rows.append(
+                _nb_step_html(
+                    _point_row("M", _step_eq(prev_printed_m, m_val), m_val, unit=_U_MOMENT),
+                    "nb-line",
+                )
+            )
+            prev_printed_m = m_val
 
     def _col_html(title: str, rows_html: List[str]) -> str:
         return (
