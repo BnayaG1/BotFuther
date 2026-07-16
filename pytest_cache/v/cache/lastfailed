@@ -1,0 +1,8 @@
+{
+  "tests/test_bot_image_only.py::test_on_text_auto_reply_when_not_draft_or_coupon": true,
+  "tests/test_persistent_reply_keyboard.py::test_cmd_start_keeps_inline_and_plants_persistent": true,
+  "tests/test_persistent_reply_keyboard.py::test_cmd_start_sends_persistent_keyboard_followup[asyncio]": true,
+  "tests/test_persistent_reply_keyboard.py::test_reply_text_safe_defaults_persistent_keyboard[asyncio]": true,
+  "tests/test_exercise_bank_menu.py::test_give_exercise_is_noop_when_bank_has_content[asyncio]": true,
+  "tests/test_draft_load_direction_toggle.py::test_toggle_direction_on_combined_point_load_flips_fy_when_both_present": true
+}
