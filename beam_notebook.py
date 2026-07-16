@@ -2125,6 +2125,25 @@ def build_beam_schematic_figure(
     return fig
 
 
+def build_cantilever_schematic_figure(
+    L: float,
+    loads: List[dict],
+    *,
+    ra_y: float = 0.0,
+    wide: bool = False,
+) -> Any:
+    """קורת זיז + מידות בלבד (ללא דיאגרמות N/Q/M) — לתצוגה זמנית במחברת."""
+    _notebook_mpl_rc()
+    fig_w = _notebook_fig_width(wide=wide)
+    sub_l, sub_r = _subplot_lr(wide=wide)
+    fig, ax = plt.subplots(1, 1, figsize=(fig_w, 2.15), facecolor="none")
+    _prep_figure_transparent(fig)
+    _prep_axis_on_paper(ax, grid=False)
+    _draw_cantilever_beam_schematic(ax, L, loads, ra_y=ra_y)
+    fig.subplots_adjust(left=sub_l, right=sub_r, top=0.98, bottom=0.06)
+    return fig
+
+
 def _notebook_graphics_assets(
     *,
     mode: str,
