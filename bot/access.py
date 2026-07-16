@@ -33,6 +33,8 @@ VIP_UNLIMITED_DAILY_QUOTA = 999
 VALID_TIERS = VALID_DAILY_QUOTAS
 _QUOTA_SQL_LIST = ", ".join(str(q) for q in sorted(VALID_DAILY_QUOTAS))
 _PERIOD_SQL_LIST = ", ".join(str(d) for d in sorted(VALID_PERIOD_DAYS))
+# חלון חינמי לספריית נוסחאות: 24 שעות מ־first_seen_at (ראה ensure_user_first_seen).
+FORMULAS_FREE_WINDOW_SEC = 24 * 3600
 
 
 class RedeemStatus(Enum):
@@ -136,6 +138,10 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             user_id INTEGER PRIMARY KEY,
             unlocked_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS user_first_seen (
+            user_id INTEGER PRIMARY KEY,
+            first_seen_at REAL NOT NULL
+        );
         """
     )
     conn.commit()
@@ -143,6 +149,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_coupon_quota_constraints(conn)
     _migrate_last_image_at_columns(conn)
     _migrate_bank_unlock_tables(conn)
+    _migrate_user_first_seen_table(conn)
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -162,6 +169,19 @@ def _migrate_bank_unlock_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS user_bank_unlock (
             user_id INTEGER PRIMARY KEY,
             unlocked_at REAL NOT NULL
+        );
+        """
+    )
+    conn.commit()
+
+
+def _migrate_user_first_seen_table(conn: sqlite3.Connection) -> None:
+    """יוצר טבלת first_seen (תחילת חלון 24ש' לנוסחאות) אם חסרה."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS user_first_seen (
+            user_id INTEGER PRIMARY KEY,
+            first_seen_at REAL NOT NULL
         );
         """
     )
@@ -895,6 +915,46 @@ def has_active_coupon_access(user_id: int) -> bool:
     with _db_lock:
         row = _load_coupon_access_unlocked(conn, int(user_id), now)
         return row is not None
+
+
+def ensure_user_first_seen(user_id: int, *, now: float | None = None) -> float:
+    """
+    מחזיר first_seen_at קבוע למשתמש; יוצר רשומה בפעם הראשונה.
+
+    כלל חלון הנוסחאות החינמי: השעון מתחיל באינטראקציה הראשונה שנרשמת
+    (בדרך כלל /start דרך ensure_user_first_seen, או בפתיחת נוסחאות דרך
+    has_formulas_access). הערך לא משתנה אחרי יצירה.
+    """
+    conn = _connect()
+    ts = time.time() if now is None else float(now)
+    uid = int(user_id)
+    with _db_lock:
+        row = conn.execute(
+            "SELECT first_seen_at FROM user_first_seen WHERE user_id = ?",
+            (uid,),
+        ).fetchone()
+        if row is not None:
+            return float(row["first_seen_at"])
+        conn.execute(
+            "INSERT INTO user_first_seen (user_id, first_seen_at) VALUES (?, ?)",
+            (uid, ts),
+        )
+        conn.commit()
+        return ts
+
+
+def has_formulas_free_window(user_id: int, *, now: float | None = None) -> bool:
+    """True בתוך 24 השעות הראשונות מ־first_seen_at (כולל יצירת הרשומה)."""
+    ts = time.time() if now is None else float(now)
+    first_seen = ensure_user_first_seen(user_id, now=ts)
+    return (ts - first_seen) < FORMULAS_FREE_WINDOW_SEC
+
+
+def has_formulas_access(user_id: int) -> bool:
+    """True אם קופון פעיל או בתוך חלון 24 השעות החינמיות לנוסחאות."""
+    if has_active_coupon_access(user_id):
+        return True
+    return has_formulas_free_window(user_id)
 
 
 def consume_image_slot(user_id: int) -> ImageAccessResult:

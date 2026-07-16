@@ -64,7 +64,7 @@ async def test_on_text_formulas_button_opens_menu():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999010):
         with patch.object(handlers, "telegram_user_id", return_value=1010):
-            with patch.object(handlers, "has_active_coupon_access", return_value=True):
+            with patch.object(handlers, "has_formulas_access", return_value=True):
                 with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
                     await handlers.on_text(update, context)
 
@@ -76,7 +76,7 @@ async def test_on_text_formulas_button_opens_menu():
 
 
 @pytest.mark.anyio
-async def test_formulas_locked_without_coupon():
+async def test_formulas_locked_without_access():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
     update.message.text = handlers._PERSISTENT_FORMULAS_LABEL
@@ -88,18 +88,43 @@ async def test_formulas_locked_without_coupon():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999012):
         with patch.object(handlers, "telegram_user_id", return_value=1012):
-            with patch.object(handlers, "has_active_coupon_access", return_value=False):
+            with patch.object(handlers, "has_formulas_access", return_value=False):
                 with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
                     await handlers.on_text(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
     assert "מנויי חבילה" in args[0] or "🔒" in args[0]
+    assert "24" in args[0]
     kb = kwargs.get("reply_markup")
     assert isinstance(kb, InlineKeyboardMarkup)
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "buy:menu" in callbacks
     assert "buy:redeem" in callbacks
+
+
+@pytest.mark.anyio
+async def test_formulas_open_during_free_window():
+    update = MagicMock(spec=Update)
+    update.message = MagicMock(spec=Message)
+    update.message.text = handlers._PERSISTENT_FORMULAS_LABEL
+    update.effective_chat = Chat(id=999013, type="private")
+    update.effective_user = User(id=1013, is_bot=False, first_name="T")
+    update.message.reply_text = AsyncMock()
+
+    context = MagicMock()
+
+    with patch.object(handlers, "telegram_chat_id", return_value=999013):
+        with patch.object(handlers, "telegram_user_id", return_value=1013):
+            with patch.object(handlers, "has_formulas_access", return_value=True):
+                with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
+                    await handlers.on_text(update, context)
+
+    update.message.reply_text.assert_awaited()
+    args, kwargs = update.message.reply_text.await_args
+    assert "נוסחאות" in args[0]
+    assert "מנויי חבילה" not in args[0]
+    assert isinstance(kwargs.get("reply_markup"), InlineKeyboardMarkup)
 
 
 @pytest.mark.anyio
@@ -112,7 +137,7 @@ async def test_cmd_formulas_opens_menu():
     context = MagicMock()
     with patch.object(handlers, "telegram_chat_id", return_value=999011):
         with patch.object(handlers, "telegram_user_id", return_value=1011):
-            with patch.object(handlers, "has_active_coupon_access", return_value=True):
+            with patch.object(handlers, "has_formulas_access", return_value=True):
                 with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
                     await handlers.cmd_formulas(update, context)
 
@@ -133,6 +158,7 @@ def test_bot_commands_menu_includes_formulas():
 def test_formulas_locked_message_and_keyboard():
     text = formulas.formulas_locked_reply_hebrew()
     assert "מנויי חבילה" in text or "🔒" in text
+    assert "24" in text
     kb = formulas.build_formulas_locked_keyboard()
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "buy:menu" in callbacks

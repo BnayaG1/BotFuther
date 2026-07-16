@@ -189,3 +189,46 @@ def test_vip_coupon_unlocks_bank_and_skips_cooldown(cooldown_db):
     reply = access.redeem_reply_hebrew(result)
     assert "מאגר" in reply
     assert "חופשית" in reply or "חופשי" in reply
+
+
+def test_formulas_free_window_first_24h(trial_db, monkeypatch):
+    """חלון נוסחאות: first_seen_at קבוע; פתוח 24ש', נעול אחרי כן בלי קופון."""
+    user_id = 8008
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+
+    first = access.ensure_user_first_seen(user_id)
+    assert first == t0
+    # קריאה חוזרת לא מזיזה את השעון
+    monkeypatch.setattr(access.time, "time", lambda: t0 + 3600)
+    assert access.ensure_user_first_seen(user_id) == t0
+
+    assert access.has_formulas_free_window(user_id, now=t0 + 100) is True
+    assert access.has_formulas_access(user_id) is True
+
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 1
+    )
+    assert access.has_formulas_free_window(user_id) is False
+    assert access.has_active_coupon_access(user_id) is False
+    assert access.has_formulas_access(user_id) is False
+
+
+def test_formulas_access_via_coupon_after_free_window(trial_db, monkeypatch):
+    user_id = 9009
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    )
+    assert access.has_formulas_access(user_id) is False
+
+    access.insert_coupon_codes(
+        ["FORMCODE01"],
+        daily_quota=6,
+        period_days=105,
+    )
+    assert access.redeem_coupon("FORMCODE01", user_id).status == access.RedeemStatus.OK
+    assert access.has_formulas_access(user_id) is True

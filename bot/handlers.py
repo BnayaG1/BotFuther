@@ -35,7 +35,9 @@ from bot.access import (
     consume_image_slot,
     coupon_prompt_text_hebrew,
     create_purchase_request,
+    ensure_user_first_seen,
     has_active_coupon_access,
+    has_formulas_access,
     image_access_reply_hebrew,
     looks_like_coupon_code,
     ping_reply_hebrew,
@@ -284,6 +286,10 @@ async def _deliver_approved_solve(
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
+    # מתחיל שעון 24ש' לנוסחאות (first_seen) — תואם להודעת ה-welcome.
+    user = update.effective_user
+    if user is not None:
+        ensure_user_first_seen(int(user.id))
     text = build_start_welcome_text()
     keyboard = build_start_keyboard()
     try:
@@ -535,9 +541,9 @@ async def _send_formulas_menu(
     message=None,
     edit_message=None,
 ) -> None:
-    """מציג תפריט נוסחאות רק למנויי קופון; אחרת הודעת נעילה + כפתורי רכישה."""
+    """מציג תפריט נוסחאות לקופון פעיל או בתוך 24ש' ראשונות; אחרת נעילה."""
     uid = int(user_id) if user_id is not None else None
-    if COUPON_ACCESS_ENABLED and (uid is None or not has_active_coupon_access(uid)):
+    if COUPON_ACCESS_ENABLED and (uid is None or not has_formulas_access(uid)):
         await _send_formulas_locked(
             context,
             chat_id,
@@ -973,7 +979,7 @@ async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if topic is None:
             await query.answer("נושא לא נמצא.", show_alert=True)
             return
-        if COUPON_ACCESS_ENABLED and not has_active_coupon_access(user_id):
+        if COUPON_ACCESS_ENABLED and not has_formulas_access(user_id):
             await query.answer("נוסחאות למנויי חבילה בלבד.", show_alert=True)
             await _delete_callback_message(query)
             await _send_formulas_locked(context, chat_id)
