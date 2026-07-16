@@ -2,6 +2,7 @@
 """חילוץ תרגיל מתמונה וחישוב מקומי."""
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -2251,6 +2252,8 @@ def _read_axial_direction(ld: dict) -> str | None:
 
 def _apply_axial_sign(ld: dict) -> dict:
     """כיוון חץ: שמאלה ← = Fx שלילי; ימינה → = Fx חיובי."""
+    if ld.get("_user_mag"):
+        return ld
     fy = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
     fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
     if abs(fx) < 1e-6 or abs(fy) >= 1e-6:
@@ -2709,6 +2712,20 @@ def _scale_beam_geometry_from_hundredths(
                     sup[key] = _sc(sup[key])
                 except (TypeError, ValueError):
                     pass
+
+    new_hinges: list[dict] = []
+    for hinge in beam.get("internal_hinges") or []:
+        if not isinstance(hinge, dict):
+            continue
+        item = dict(hinge)
+        if item.get("x") is not None:
+            try:
+                item["x"] = _sc(item["x"])
+            except (TypeError, ValueError):
+                pass
+        new_hinges.append(item)
+    if new_hinges:
+        beam["internal_hinges"] = new_hinges
 
     kps = beam.get("key_points_m")
     if isinstance(kps, list):
@@ -3365,16 +3382,27 @@ def _normalize_load_magnitudes_ton(loads: list[dict]) -> list[dict]:
 
 
 def _merge_point_loads_at_same_x(loads: list[dict], *, tol: float = 0.35) -> list[dict]:
-    """מאחד עומסים נקודתיים באותו x — Fy ו-Fx נפרדים באותה נקודה."""
+    """מאחד עומסים נקודתיים באותו x — Fy ו-Fx נפרדים באותה נקודה.
+
+    עומסים עם ``_draft_new`` (שורת טיוטה חדשה שעדיין נערכת) לא ממוזגים —
+    אחרת «הוסף עומס → נקודתי» נעלם כשיש כבר עומס ליד x=0.
+    """
     kept: list[dict] = []
     for ld in loads:
         if str(ld.get("type", "")).lower() != "point":
             kept.append(ld)
             continue
+        # שורת טיוטה חדשה — תמיד נשמרת בנפרד עד שהמשתמש ממלא ערכים.
+        if ld.get("_draft_new"):
+            kept.append(dict(ld))
+            continue
         x = float(ld.get("x", 0.0))
         merged = False
         for idx, existing in enumerate(kept):
             if str(existing.get("type", "")).lower() != "point":
+                continue
+            # אל תמזג לתוך שורת טיוטה חדשה שעדיין ריקה/בעריכה.
+            if existing.get("_draft_new"):
                 continue
             ex = float(existing.get("x", 0.0))
             if abs(ex - x) > tol:
@@ -4250,36 +4278,146 @@ def _fix_endpoint_horizontal_misread(beam: dict) -> None:
                 )
 
 
-def _normalize_support_types(beam: dict) -> None:
-    """משולש+קו תחתון = צמד (pin) — לא ריתום קיר, בקורה על שני סמכים."""
+def _apply_support_hatch_evidence(beam: dict) -> None:
+    """קורה על 2 סמכים: קובעים pin/roller לפי עדות חזותית מדווחת (ספירת hatch),
+    לא לפי «type» הקטגורי של ה-AI — מפחית הטיה של ניחוש לפי הרגל/מיקום.
+
+    ה-Vision מתבקש (בפרומפט) לדווח hatch_count — מספר קווי האלכסון שראה בכל סמך —
+    בנוסף ל-type. ספירת מספר קווים היא משימה חזותית ישירה, פחות נתונה להטיה לפי
+    הרגל (שמאל=קבוע) מהחלטה קטגורית "pin vs roller". אם hatch_count מדווח וסותר
+    את type, hatch_count מנצח: >=2 קווי hatch → pin (קבוע), אחרת → roller (נייד).
+    בלי hatch_count מדווח (למשל תמונות ישנות/שלב אחר) — לא נוגעים ב-type.
+    """
     mode = str(beam.get("support_mode", "simply_supported")).lower()
     if mode == "cantilever":
         return
     supports = beam.get("supports")
-    if not isinstance(supports, list):
-        return
-    has_roller = any(
-        isinstance(s, dict) and str(s.get("type", "")).lower() == "roller" for s in supports
-    )
-    if not has_roller:
+    if not isinstance(supports, list) or len(supports) != 2:
         return
     for sup in supports:
         if not isinstance(sup, dict):
             continue
-        if str(sup.get("type", "")).lower() != "fixed":
+        if sup.get("has_full_wall_hatch"):
+            continue
+        hatch_count = sup.get("hatch_count")
+        if hatch_count is None:
             continue
         try:
-            x = float(sup.get("x", 0.0))
+            hatch_count = int(hatch_count)
         except (TypeError, ValueError):
-            x = 0.0
-        label = str(sup.get("label", "")).strip().upper()
-        if x < 0.25 and label in ("A", ""):
-            sup["type"] = "pin"
-            log.info("Normalized left support %s: fixed → pin", label or "A")
+            continue
+        current = str(sup.get("type", "")).lower().strip()
+        if current not in ("pin", "roller", "fixed"):
+            continue
+        derived = "pin" if hatch_count >= 2 else "roller"
+        if current != derived:
+            label = str(sup.get("label", "")).strip().upper() or "?"
+            log.info(
+                "Support %s: type=%s conflicts with reported hatch_count=%s → corrected to %s",
+                label,
+                current,
+                hatch_count,
+                derived,
+            )
+            sup["type"] = derived
 
 
-def normalize_beam_model(beam: dict) -> dict:
-    """תיקוני חילוץ נפוצים לפני חישוב — מיקומים, UDL, כיוון נטוי."""
+def _ensure_simply_supported_pin_roller_pair(supports: list[dict]) -> None:
+    """שני סמכים מאותו סוג (או שני fixed) — חייבים צמד pin+roller.
+
+    עדיפות: תוויות A/B (A=קבוע, B=נייד); אחרת שמאלי=pin, ימני=roller.
+    """
+    if len(supports) != 2 or not all(isinstance(s, dict) for s in supports):
+        return
+    by_label = {
+        str(s.get("label", "")).strip().upper(): s for s in supports
+    }
+    if "A" in by_label and "B" in by_label and by_label["A"] is not by_label["B"]:
+        a, b = by_label["A"], by_label["B"]
+        if str(a.get("type", "")).lower().strip() != "pin" or str(
+            b.get("type", "")
+        ).lower().strip() != "roller":
+            log.info(
+                "Normalized simply-supported pair by labels: A→pin, B→roller "
+                "(was A=%s B=%s)",
+                a.get("type"),
+                b.get("type"),
+            )
+        a["type"] = "pin"
+        b["type"] = "roller"
+        return
+    ordered = sorted(
+        supports,
+        key=lambda s: float(s.get("x", 0.0) or 0.0),
+    )
+    left, right = ordered[0], ordered[1]
+    if str(left.get("type", "")).lower().strip() != "pin" or str(
+        right.get("type", "")
+    ).lower().strip() != "roller":
+        log.info(
+            "Normalized simply-supported pair by position: left→pin, right→roller "
+            "(was left=%s right=%s)",
+            left.get("type"),
+            right.get("type"),
+        )
+    left["type"] = "pin"
+    right["type"] = "roller"
+
+
+def _normalize_support_types(beam: dict) -> None:
+    """קורה על 2 סמכים: חייב בדיוק pin + roller (קבוע + נייד).
+
+    «fixed» שייך רק לזיז. אם ה-Vision סימן fixed / שני pin / שני roller —
+    מתקנים לצמד תקין. כשיש fixed + pin/roller — ממירים את ה-fixed לפי השני.
+    כששניהם זהים — לפי תוויות A/B, אחרת לפי מיקום (שמאל=pin, ימין=roller).
+    """
+    mode = str(beam.get("support_mode", "simply_supported")).lower()
+    if mode == "cantilever":
+        return
+    supports = beam.get("supports")
+    if not isinstance(supports, list) or len(supports) != 2:
+        return
+    if not all(isinstance(s, dict) for s in supports):
+        return
+    types = [str(s.get("type", "")).lower().strip() for s in supports]
+    if any(t not in ("pin", "roller", "fixed") for t in types):
+        return
+
+    # fixed + pin/roller → המרת ה-fixed בלבד
+    if types.count("fixed") == 1:
+        other = types[0] if types[1] == "fixed" else types[1]
+        if other in ("pin", "roller"):
+            replacement = "roller" if other == "pin" else "pin"
+            for sup in supports:
+                if str(sup.get("type", "")).lower().strip() == "fixed":
+                    label = str(sup.get("label", "")).strip().upper() or "?"
+                    sup["type"] = replacement
+                    log.info(
+                        "Normalized support %s: fixed → %s "
+                        "(2-support beam, other support is %s)",
+                        label,
+                        replacement,
+                        other,
+                    )
+            return
+
+    # שני pin / שני roller / שני fixed / או צירוף לא תקין — כפה pin+roller
+    unique = set(types)
+    if unique == {"pin", "roller"}:
+        return
+    _ensure_simply_supported_pin_roller_pair(supports)
+
+
+def normalize_beam_model(
+    beam: dict,
+    *,
+    merge_nearby_point_loads: bool = True,
+) -> dict:
+    """תיקוני חילוץ נפוצים לפני חישוב — מיקומים, UDL, כיוון נטוי.
+
+    ``merge_nearby_point_loads`` — מיזוג עומסים נקודתיים קרובים (סף ~0.35m).
+    בטיוטה כבוי, כדי לא לבלוע עומסים סמוכים שהמשתמש ערך במפורש.
+    """
     if not isinstance(beam, dict):
         return beam
     out = dict(beam)
@@ -4298,6 +4436,7 @@ def normalize_beam_model(beam: dict) -> dict:
     L = float(out["L"])
 
     _normalize_structure_metadata(out)
+    _apply_support_hatch_evidence(out)
     _normalize_support_types(out)
     loads_preview = _coerce_solver_load_schema(
         [dict(ld) for ld in (out.get("loads") or []) if isinstance(ld, dict)]
@@ -4385,7 +4524,8 @@ def normalize_beam_model(beam: dict) -> dict:
                 ld["label_at"] = out.get("right_end_label") or "B"
                 log.info("Normalized moment: moved from pin to right end x=%s", right_x)
 
-    loads = _merge_point_loads_at_same_x(loads)
+    if merge_nearby_point_loads:
+        loads = _merge_point_loads_at_same_x(loads)
     loads = _apply_explicit_load_positions(out, loads)
     loads = _shift_loads_for_length_correction(out, old_L, new_L, loads)
     loads = _fix_end_region_moments(out, loads)
@@ -4434,16 +4574,25 @@ def _restore_labeled_points_from_protocol(data: dict) -> None:
         log.info("Restored %s labeled_points from extraction protocol", len(restored))
 
 
-def finalize_beam_extraction(data: dict) -> dict:
+def finalize_beam_extraction(
+    data: dict,
+    *,
+    merge_nearby_point_loads: bool = True,
+) -> dict:
     if infer_vision_exercise_type(data) != "beam":
         return data
     beam = data.get("beam")
     if isinstance(beam, dict):
         data = dict(data)
-        beam = dict(beam)
+        # deepcopy — normalize_beam_model מזיז supports/loads in-place;
+        # העתקה רדודה הייתה מקלקלת את האובייקט המקורי (סמכים זזים, עומסים לא).
+        beam = copy.deepcopy(beam)
         if isinstance(data.get("distributed_loads"), list):
-            beam["distributed_loads"] = data["distributed_loads"]
-        data["beam"] = normalize_beam_model(beam)
+            beam["distributed_loads"] = copy.deepcopy(data["distributed_loads"])
+        data["beam"] = normalize_beam_model(
+            beam,
+            merge_nearby_point_loads=merge_nearby_point_loads,
+        )
         # Flip vision CCW+ → website CW+ only once (first extraction).
         # Re-running on every edit undoes user moment-direction toggles.
         if not data.get("_moment_sign_aligned"):
@@ -4478,15 +4627,17 @@ def _fmt_m(value: object) -> str:
         return "?"
     try:
         n = float(value)
-        if abs(n - round(n)) < 1e-6:
+        if abs(n - round(n)) < 0.005:
             return str(int(round(n)))
-        return f"{n:g}"
+        rounded = round(n, 2)
+        text = f"{rounded:.2f}".rstrip("0").rstrip(".")
+        return text or "0"
     except (TypeError, ValueError):
         return str(value)
 
 
 def _fmt_ton(value: object) -> str:
-    """עיצוב מספרי לתצוגת עומסים — בלי 9.99978."""
+    """עיצוב מספרי לתצוגת עומסים — עד 2 ספרות אחרי הנקודה."""
     if value is None:
         return "?"
     try:
@@ -4495,12 +4646,11 @@ def _fmt_ton(value: object) -> str:
         return str(value)
     if abs(n) < 1e-9:
         return "0"
-    if abs(n - round(n)) < 0.08:
+    if abs(n - round(n)) < 0.005:
         return str(int(round(n)))
-    rounded = round(n, 1)
-    if abs(rounded - round(rounded)) < 0.05:
-        return str(int(round(rounded)))
-    return f"{rounded:g}"
+    rounded = round(n, 2)
+    text = f"{rounded:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _support_type_he(raw_type: str) -> str:
@@ -5056,6 +5206,25 @@ def get_draft_message_ref(chat_id: int) -> tuple[int, int] | None:
     if msg_id is None:
         return None
     return int(chat), int(msg_id)
+
+
+def set_draft_error_message_id(chat_id: int, message_id: int | None) -> None:
+    """שומר message_id של הודעת שגיאה שנשלחה אחרי 'חשב' (בנוסף לעריכת הטיוטה)."""
+    bundle = _vision_bundle_by_chat.get(chat_id)
+    if not bundle:
+        return
+    bundle["draft_error_message_id"] = int(message_id) if message_id is not None else None
+
+
+def get_draft_error_message_id(chat_id: int) -> int | None:
+    bundle = _vision_bundle_by_chat.get(chat_id) or {}
+    mid = bundle.get("draft_error_message_id")
+    if mid is None:
+        return None
+    try:
+        return int(mid)
+    except Exception:
+        return None
 
 
 def set_draft_edit(chat_id: int, edit: dict | None) -> None:

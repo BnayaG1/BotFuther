@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
+import shutil
 import time
 
 from telegram import (
@@ -18,7 +20,9 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from bot.config import (
+    ADMIN_BOT_TOKEN,
     ADMIN_CHAT_ID,
+    ADMIN_USER_IDS,
     BOT_DISPLAY_NAME,
     COUPON_ACCESS_ENABLED,
     FREE_TRIAL_IMAGES,
@@ -31,6 +35,7 @@ from bot.access import (
     consume_image_slot,
     coupon_prompt_text_hebrew,
     create_purchase_request,
+    has_active_coupon_access,
     image_access_reply_hebrew,
     looks_like_coupon_code,
     ping_reply_hebrew,
@@ -49,8 +54,27 @@ from bot.purchase import (
     package_confirm_text_hebrew,
     purchase_menu_intro_hebrew,
 )
+from bot.formulas import (
+    build_formulas_locked_keyboard,
+    build_formulas_menu_keyboard,
+    build_topic_followup_keyboard,
+    formulas_locked_reply_hebrew,
+    formulas_menu_intro_hebrew,
+    get_topic,
+    parse_formula_callback,
+    topic_image_caption_hebrew,
+    topic_pending_caption_hebrew,
+)
+from intro import (
+    build_intro_menu_keyboard,
+    build_intro_topic_followup_keyboard,
+    get_intro_topic,
+    intro_menu_intro_hebrew,
+    intro_topic_body_hebrew,
+    parse_intro_callback,
+)
 from bot.draft_editor import (
-    add_empty_load,
+    add_load_of_type,
     apply_field_edit,
     approve_and_solve,
     delete_load,
@@ -61,20 +85,52 @@ from bot.draft_editor import (
     toggle_any_load_direction,
 )
 from bot.draft_keyboard import (
+    ADD_LOAD_TYPE_PICKER_IDX,
     build_draft_keyboard,
     build_load_dir_prompt_keyboard,
     draft_display_text,
     edit_prompt,
     parse_draft_callback,
+    should_open_type_picker_on_direction_click,
 )
-from bot.notebook_render import render_notebook_png_temp
+from bot.notebook_render import render_exercise_problem_png_temp, render_notebook_png_temp
 from bot.gemini_chat import friendly_gemini_error
-from bot.solution_session import begin_image_session, reset_user_session
+from bot.assistant import (
+    build_bank_solve_mode_keyboard,
+    build_solve_mode_keyboard,
+    parse_bank_mode_action,
+    parse_menu_mode_action,
+    select_solve_mode,
+    solve_mode_picker_intro_hebrew,
+)
+from personal_assistant.runtime import (
+    deliver_after_draft_approve,
+    handle_assistant_action,
+    has_active_assistant_progress,
+    parse_assistant_callback,
+)
+from bot.exercise_bank import (
+    count_exercises,
+    exercise_bank_cooldown_remaining_sec,
+    get_exercise_image_path,
+    pick_next_exercise_for_user,
+)
+from bot.solution_check import solve_extracted_beam
+from bot.solution_session import (
+    SolveMode,
+    begin_image_session,
+    consume_pending_bank_exercise,
+    consume_pending_solve_mode,
+    reset_user_session,
+    set_pending_bank_exercise,
+    set_pending_bank_submission_image,
+)
 from bot.images import TempImageFile, prepare_image_for_vision, save_message_image_to_temp
 from bot.system_prompt import reload_system_instruction_if_changed
 from bot.vision import (
     finalize_beam_extraction,
     format_vision_extract_only_reply,
+    get_draft_error_message_id,
     get_draft_edit,
     get_draft_edit_prompt_id,
     get_draft_message_ref,
@@ -82,6 +138,7 @@ from bot.vision import (
     get_stored_vision_extracted,
     is_draft_pending,
     package_extraction_response,
+    set_draft_error_message_id,
     set_draft_edit,
     set_draft_edit_prompt_id,
     set_draft_type_picker_idx,
@@ -103,6 +160,27 @@ _TEXT_UNHANDLED = (
 _IMAGE_DEDUP_SEC = 120.0
 _recent_image_keys: dict[tuple[int, int], float] = {}
 _coupon_prompt_chats: set[int] = set()
+_bug_report_prompt_chats: set[int] = set()
+
+_BUG_REPORT_FORCE_REPLY = ForceReply(
+    selective=True,
+    input_field_placeholder="תאר/י את התקלה",
+)
+
+_BUG_REPORT_CANCEL = "ביטול דיווח"
+_PERSISTENT_ASSISTANT_LABEL = "עוזר אישי"
+_BANK_ADD_SECRET = "BnayaG"
+_PERSISTENT_FORMULAS_LABEL = "נוסחאות"
+_PERSISTENT_QUOTA_LABEL = "מכסה"
+_PERSISTENT_COUPON_LABEL = "קופון"
+_PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
+_PERSISTENT_MAIN_LABEL = "ראשי"
+_START_SEND_IMAGE_LABEL = "פתרון מלא"
+_START_GIVE_EXERCISE_LABEL = "תרגול"
+_START_INTRO_LABEL = "מבוא"
+_START_REDEEM_COUPON_LABEL = "הזנת קוד קופון"
+_START_PURCHASE_LABEL = "רכישת חבילה"
+
 
 def telegram_chat_id(update: Update) -> int:
     chat = update.effective_chat
@@ -126,6 +204,8 @@ async def _reply_text_safe(
     reply_markup: object | None = None,
 ) -> None:
     """שולח הודעה; אם Markdown נשבר — fallback לטקסט רגיל."""
+    if reply_markup is None:
+        reply_markup = build_persistent_keyboard()
     try:
         await message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
     except BadRequest as exc:
@@ -141,16 +221,18 @@ async def _send_text_safe(
     *,
     parse_mode: str = "Markdown",
     reply_markup: object | None = None,
-) -> None:
+) -> object:
     """שולח הודעה חדשה לצ'אט (לא reply) עם fallback אם Markdown נשבר."""
+    if reply_markup is None:
+        reply_markup = build_persistent_keyboard()
     try:
-        await context.bot.send_message(
+        return await context.bot.send_message(
             chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup
         )
     except BadRequest as exc:
         if "parse entities" not in str(exc).lower():
             raise
-        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        return await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
 
 async def _deliver_approved_solve(
@@ -167,7 +249,15 @@ async def _deliver_approved_solve(
     notebook_path = None
 
     if reply:
-        await _send_text_safe(context, chat_id, reply)
+        sent = await _send_text_safe(context, chat_id, reply)
+        # אם זה לא פתרון (למשל שגיאת validator) — נשמור message_id כדי למחוק בניסיון הבא.
+        if not has_result:
+            try:
+                set_draft_error_message_id(chat_id, int(getattr(sent, "message_id", 0)))
+            except Exception:
+                pass
+        else:
+            set_draft_error_message_id(chat_id, None)
 
     if has_result:
         notebook_path = render_notebook_png_temp(extracted, solved)
@@ -194,7 +284,6 @@ async def _deliver_approved_solve(
                 chat_id,
                 draft_msg_id,
                 extracted,
-                errors=[reply] if reply else None,
             )
 
     if notebook_path is not None:
@@ -207,40 +296,34 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = build_start_welcome_text()
     keyboard = build_start_keyboard()
     try:
+        # שולחים את המקלדת הקבועה (התפריט הזמין תמיד) עם הודעת הפתיחה.
         await update.message.reply_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode="Markdown",
+            text, reply_markup=build_persistent_keyboard(), parse_mode="Markdown"
         )
     except BadRequest as exc:
         if "parse entities" not in str(exc).lower():
             raise
-        await update.message.reply_text(text, reply_markup=keyboard)
+        await update.message.reply_text(text, reply_markup=build_persistent_keyboard())
+    # תפריט כפתורים Inline (לא "מקלדת למטה").
+    await update.message.reply_text("בחר/י פעולה:", reply_markup=keyboard)
 
 
 def build_start_welcome_text() -> str:
-    lines = [
-        "היי! 👋\n"
-        "ברוך הבא למהנדס הדיגיטלי.\n\n"
-        "סטטיקה הוא מקצוע מאתגר — ולעיתים קרובות לוקח זמן להבין ולהתקדם.\n"
-        "הבוט הזה נועד *לייעל ולקצר* את תהליך הלמידה שלך.\n\n"
-        "*מה אני עושה?*\n"
-        "אתה שולח/ת **תמונה** של תרגיל סטטיקה (קורה, עומסים, 2 סמכים, ריתום) — "
-        "ואני מחזיר טיוטה לאישור ופתרון מחברת מלא.\n\n"
-        "*איך מתחילים?*\n"
-        "צלם/י את התרגיל או שלח/י כקובץ 📎, ואטפל בשאר.",
-    ]
-    if COUPON_ACCESS_ENABLED and FREE_TRIAL_IMAGES > 0:
-        lines.append(
-            f"\n\n*ניסיון חינם:* מקבל/ת *{FREE_TRIAL_IMAGES} תמונות ניסיון* לפני שצריך קופון.\n"
-            "אחרי הניסיון — אפשר לרכוש חבילה או להפעיל קוד קופון מהתפריט."
-        )
-    elif COUPON_ACCESS_ENABLED:
-        lines.append(
-            "\n\n*מכסה:* נדרש קוד קופון — «🎟️ הזן קוד קופון» בתפריט או /coupon."
-        )
-    lines.append("\n\nמוכן/ה? שלח/י תמונה 📸")
-    return "".join(lines)
+    return (
+        "היי, אני שמח שהגעת לכאן. בניתי את הבוט הזה כדי לעזור לנו לעבור את תרגילי "
+        "הסטטיקה קצת יותר בקלות, בלי להיתקע שעות על אותה שאלה.\n\n"
+        "השימוש בבוט פשוט: אפשר להעלות תמונה של תרגיל שאתה עובד עליו, או לבחור תרגיל "
+        "מתוך המאגר המובנה שלי, שם הנתונים כבר מוגדרים. בכל מקרה, אתה יכול לבחור בין "
+        "פתרון מחברת מלא לבין ליווי צמוד של עוזר אישי. העוזר האישי הזה מלווה אותך "
+        "צעד-צעד עם כפתורים נוחים ומסביר את הדרך, ובנוסף יש לך אופציה נגישה לשלוף "
+        "נוסחאות ספציפיות בהתאם למה שאתה צריך באותו רגע.\n\n"
+        "אם יש בעיות או בקשות ספציפיות, יש אופציה לדיווח שדרכה תוכל לפנות אליי ישירות.\n\n"
+        "הבוט זמין עבורך 24/7 עם כל החבילה המלאה. כדי שתוכל להתרשם ולראות איך זה "
+        "עובד באמת, פתחתי לך גישה מלאה לכל האפשרויות ל-24 שעות הקרובות ללא התחייבות. "
+        "אם זה יחסוך לך כאבי ראש, תוכל להצטרף לכל הסמסטר, 3.5 חודשים, במחיר של "
+        '150 ש"ח – פחות ממחיר של שיעור פרטי אחד.\n\n'
+        "מוזמן להתחיל להשתמש, מקווה שזה יעזור לך לעבור את הקורס בראש שקט."
+    )
 
 
 def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
@@ -248,32 +331,36 @@ def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if COUPON_ACCESS_ENABLED:
         rows.append(
-            [InlineKeyboardButton("🛒 רכישת חבילה", callback_data="buy:menu")]
+            [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")]
         )
         rows.append(
-            [InlineKeyboardButton("🎟️ יש לי קוד", callback_data="buy:redeem")]
+            [InlineKeyboardButton("יש לי קוד", callback_data="buy:redeem")]
         )
     return InlineKeyboardMarkup(rows)
 
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton("📸 שלח תמונה של תרגיל", callback_data="menu:new")],
+        [InlineKeyboardButton(_START_INTRO_LABEL, callback_data="menu:intro")],
+        [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
+        [InlineKeyboardButton(_START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise")],
+        [InlineKeyboardButton(_PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas")],
     ]
     if COUPON_ACCESS_ENABLED:
         rows.append(
-            [InlineKeyboardButton("🎟️ הזנת קוד קופון", callback_data="buy:redeem")]
+            [InlineKeyboardButton(_START_REDEEM_COUPON_LABEL, callback_data="buy:redeem")]
         )
         rows.append(
-            [InlineKeyboardButton("🛒 רכישת חבילה", callback_data="menu:coupon")]
+            [InlineKeyboardButton(_START_PURCHASE_LABEL, callback_data="menu:coupon")]
         )
     return InlineKeyboardMarkup(rows)
 
 
 def build_persistent_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton("🎟️ קופון"), KeyboardButton("📊 מכסה")],
-        [KeyboardButton("🔄 איפוס תרגיל"), KeyboardButton("🛠️ דיווח על תקלה")],
+        [KeyboardButton(_PERSISTENT_FORMULAS_LABEL), KeyboardButton(_PERSISTENT_QUOTA_LABEL)],
+        [KeyboardButton(_PERSISTENT_COUPON_LABEL), KeyboardButton(_PERSISTENT_ASSISTANT_LABEL)],
+        [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_MAIN_LABEL)],
     ]
     return ReplyKeyboardMarkup(
         rows,
@@ -283,9 +370,90 @@ def build_persistent_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-_MENU_REPLIES: dict[str, str] = {
-    "new": "מעולה — שלח עכשיו תמונה 📸 של התרגיל.",
-}
+def build_bug_report_cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(_BUG_REPORT_CANCEL)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def _bug_report_admin_text(
+    *,
+    user_id: int,
+    chat_id: int,
+    username: str | None,
+    first_name: str | None,
+    report_text: str,
+) -> str:
+    uname = f"@{username}" if username else "—"
+    name = first_name or "—"
+    body = (report_text or "").strip()
+    return (
+        "🛠️ דיווח תקלה חדש\n"
+        f"משתמש: {name} ({uname})\n"
+        f"user_id: {user_id}\n"
+        f"chat_id: {chat_id}\n"
+        "────────────\n"
+        f"{body}"
+    )
+
+
+async def _forward_bug_report_via_admin_bot(
+    text: str,
+    *,
+    fallback_bot=None,
+) -> bool:
+    """שולח דיווח דרך בוט האדמין לכל ADMIN_USER_IDS. Fallback ל־ADMIN_CHAT_ID בבוט הראשי."""
+    if ADMIN_BOT_TOKEN and ADMIN_USER_IDS:
+        try:
+            from telegram import Bot
+
+            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+            ok_any = False
+            for admin_id in sorted(ADMIN_USER_IDS):
+                try:
+                    await admin_bot.send_message(chat_id=admin_id, text=text)
+                    ok_any = True
+                except Exception as exc:
+                    log.warning(
+                        "Admin-bot bug report failed admin_id=%s: %s",
+                        admin_id,
+                        exc,
+                    )
+            if ok_any:
+                return True
+        except Exception as exc:
+            log.warning("Admin-bot client failed for bug report: %s", exc)
+
+    if fallback_bot is not None and ADMIN_CHAT_ID:
+        try:
+            await fallback_bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
+            return True
+        except Exception as exc:
+            log.warning("Fallback bug report to ADMIN_CHAT_ID failed: %s", exc)
+    return False
+
+
+async def _prompt_bug_report(message) -> None:
+    chat_id = int(message.chat_id)
+    _bug_report_prompt_chats.add(chat_id)
+    await message.reply_text(
+        "🛠️ *דיווח על תקלה*\n\n"
+        "כתוב/י כאן במילים שלך מה קרה (או מה לא עובד).\n"
+        "אחרי השליחה הדיווח יועבר אוטומטית לצוות.\n\n"
+        "אפשר לבטל עם «ביטול דיווח».",
+        parse_mode="Markdown",
+        reply_markup=build_bug_report_cancel_keyboard(),
+    )
+    try:
+        await message.reply_text(
+            "כאן אפשר לרשום את פרטי התקלה 👇",
+            reply_markup=_BUG_REPORT_FORCE_REPLY,
+        )
+    except BadRequest:
+        pass
+
 
 _COUPON_FORCE_REPLY = ForceReply(
     selective=True,
@@ -316,6 +484,154 @@ async def _send_purchase_menu(
                 parse_mode="Markdown",
             )
     except BadRequest:
+        if message is not None:
+            await message.reply_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=keyboard
+            )
+
+
+async def _send_formulas_locked(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    message=None,
+    edit_message=None,
+) -> None:
+    text = formulas_locked_reply_hebrew()
+    keyboard = build_formulas_locked_keyboard()
+    try:
+        if edit_message is not None:
+            await edit_message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+            return
+        if message is not None:
+            await message.reply_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+    except BadRequest:
+        if edit_message is not None:
+            try:
+                await edit_message.edit_text(text, reply_markup=keyboard)
+                return
+            except BadRequest:
+                pass
+        if message is not None:
+            await message.reply_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=keyboard
+            )
+
+
+async def _send_intro_menu(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    message=None,
+    edit_message=None,
+) -> None:
+    """מציג תפריט מבוא לסטטיקה — פתוח לכולם."""
+    text = intro_menu_intro_hebrew()
+    keyboard = build_intro_menu_keyboard()
+    try:
+        if edit_message is not None:
+            await edit_message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+            return
+        if message is not None:
+            await message.reply_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+    except BadRequest:
+        if edit_message is not None:
+            try:
+                await edit_message.edit_text(text, reply_markup=keyboard)
+                return
+            except BadRequest:
+                pass
+        if message is not None:
+            await message.reply_text(text, reply_markup=keyboard)
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=keyboard
+            )
+
+
+async def _send_formulas_menu(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    user_id: int | None = None,
+    message=None,
+    edit_message=None,
+) -> None:
+    """מציג תפריט נוסחאות רק למנויי קופון; אחרת הודעת נעילה + כפתורי רכישה."""
+    uid = int(user_id) if user_id is not None else None
+    if COUPON_ACCESS_ENABLED and (uid is None or not has_active_coupon_access(uid)):
+        await _send_formulas_locked(
+            context,
+            chat_id,
+            message=message,
+            edit_message=edit_message,
+        )
+        return
+
+    text = formulas_menu_intro_hebrew()
+    keyboard = build_formulas_menu_keyboard()
+    try:
+        if edit_message is not None:
+            await edit_message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+            return
+        if message is not None:
+            await message.reply_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+    except BadRequest:
+        if edit_message is not None:
+            try:
+                await edit_message.edit_text(text, reply_markup=keyboard)
+                return
+            except BadRequest:
+                pass
         if message is not None:
             await message.reply_text(text, reply_markup=keyboard)
         else:
@@ -355,6 +671,41 @@ async def _send_coupon_redeem_prompt(
             )
 
 
+async def _delete_callback_message(query) -> None:
+    """מוחק את ההודעה עם כפתורי הבחירה אחרי שהמשתמש המשיך (לא עוזר אישי / טיוטה)."""
+    message = getattr(query, "message", None)
+    if message is None:
+        return
+    try:
+        await message.delete()
+        return
+    except BadRequest as exc:
+        log.debug("Could not delete callback message: %s", exc)
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except BadRequest as exc:
+        log.debug("Could not clear callback keyboard: %s", exc)
+
+
+async def _send_main_action_menu(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    message=None,
+) -> None:
+    """תפריט ראשי בלבד — «בחר/י פעולה:» + כפתורים, בלי הודעת פתיחה."""
+    keyboard = build_start_keyboard()
+    text = "בחר/י פעולה:"
+    if message is not None:
+        await _reply_text_safe(message, text, reply_markup=keyboard)
+        return
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=keyboard,
+    )
+
+
 async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -372,30 +723,19 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "cancel":
         await query.answer()
-        if query.message:
-            try:
-                await query.message.edit_text("בוטל.")
-            except BadRequest:
-                pass
+        await _delete_callback_message(query)
+        await _send_text_safe(context, chat_id, "בוטל.")
         return
 
     if action == "menu":
         await query.answer()
-        text = purchase_menu_intro_hebrew()
-        keyboard = build_purchase_menu_keyboard()
-        if query.message:
-            try:
-                await query.message.edit_text(
-                    text, reply_markup=keyboard, parse_mode="Markdown"
-                )
-            except BadRequest:
-                await query.message.reply_text(
-                    text, reply_markup=keyboard, parse_mode="Markdown"
-                )
+        await _delete_callback_message(query)
+        await _send_purchase_menu(context, chat_id)
         return
 
     if action == "redeem":
         await query.answer()
+        await _delete_callback_message(query)
         await _send_coupon_redeem_prompt(context, chat_id)
         return
 
@@ -405,17 +745,22 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("חבילה לא נמצאה", show_alert=True)
             return
         await query.answer()
+        await _delete_callback_message(query)
         text = package_confirm_text_hebrew(pkg)
         keyboard = build_package_confirm_keyboard(pkg.package_id)
-        if query.message:
-            try:
-                await query.message.edit_text(
-                    text, reply_markup=keyboard, parse_mode="Markdown"
-                )
-            except BadRequest:
-                await query.message.reply_text(
-                    text, reply_markup=keyboard, parse_mode="Markdown"
-                )
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+            )
         return
 
     if action == "confirm":
@@ -436,21 +781,22 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             package_label=pkg.label_hebrew(),
         )
         await query.answer("פרטי התשלום נשלחו")
+        await _delete_callback_message(query)
         pay_text = payment_instructions_hebrew(pkg)
         pay_keyboard = build_payment_keyboard()
-        if query.message:
-            try:
-                await query.message.edit_text(
-                    pay_text,
-                    reply_markup=pay_keyboard,
-                    parse_mode="Markdown",
-                )
-            except BadRequest:
-                await query.message.reply_text(
-                    pay_text,
-                    reply_markup=pay_keyboard,
-                    parse_mode="Markdown",
-                )
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=pay_text,
+                reply_markup=pay_keyboard,
+                parse_mode="Markdown",
+            )
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=pay_text,
+                reply_markup=pay_keyboard,
+            )
         if ADMIN_CHAT_ID:
             try:
                 await context.bot.send_message(
@@ -481,15 +827,300 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         await query.answer()
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-        await _send_purchase_menu(context, chat_id, message=query.message)
+        await _delete_callback_message(query)
+        await _send_purchase_menu(context, chat_id)
         return
-    reply = _MENU_REPLIES.get(action)
-    if not reply:
+    if action == "formulas":
         await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        await _send_formulas_menu(
+            context,
+            chat_id,
+            user_id=telegram_user_id(update),
+        )
+        return
+    if action == "intro":
+        await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        await _send_intro_menu(context, chat_id)
+        return
+    if action == "give_exercise":
+        if count_exercises() <= 0:
+            await query.answer("אין עדיין תרגילים מוכנים במאגר.", show_alert=True)
+            return
+        user_id = telegram_user_id(update)
+        cool = exercise_bank_cooldown_remaining_sec(user_id)
+        if cool is not None:
+            mins = max(1, int((cool + 59) // 60))
+            await query.answer(
+                f"אפשר לקבל תרגיל נוסף בעוד כ-{mins} דקות.",
+                show_alert=True,
+            )
+            return
+        await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        picked = pick_next_exercise_for_user(user_id)
+        if picked is None:
+            await _send_text_safe(context, chat_id, "אין עדיין תרגילים מוכנים במאגר.")
+            return
+        exercise_id, extracted = picked
+        stored_image = get_exercise_image_path(exercise_id)
+        photo_sent = False
+        if stored_image is not None:
+            try:
+                with stored_image.open("rb") as photo:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                    )
+                photo_sent = True
+            except Exception as exc:
+                log.warning(
+                    "Failed to send stored exercise photo chat=%s id=%s: %s",
+                    chat_id,
+                    exercise_id,
+                    exc,
+                )
+        if not photo_sent:
+            # תרגילים ישנים בלי תמונה שמורה — רינדור מהנתונים כגיבוי.
+            problem_path = render_exercise_problem_png_temp(extracted)
+            if problem_path is not None:
+                try:
+                    with problem_path.open("rb") as photo:
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=photo,
+                        )
+                    photo_sent = True
+                except Exception as exc:
+                    log.warning(
+                        "Failed to send exercise photo chat=%s: %s", chat_id, exc
+                    )
+                finally:
+                    problem_path.unlink(missing_ok=True)
+        if not photo_sent:
+            from bot.draft_format import extracted_to_draft_text
+
+            # רק תיאור הנתונים — בלי כותרת/מספר תרגיל (לא רלוונטיות כאן).
+            draft_lines = extracted_to_draft_text(extracted).split("\n")
+            data_text = "\n".join(draft_lines[2 : draft_lines.index("---")]).strip()
+            await _send_text_safe(
+                context,
+                chat_id,
+                data_text,
+            )
+        set_pending_bank_exercise(chat_id, exercise_id, extracted)
+        keyboard = build_bank_solve_mode_keyboard()
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="איך תרצה/י לפתור את התרגיל?",
+            reply_markup=keyboard,
+        )
+        return
+    if action == "new":
+        await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        text = solve_mode_picker_intro_hebrew()
+        keyboard = build_solve_mode_keyboard()
+        await _send_text_safe(context, chat_id, text)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="בחר/י מצב:",
+            reply_markup=keyboard,
+        )
+        return
+    if action.startswith("mode:"):
+        mode = parse_menu_mode_action(action)
+        if mode is None:
+            await query.answer()
+            return
+        await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        prompt = select_solve_mode(chat_id, mode)
+        await _send_text_safe(context, chat_id, prompt)
+        return
+    if action.startswith("bank:"):
+        mode = parse_bank_mode_action(action)
+        if mode is None:
+            await query.answer()
+            return
+        await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        pending = consume_pending_bank_exercise(chat_id)
+        if pending is None:
+            await _send_text_safe(
+                context, chat_id, "אין תרגיל ממתין מהמאגר — לחץ/י שוב על «תרגול»."
+            )
+            return
+        _exercise_id, bank_extracted = pending
+        normalized = finalize_beam_extraction(copy.deepcopy(bank_extracted))
+        try:
+            bank_solved = solve_extracted_beam(normalized)
+        except Exception:
+            bank_solved = {"result": {"reactions_ton": {}}}
+        begin_image_session(chat_id, solve_mode=mode)
+        await deliver_after_draft_approve(
+            context,
+            chat_id,
+            extracted=normalized,
+            reply="",
+            solved=bank_solved,
+            draft_msg_id=None,
+            deliver_notebook=_deliver_approved_solve,
+            send_text=_send_text_safe,
+            edit_draft_message=_edit_draft_message_safe,
+        )
         return
     await query.answer()
-    if query.message:
-        await query.message.reply_text(reply)
+
+
+async def on_assistant_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    action = parse_assistant_callback(query.data)
+    if action is None:
+        await query.answer("פעולה לא מוכרת.", show_alert=True)
+        return
+    chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+    if not has_active_assistant_progress(chat_id):
+        await query.answer("אין מסלול עוזר פעיל כרגע.", show_alert=True)
+        return
+    await query.answer()
+    await handle_assistant_action(
+        context,
+        chat_id,
+        action,
+        send_text=_send_text_safe,
+        reply_message=None,
+    )
+
+
+async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    parsed = parse_intro_callback(query.data)
+    if parsed is None:
+        await query.answer()
+        return
+    action, payload = parsed
+    chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+
+    if action == "menu":
+        await query.answer()
+        await _delete_callback_message(query)
+        await _send_intro_menu(context, chat_id)
+        return
+
+    if action == "back":
+        await query.answer()
+        await _delete_callback_message(query)
+        await _send_main_action_menu(context, chat_id)
+        return
+
+    if action == "topic":
+        topic = get_intro_topic(payload)
+        if topic is None:
+            await query.answer("נושא לא נמצא.", show_alert=True)
+            return
+        await query.answer()
+        await _delete_callback_message(query)
+        text = intro_topic_body_hebrew(topic)
+        keyboard = build_intro_topic_followup_keyboard()
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+            )
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+            )
+        return
+
+    await query.answer()
+
+
+async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    parsed = parse_formula_callback(query.data)
+    if parsed is None:
+        await query.answer()
+        return
+    action, payload = parsed
+    chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+    user_id = telegram_user_id(update)
+
+    if action in ("menu",):
+        await query.answer()
+        await _delete_callback_message(query)
+        await _send_formulas_menu(
+            context,
+            chat_id,
+            user_id=user_id,
+        )
+        return
+
+    if action == "back":
+        await query.answer()
+        await _delete_callback_message(query)
+        await _send_main_action_menu(context, chat_id)
+        return
+
+    if action == "topic":
+        topic = get_topic(payload)
+        if topic is None:
+            await query.answer("נושא לא נמצא.", show_alert=True)
+            return
+        if COUPON_ACCESS_ENABLED and not has_active_coupon_access(user_id):
+            await query.answer("נוסחאות למנויי חבילה בלבד.", show_alert=True)
+            await _delete_callback_message(query)
+            await _send_formulas_locked(context, chat_id)
+            return
+        await query.answer()
+        await _delete_callback_message(query)
+        image_path = topic.image_path()
+        followup = build_topic_followup_keyboard()
+        if image_path is not None:
+            try:
+                with image_path.open("rb") as fh:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=fh,
+                        caption=topic_image_caption_hebrew(topic),
+                        reply_markup=followup,
+                    )
+            except Exception:
+                log.exception("Failed sending formula image for %s", topic.topic_id)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=topic_pending_caption_hebrew(topic),
+                    reply_markup=followup,
+                    parse_mode="Markdown",
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=topic_pending_caption_hebrew(topic),
+                reply_markup=followup,
+                parse_mode="Markdown",
+            )
+        return
+
+    await query.answer()
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -538,6 +1169,20 @@ async def cmd_quota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         quota_status_reply_hebrew(result),
         reply_markup=build_persistent_keyboard(),
     )
+
+
+async def cmd_formulas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """פקודת /formulas — תפריט נוסחאות (מופיע גם בתפריט הפקודות של טלגרם)."""
+    if not update.message:
+        return
+    chat_id = telegram_chat_id(update)
+    await _send_formulas_menu(
+        context,
+        chat_id,
+        user_id=telegram_user_id(update),
+        message=update.message,
+    )
+
 
 async def _edit_draft_message_safe(
     context: ContextTypes.DEFAULT_TYPE,
@@ -647,7 +1292,7 @@ async def _apply_pending_edit(
         return True
 
     updated, errors = apply_field_edit(extracted, edit, text)
-    updated = finalize_beam_extraction(updated)
+    updated = finalize_beam_extraction(updated, merge_nearby_point_loads=False)
     if errors:
         if ref:
             await _edit_draft_message_safe(
@@ -656,8 +1301,8 @@ async def _apply_pending_edit(
                 ref[1],
                 extracted,
                 edit=edit,
-                errors=errors,
             )
+        await _send_text_safe(context, chat_id, f"⚠️ {errors[0]}")
         return True
 
     await _dismiss_edit_prompt(context, chat_id)
@@ -773,14 +1418,25 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if cb.action == "approve":
         await query.answer()
-        reply, solved = approve_and_solve(chat_id, extracted)
-        await _deliver_approved_solve(
+        # אם נשלחה הודעת שגיאה קודמת אחרי "חשב" — מוחקים אותה לפני ניסיון חישוב נוסף.
+        prev_err_mid = get_draft_error_message_id(chat_id)
+        if prev_err_mid is not None:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=prev_err_mid)
+            except BadRequest:
+                pass
+            set_draft_error_message_id(chat_id, None)
+        reply, solved, extracted = approve_and_solve(chat_id, extracted)
+        await deliver_after_draft_approve(
             context,
             chat_id,
             extracted=extracted,
             reply=reply,
             solved=solved,
             draft_msg_id=msg_id,
+            deliver_notebook=_deliver_approved_solve,
+            send_text=_send_text_safe,
+            edit_draft_message=_edit_draft_message_safe,
         )
         await _dismiss_edit_prompt(context, chat_id)
         set_draft_edit(chat_id, None)
@@ -811,11 +1467,14 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if isinstance(loads, list) and 0 <= cb.index - 1 < len(loads)
             else {}
         )
-        if isinstance(ld, dict) and ld.get("_draft_new"):
+        if isinstance(ld, dict) and should_open_type_picker_on_direction_click(ld):
+            # עומס חדש/ריק — עדיין אין כיוון להפוך; פותחים את תפריט בחירת הסוג.
             updated = extracted
+            set_draft_type_picker_idx(chat_id, cb.index)
         else:
+            # עומס קיים עם ערך — לחיצה על «כיוון» פשוט הופכת כיוון, בלי תפריט נוסף.
             updated = toggle_any_load_direction(extracted, cb.index)
-        set_draft_type_picker_idx(chat_id, cb.index)
+            set_draft_type_picker_idx(chat_id, None)
         persist_draft(chat_id, updated)
         if msg_id is not None:
             await _edit_draft_message_safe(context, chat_id, msg_id, updated)
@@ -823,7 +1482,10 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if cb.action == "set_load_type":
         await query.answer()
-        updated = set_load_type(extracted, cb.index, cb.dir)
+        if cb.index == ADD_LOAD_TYPE_PICKER_IDX:
+            updated = add_load_of_type(extracted, cb.dir)
+        else:
+            updated = set_load_type(extracted, cb.index, cb.dir)
         persist_draft(chat_id, updated)
         set_draft_type_picker_idx(chat_id, None)
         if msg_id is not None:
@@ -831,6 +1493,9 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     if cb.action == "toggle_dir":
+        if cb.index == ADD_LOAD_TYPE_PICKER_IDX:
+            await query.answer()
+            return
         await query.answer()
         updated = toggle_any_load_direction(extracted, cb.index)
         persist_draft(chat_id, updated)
@@ -914,12 +1579,10 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if cb.action == "add_load":
         await query.answer()
-        updated = add_empty_load(extracted)
         set_draft_edit(chat_id, None)
-        set_draft_type_picker_idx(chat_id, None)
-        persist_draft(chat_id, updated)
+        set_draft_type_picker_idx(chat_id, ADD_LOAD_TYPE_PICKER_IDX)
         if msg_id is not None:
-            await _edit_draft_message_safe(context, chat_id, msg_id, updated)
+            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
         return
 
 
@@ -929,20 +1592,89 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = telegram_chat_id(update)
     text = update.message.text.strip()
 
-    if text == "🎟️ קופון":
+    if text == _PERSISTENT_ASSISTANT_LABEL:
+        prompt = select_solve_mode(chat_id, SolveMode.ASSISTANT)
+        await _reply_text_safe(update.message, prompt)
+        return
+
+    if text == _PERSISTENT_MAIN_LABEL:
+        await _send_main_action_menu(
+            context,
+            chat_id,
+            message=update.message,
+        )
+        return
+
+    if text == _BANK_ADD_SECRET:
+        prompt = select_solve_mode(chat_id, SolveMode.ADD_TO_BANK)
+        await _reply_text_safe(update.message, prompt)
+        return
+
+    if has_active_assistant_progress(chat_id):
+        await _reply_text_safe(
+            update.message,
+            "מעולה, כאן משתמשים בכפתור למעלה — «המשך».",
+        )
+        return
+
+    if chat_id in _bug_report_prompt_chats:
+        if text in (_BUG_REPORT_CANCEL, _PERSISTENT_BUG_REPORT_LABEL):
+            if text == _BUG_REPORT_CANCEL:
+                _bug_report_prompt_chats.discard(chat_id)
+                await update.message.reply_text(
+                    "הדיווח בוטל.",
+                    reply_markup=build_persistent_keyboard(),
+                )
+                return
+            # לחיצה חוזרת על הכפתור — פשוט מזכירים לכתוב, נשארים במצב הדיווח
+            await update.message.reply_text(
+                "כתוב/י עכשיו את תיאור התקלה, או לחץ/י «ביטול דיווח».",
+                reply_markup=build_bug_report_cancel_keyboard(),
+            )
+            return
+
+        _bug_report_prompt_chats.discard(chat_id)
+        user = update.effective_user
+        report = _bug_report_admin_text(
+            user_id=telegram_user_id(update),
+            chat_id=chat_id,
+            username=user.username if user else None,
+            first_name=user.first_name if user else None,
+            report_text=text,
+        )
+        sent = await _forward_bug_report_via_admin_bot(
+            report, fallback_bot=context.bot
+        )
+        if sent:
+            await update.message.reply_text(
+                "✅ תודה! הדיווח נשלח לצוות. נטפל בזה בהקדם.",
+                reply_markup=build_persistent_keyboard(),
+            )
+        else:
+            log.warning("Bug report could not be delivered (chat=%s)", chat_id)
+            await update.message.reply_text(
+                "קיבלנו את הדיווח מקומית, אבל השליחה לצוות נכשלה זמנית. "
+                "נסי/ה שוב עוד רגע או כתוב/י לנו בוואטסאפ אם דחוף.",
+                reply_markup=build_persistent_keyboard(),
+            )
+        return
+
+    if text == _PERSISTENT_COUPON_LABEL:
         await cmd_coupon(update, context)
         return
-    if text == "📊 מכסה":
+    if text == _PERSISTENT_QUOTA_LABEL:
         await cmd_quota(update, context)
         return
-    if text == "🔄 איפוס תרגיל":
-        await cmd_reset(update, context)
-        return
-    if text == "🛠️ דיווח על תקלה":
-        await update.message.reply_text(
-            "תודה! הדיווח התקבל. נטפל בזה בהקדם.",
-            reply_markup=build_persistent_keyboard(),
+    if text == _PERSISTENT_FORMULAS_LABEL:
+        await _send_formulas_menu(
+            context,
+            chat_id,
+            user_id=telegram_user_id(update),
+            message=update.message,
         )
+        return
+    if text == _PERSISTENT_BUG_REPORT_LABEL:
+        await _prompt_bug_report(update.message)
         return
 
     pending_edit = get_draft_edit(chat_id)
@@ -967,7 +1699,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _reply_text_safe(
                 update.message,
                 redeem_reply_hebrew(result),
-                reply_markup=build_persistent_keyboard(),
             )
             return
 
@@ -975,7 +1706,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _reply_text_safe(
             update.message,
             _TEXT_UNHANDLED,
-            reply_markup=build_persistent_keyboard(),
         )
         return
 
@@ -985,13 +1715,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if draft_result.approved:
             msg_id = ref[1] if ref else None
             extracted = draft_result.extracted or get_stored_vision_extracted(chat_id) or {}
-            await _deliver_approved_solve(
+            await deliver_after_draft_approve(
                 context,
                 chat_id,
                 extracted=extracted,
                 reply=draft_result.reply,
                 solved=draft_result.solved or {},
                 draft_msg_id=msg_id,
+                deliver_notebook=_deliver_approved_solve,
+                send_text=_send_text_safe,
+                edit_draft_message=_edit_draft_message_safe,
             )
             set_draft_edit(chat_id, None)
         elif draft_result.update_draft and ref and draft_result.extracted:
@@ -1001,16 +1734,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     ref[0],
                     ref[1],
                     draft_result.extracted,
-                    errors=draft_result.errors,
                 )
             except BadRequest as exc:
                 log.warning("Draft message edit failed: %s", exc)
+            if draft_result.errors:
+                await _send_text_safe(context, chat_id, f"⚠️ {draft_result.errors[0]}")
         return
 
     await _reply_text_safe(
         update.message,
         IMAGE_ONLY_TEXT_REPLY,
-        reply_markup=build_persistent_keyboard(),
     )
 
 
@@ -1094,7 +1827,12 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     log.info("Image from chat %s", chat_id)
 
-    if COUPON_ACCESS_ENABLED:
+    pending_mode = consume_pending_solve_mode(chat_id)
+    solve_mode = pending_mode or SolveMode.NOTEBOOK
+    # הוספת תרגיל למאגר לא צורכת מכסה — לא שייכת לפתרון תרגיל בפועל.
+    is_bank_submission = pending_mode == SolveMode.ADD_TO_BANK
+
+    if COUPON_ACCESS_ENABLED and not is_bank_submission:
         user_id = telegram_user_id(update)
         access = consume_image_slot(user_id)
         if access.status != ImageAccessStatus.OK:
@@ -1114,6 +1852,11 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 image_access_reply_hebrew(access),
                 reply_markup=reply_markup,
             )
+            if isinstance(reply_markup, InlineKeyboardMarkup):
+                await _reply_text_safe(
+                    update.message,
+                    "התפריט למטה זמין תמיד 👇",
+                )
             return
         log.info(
             "Image allowed user=%s used=%s/%s remaining=%s",
@@ -1123,7 +1866,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             access.images_remaining,
         )
 
-    begin_image_session(chat_id)
+    begin_image_session(chat_id, solve_mode=solve_mode)
 
     if VISION_ASYNC_ENABLED and update.message:
         await send_vision_ack(update.message)
@@ -1131,6 +1874,22 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     temp_image: TempImageFile | None = None
     try:
         temp_image = await save_message_image_to_temp(update, context)
+        if is_bank_submission:
+            # שומרים עותק של תמונת המקור לפני prepare_image_for_vision שמוחק אותה.
+            bank_copy = temp_image.path.with_name(
+                f"bank_src_{chat_id}_{msg_id}_{int(time.time() * 1000)}"
+                f"{temp_image.path.suffix or '.jpg'}"
+            )
+            try:
+                shutil.copy2(temp_image.path, bank_copy)
+                set_pending_bank_submission_image(chat_id, bank_copy)
+                log.info("Preserved bank submission image: %s", bank_copy.name)
+            except OSError as exc:
+                log.warning(
+                    "Failed to preserve bank submission image chat=%s: %s",
+                    chat_id,
+                    exc,
+                )
         temp_image = await asyncio.to_thread(prepare_image_for_vision, temp_image)
         image_bytes = temp_image.read_bytes()
         mime_type = temp_image.mime_type
@@ -1145,7 +1904,10 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
     except Exception as exc:
         log.exception("Failed to process image")
-        await update.message.reply_text(f"לא הצלחתי לעבד את התמונה:\n{exc}")
+        await _reply_text_safe(
+            update.message,
+            f"לא הצלחתי לעבד את התמונה:\n{exc}",
+        )
     finally:
         if temp_image is not None:
             temp_image.cleanup()

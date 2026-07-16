@@ -197,15 +197,15 @@ def distributed_span_from_left(ld: dict, beam: dict) -> tuple[float, float]:
     return x1, x2
 
 
-def _fmt_num(value: float, *, max_decimals: int = 3) -> str:
-    """עיגול לתצוגה — בלי זנבות צף (9.998 → 10, 2.91 נשאר)."""
+def _fmt_num(value: float, *, max_decimals: int = 2) -> str:
+    """עיגול לתצוגה — עד 2 ספרות אחרי הנקודה (9.998 → 10, 2.91 נשאר)."""
     try:
         num = float(value)
     except (TypeError, ValueError):
         return "0"
     if not math.isfinite(num):
         return "0"
-    if abs(num - round(num)) < 0.01:
+    if abs(num - round(num)) < 0.005:
         return str(int(round(num)))
     rounded = round(num, max_decimals)
     text = f"{rounded:.{max_decimals}f}".rstrip("0").rstrip(".")

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from notebook_pdf_layout import DEFAULT_BOT_LAYOUT, NotebookPdfLayout, assert_page2_fits
+from notebook_pdf_layout import CANTILEVER_BOT_LAYOUT, NotebookPdfLayout, assert_page2_fits
 
 
 def build_cantilever_page_html(
@@ -29,7 +29,7 @@ def build_cantilever_page_html(
     wrap_iframe_document_fn: Any,
     export_dpi: int,
 ) -> Tuple[str, bytes, bytes]:
-    layout = pdf_layout or DEFAULT_BOT_LAYOUT
+    layout = pdf_layout or CANTILEVER_BOT_LAYOUT
     assert_page2_fits(layout)
     png_display, _png_download = notebook_graphics_assets_fn(
         mode="cantilever",

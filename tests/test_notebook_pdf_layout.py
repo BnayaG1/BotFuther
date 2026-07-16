@@ -27,6 +27,28 @@ def _build_reference_pdf():
     return pdf
 
 
+def _build_cantilever_reference_pdf():
+    loads = _reference_loads()
+    L = 6.0
+    result = solver.solve_cantilever_beam(loads, L)
+    _, _, pdf = bn.build_cantilever_page_html(loads, L, result, wide_layout=True)
+    return pdf
+
+
+def _build_cantilever_heavy_pdf():
+    loads = [
+        {"type": "point", "x": 2.0, "Fy": -5.0, "Fx": 3.0},
+        {"type": "point", "x": 5.0, "Fy": -8.0},
+        {"type": "udl", "x1": 1.0, "x2": 7.0, "Fy": -2.0},
+        {"type": "moment", "x": 4.0, "M": 12.0},
+        {"type": "inclined", "x": 6.5, "Fx": 2.0, "Fy": -4.0},
+    ]
+    L = 8.0
+    result = solver.solve_cantilever_beam(loads, L)
+    _, _, pdf = bn.build_cantilever_page_html(loads, L, result, wide_layout=True)
+    return pdf
+
+
 def _force_images(doc: fitz.Document) -> list[tuple[int, float, float, float, float]]:
     """(page, y0, y1, width, height) for N/Q/M panels below the calc block."""
     out: list[tuple[int, float, float, float, float]] = []
@@ -112,6 +134,60 @@ def test_bot_notebook_page_contract():
             f"calc→N gap {calc_n_gap_mm:.1f}mm, expected ~20mm"
         )
 
+        pt_texts = [b for b in doc[1].get_text("dict")["blocks"] if b.get("type") == 0]
+        assert pt_texts, "point calc should appear on page 2"
+    finally:
+        doc.close()
+
+
+def test_cantilever_notebook_two_pages():
+    """Regression: cantilever notebook — 3 graphs page 1, point calc page 2."""
+    pdf = _build_cantilever_reference_pdf()
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        assert doc.page_count == 2, f"expected 2 pages, got {doc.page_count}"
+
+        forces = _force_images(doc)
+        assert len(forces) == 3, f"expected 3 force images, got {len(forces)}"
+
+        for pi, y0, y1, w, h in forces:
+            assert pi == 0, f"force image on page {pi}, expected page 0 (0-indexed)"
+            assert w > 550, f"width {w:.0f}pt too narrow"
+            assert h > 60, f"height {h:.0f}pt — graph may be clipped"
+
+        pt_texts = [b for b in doc[1].get_text("dict")["blocks"] if b.get("type") == 0]
+        assert pt_texts, "point calc should appear on page 2"
+
+        # Point-calc formatting rules:
+        # - first N row is zero: "NA = 0" (no units, single equals)
+        # - from row 2+: equation starts from previous result (not full chain from 0)
+        # - Q skips unchanged at the last station (no "QC = ...")
+        page2_text = doc[1].get_text()
+        assert "NA = 0" in page2_text
+        assert "NA = 0 =" not in page2_text
+        assert "QA = 0+10 = 10t" in page2_text
+        assert "QB = 10-10 = 0" in page2_text
+        assert "MA = 0-30 = -30tm" in page2_text
+        assert "MB = -30+30 = 0" in page2_text
+        assert "QC =" not in page2_text
+        # Must NOT keep the old cumulative chain from 0 on later rows
+        assert "QB = 0+10-10" not in page2_text
+        assert "MB = 0-30+30" not in page2_text
+    finally:
+        doc.close()
+
+
+def test_cantilever_notebook_heavy_load_two_pages():
+    """Regression: taller cantilever reaction block must still paginate point calc."""
+    pdf = _build_cantilever_heavy_pdf()
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    try:
+        assert doc.page_count == 2, f"expected 2 pages, got {doc.page_count}"
+        forces = _force_images(doc)
+        assert len(forces) == 3, f"expected 3 force images, got {len(forces)}"
+        for pi, y0, y1, w, h in forces:
+            assert pi == 0, f"force image on page {pi}, expected page 0"
+            assert h > 55, f"height {h:.0f}pt — graph may be clipped"
         pt_texts = [b for b in doc[1].get_text("dict")["blocks"] if b.get("type") == 0]
         assert pt_texts, "point calc should appear on page 2"
     finally:

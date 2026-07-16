@@ -13,14 +13,18 @@ from bot.handlers import build_start_keyboard, build_start_welcome_text, on_text
 
 def test_welcome_text_is_image_only():
     text = build_start_welcome_text()
+    assert "היי, אני שמח שהגעת לכאן" in text
     assert "תמונה" in text
-    assert "טיוטה לאישור" in text
-    assert "מחברת מלא" in text
-    assert "2 סמכים" in text
-    assert "ריתום" in text
+    assert "מאגר" in text
+    assert "פתרון מחברת" in text
+    assert "עוזר אישי" in text
+    assert "נוסחאות" in text
+    assert "דיווח" in text
     assert "סטטיקה" in text
-    assert "תמונות ניסיון" in text
-    assert "מהנדס הדיגיטלי" in text
+    assert "24 שעות" in text
+    assert '150 ש"ח' in text
+    assert "בראש שקט" in text
+    assert "מהנדס הדיגיטלי" not in text
     assert "מושג" not in text
     assert "טקסט חופשי" not in text
 
@@ -28,7 +32,7 @@ def test_welcome_text_is_image_only():
 def test_start_keyboard_has_no_concept_button():
     keyboard = build_start_keyboard()
     labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
-    assert any("תמונה" in label for label in labels)
+    assert any("פתרון מלא" in label for label in labels)
     assert any("קופון" in label for label in labels)
     assert not any("מושג" in label for label in labels)
     assert not any("דיווח" in label for label in labels)

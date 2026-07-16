@@ -21,7 +21,7 @@ Run after first deploy and after each major release.
 ## Admin bot (if configured)
 
 - [ ] `/start` — price keyboard
-- [ ] Tap `₪50` → generate 1 code — message is code only
+- [ ] Tap `₪150` → generate 1 code — message is code only
 
 ## Purchase flow
 

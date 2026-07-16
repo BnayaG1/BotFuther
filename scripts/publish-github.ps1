@@ -44,4 +44,9 @@ if ($ForceMain) {
 }
 
 & git @pushArgs
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Push failed. Run this in your own PowerShell terminal (browser login required):" -ForegroundColor Red
+    Write-Host "  powershell -ExecutionPolicy Bypass -File .\scripts\publish-github.ps1 -ForceMain"
+    exit $LASTEXITCODE
+}
 Write-Host "Done. Next: Railway -> New Project -> Deploy from GitHub -> select BotFuther"

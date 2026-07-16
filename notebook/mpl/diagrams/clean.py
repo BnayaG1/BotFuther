@@ -102,6 +102,7 @@ def _plot_m_on_beam_clean(
         ax.plot([0.0, 0.0], [0.0, float(moments[0])], color=_RED, linewidth=diag_lw, zorder=3)
     ax.fill_between(xs, moments, 0, color=_RED, alpha=fill_alpha, zorder=2)
     ax.plot(xs, moments, color=_RED, linewidth=diag_lw, zorder=3, solid_capstyle="round")
+    ax.invert_yaxis()
     ymin2, ymax2 = ax.get_ylim()
     draw_beam_reference(ax, Lf, crit, ymin2, ymax2)
 

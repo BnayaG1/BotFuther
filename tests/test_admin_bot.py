@@ -17,8 +17,8 @@ from bot.admin_bot import (
 from bot.purchase import PACKAGE_CATALOG
 
 
-def test_price_buttons_map_to_all_six_packages():
-    assert len({pkg.package_id for pkg in PACKAGE_CATALOG}) == 6
+def test_price_buttons_map_to_single_package():
+    assert len({pkg.package_id for pkg in PACKAGE_CATALOG}) == 1
     for pkg in PACKAGE_CATALOG:
         label = _admin_menu_button_label(pkg)
         assert _PRICE_TO_PACKAGE[label] == pkg.package_id
@@ -26,9 +26,8 @@ def test_price_buttons_map_to_all_six_packages():
 
 
 def test_price_button_mapping_examples():
-    assert _PRICE_TO_PACKAGE["₪50"] == "10_30"
-    assert _PRICE_TO_PACKAGE["₪25"] == "2_30"
-    assert _PRICE_TO_PACKAGE["95"] == "10_105"
+    assert _PRICE_TO_PACKAGE["₪150"] == "6_105"
+    assert _PRICE_TO_PACKAGE["150"] == "6_105"
 
 
 def test_is_admin_respects_configured_ids(monkeypatch):
@@ -45,6 +44,7 @@ def test_admin_menu_keyboard_shows_payment_amounts():
     labels = [btn.text for row in keyboard.keyboard for btn in row]
     for pkg in PACKAGE_CATALOG:
         assert _admin_menu_button_label(pkg) in labels
+    assert "₪150" in labels
 
 
 @pytest.mark.anyio
@@ -52,13 +52,13 @@ async def test_admin_gen_callback_creates_codes(monkeypatch):
     monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))
     monkeypatch.setattr(
         "bot.admin_bot.generate_coupon_codes",
-        lambda *, package_id, count: ["CODEONE123"] * count,
+        lambda *, count, daily_quota, period_days: ["CODEONE123"] * count,
     )
 
     update = MagicMock()
     update.effective_user = User(id=99, is_bot=False, first_name="Admin")
     update.callback_query = MagicMock()
-    update.callback_query.data = "admin:gen:10_30:2"
+    update.callback_query.data = "admin:gen:6_105:2"
     update.callback_query.message = MagicMock()
     update.callback_query.message.chat_id = 500
     update.callback_query.message.edit_text = AsyncMock()

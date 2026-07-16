@@ -8,6 +8,7 @@ from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from bot.draft_editor import axial_dir_icon, is_axial_point_load, load_picker_kind
 from bot.draft_format import (
     _fmt_num,
     _inclined_dir,
@@ -17,33 +18,61 @@ from bot.draft_format import (
     x_from_left_end,
 )
 
+# אינדקס 0 = תפריט בחירת סוג לפני הוספת עומס חדש (עדיין אין שורה בטבלה).
+ADD_LOAD_TYPE_PICKER_IDX = 0
 
-def _support_type_he(support_type: str) -> str:
+
+def _is_simply_supported_two_supports(beam: dict) -> bool:
+    """קורה על שני סמכים (צמד+גליל) — לא זיז רתום."""
+    mode = str(beam.get("support_mode", "simply_supported")).lower().strip()
+    if mode == "cantilever":
+        return False
+    supports = beam.get("supports") or []
+    if not isinstance(supports, list) or len(supports) != 2:
+        return False
+    stypes = {
+        str(s.get("type", "")).lower().strip()
+        for s in supports
+        if isinstance(s, dict)
+    }
+    if "roller" in stypes and ("pin" in stypes or "fixed" in stypes):
+        return True
+    return mode == "simply_supported"
+
+
+def _support_type_he(support_type: str, *, beam: dict | None = None, support: dict | None = None) -> str:
+    st = str(support_type).lower().strip()
+    if beam and _is_simply_supported_two_supports(beam):
+        if st == "pin":
+            return "קבוע"
+        if st == "roller":
+            return "נייד"
+        # גליל שזוהה בטעות כקיבוע — מציגים «נייד» אם הסמך השני הוא קבוע (נעץ).
+        if st == "fixed" and support is not None:
+            supports = [
+                s for s in (beam.get("supports") or []) if isinstance(s, dict) and s is not support
+            ]
+            if len(supports) == 1 and str(supports[0].get("type", "")).lower().strip() == "pin":
+                return "נייד"
+        return {"pin": "קבוע", "roller": "נייד"}.get(st, support_type)
     mapping = {
         "pin": "נעץ",
         "roller": "גליל",
         "fixed": "קיבוע",
     }
-    return mapping.get(str(support_type).lower(), support_type)
+    return mapping.get(st, support_type)
 
 
-def draft_display_text(
-    extracted: dict,
-    *,
-    edit: dict | None = None,
-    errors: list[str] | None = None,
-    type_picker_idx: int | None = None,
-) -> str:
-    """טקסט טיוטה מסודר לתצוגה בטלגרם."""
-    from bot.vision import finalize_beam_extraction, _validation_issue_to_question
+def draft_data_only_text(extracted: dict) -> str:
+    """רק נתוני המבנה — ללא כותרות אימות, אזהרות או הוראות.
 
-    extracted = finalize_beam_extraction(extracted)
+    חשוב: לא מריצים כאן finalize מחדש — הטקסט והמקלדת חייבים לקרוא
+    מאותו snapshot שנשמר בטיוטה, אחרת מרחקים/ערכים מתפצלים.
+    """
     beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
     l_val = _fmt_num(float(beam.get("L", 0)))
 
     lines = [
-        "✅ *אימות נתונים*",
-        "",
         f"📏 *אורך הקורה*   {l_val} מ'",
         "",
     ]
@@ -55,7 +84,7 @@ def draft_display_text(
             if not isinstance(sup, dict):
                 continue
             label = str(sup.get("label", "?")).strip()
-            st = _support_type_he(str(sup.get("type", "pin")))
+            st = _support_type_he(str(sup.get("type", "pin")), beam=beam, support=sup)
             x = _fmt_num(x_from_left_end(beam, sup.get("x"), label=label, support=sup))
             lines.append(f"   {label}  ·  {st}  ·  x = {x} מ'")
         lines.append("")
@@ -68,34 +97,41 @@ def draft_display_text(
                 lines.append(f"   {idx}. {_load_summary_he(beam, idx, ld)}")
         lines.append("")
 
-    if errors:
-        lines.extend(["⚠️ " + errors[0], ""])
-
-    meta = (
-        extracted.get("_extraction_quality")
-        if isinstance(extracted.get("_extraction_quality"), dict)
-        else {}
-    )
-    if meta.get("partial"):
-        issues = meta.get("validation_issues") or []
-        if issues:
-            lines.extend(["", "⚠️ *ייתכנו סתירות — בדוק ותקן לפני חישוב:*"])
-            for issue in issues[:5]:
-                hint = _validation_issue_to_question(str(issue)) or str(issue)
-                lines.append(f"   • {hint}")
-            lines.append("")
-
-    if type_picker_idx is not None and type_picker_idx >= 1:
-        lines.extend(["", load_type_picker_prompt(type_picker_idx), ""])
-
     return "\n".join(lines).rstrip()
+
+
+def draft_display_text(
+    extracted: dict,
+    *,
+    edit: dict | None = None,
+    errors: list[str] | None = None,
+    type_picker_idx: int | None = None,
+) -> str:
+    """טקסט טיוטה — אך ורק נתונים (ללא הערות, אזהרות או הוראות)."""
+    return draft_data_only_text(extracted)
 
 
 def _load_summary_he(beam: dict, idx: int, ld: dict) -> str:
     if _is_draft_empty_load(ld):
-        if ld.get("_draft_new"):
-            return "חדש — לחץ *כיוון* לבחירת סוג העומס"
-        return "חדש — מלא כיוון, גודל ומיקום"
+        t = str(ld.get("type", "point")).lower()
+        label_at = str(ld.get("label_at", "") or "")
+        if t == "distributed" and (ld.get("_user_span") or ld.get("_draft_new")):
+            x1, x2 = distributed_span_from_left(ld, beam)
+            return f"חדש  ·  מ־{_fmt_num(x1)} עד {_fmt_num(x2)} מ'"
+        if ld.get("_user_x"):
+            x = _fmt_num(
+                x_from_left_end(beam, ld.get("x", ld.get("x1", 0)), label=label_at, load=ld)
+            )
+            if t == "moment":
+                kind = "מומנט"
+            elif t == "inclined":
+                kind = "אלכסון"
+            elif is_axial_point_load(ld):
+                kind = "צירי"
+            else:
+                kind = "נקודתי"
+            return f"{kind}  ·  x = {x} מ'"
+        return "חדש"
 
     t = str(ld.get("type", "point")).lower()
     label_at = str(ld.get("label_at", "") or "")
@@ -125,7 +161,7 @@ def _load_summary_he(beam: dict, idx: int, ld: dict) -> str:
     if t == "point":
         fy = ld.get("Fy", ld.get("fy"))
         fx = ld.get("Fx", ld.get("fx"))
-        parts: list[str] = ["נקודתי"]
+        parts: list[str] = ["צירי" if is_axial_point_load(ld) else "נקודתי"]
         if fy is not None and abs(float(fy)) > 1e-9:
             arrow = "↓" if float(fy) > 0 else "↑"
             parts.append(f"{arrow} {_fmt_num(abs(float(fy)))} טון")
@@ -172,10 +208,23 @@ def build_draft_keyboard(
             if isinstance(ld, dict):
                 rows.append(_build_load_row_buttons(beam, idx, ld))
 
-    if type_picker_idx is not None and 1 <= type_picker_idx <= len(loads):
-        ld = loads[type_picker_idx - 1]
-        cur_type = str(ld.get("type", "point")).lower() if isinstance(ld, dict) else "point"
-        rows.extend(_build_load_type_picker_rows(type_picker_idx, cur_type))
+    if type_picker_idx is not None:
+        if type_picker_idx == ADD_LOAD_TYPE_PICKER_IDX:
+            rows.extend(
+                _build_load_type_picker_rows(
+                    ADD_LOAD_TYPE_PICKER_IDX,
+                    {},
+                    adding_new=True,
+                )
+            )
+        elif 1 <= type_picker_idx <= len(loads):
+            ld = loads[type_picker_idx - 1]
+            if not isinstance(ld, dict):
+                ld = {}
+            rows.extend(_build_load_type_picker_rows(type_picker_idx, ld))
+        else:
+            rows.append([InlineKeyboardButton("➕", callback_data="d:ad")])
+            rows.append([InlineKeyboardButton("✅ חשב", callback_data="d:a")])
     else:
         rows.append([InlineKeyboardButton("➕", callback_data="d:ad")])
         rows.append([InlineKeyboardButton("✅ חשב", callback_data="d:a")])
@@ -197,22 +246,49 @@ def _draft_new_dir_icon(ld: dict) -> str:
         return _distributed_dir_icon(ld)
     if t == "inclined":
         return "↘"
-    return "↕"
+    if is_axial_point_load(ld):
+        return axial_dir_icon(ld)
+    return "↓"
+
+
+def _load_has_magnitude(ld: dict) -> bool:
+    """True אם לעומס יש כוח/מומנט/עוצמה בפועל (לא שורה ריקה)."""
+    t = str(ld.get("type", "point")).lower().strip()
+    if t == "moment":
+        return abs(float(ld.get("M", ld.get("m", 0)) or 0.0)) >= 1e-9
+    if t == "inclined":
+        return _inclined_mag(ld) >= 1e-9
+    if t == "distributed":
+        return abs(float(ld.get("w", ld.get("q", 0)) or 0.0)) >= 1e-9
+    try:
+        fy = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        fy = 0.0
+    try:
+        fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        fx = 0.0
+    return abs(fy) >= 1e-9 or abs(fx) >= 1e-9
+
+
+def should_open_type_picker_on_direction_click(ld: dict) -> bool:
+    """פתיחת תפריט סוג — רק לעומס חדש (_draft_new) שעדיין בלי ערך וללא סוג שנבחר."""
+    if not ld.get("_draft_new"):
+        return False
+    if _load_has_magnitude(ld):
+        return False
+    if ld.get("_draft_axial") or is_axial_point_load(ld):
+        return False
+    t = str(ld.get("type", "point")).lower().strip()
+    if t != "point":
+        return False
+    return True
 
 
 def _is_draft_empty_load(ld: dict) -> bool:
-    if ld.get("_draft_new"):
-        return True
-    t = str(ld.get("type", "point")).lower().strip()
-    if t == "moment":
-        return abs(float(ld.get("M", ld.get("m", 0)) or 0.0)) < 1e-9
-    if t == "inclined":
-        return _inclined_mag(ld) < 1e-9
-    if t == "distributed":
-        return abs(float(ld.get("w", ld.get("q", 0)) or 0.0)) < 1e-9
-    fy = float(ld.get("Fy", ld.get("fy", 0)) or 0.0)
-    fx = float(ld.get("Fx", ld.get("fx", 0)) or 0.0)
-    return abs(fy) < 1e-9 and abs(fx) < 1e-9
+    if _load_has_magnitude(ld):
+        return False
+    return True
 
 
 # רוחב עמודות קבוע — כל שורת עומס באותה פריסת טבלה; פח תמיד בימין.
@@ -285,12 +361,14 @@ def _build_load_row_buttons(beam: dict, idx: int, ld: dict) -> list[InlineKeyboa
 
     if empty:
         dir_txt = _draft_new_dir_icon(ld) if ld.get("_draft_new") else "·"
-        if t == "distributed" and ld.get("_draft_new"):
+        show_dist = bool(ld.get("_user_x") or ld.get("_user_span")) or (
+            t == "distributed" and bool(ld.get("_draft_new"))
+        )
+        if show_dist:
             dist_txt = _compact_btn_num(_load_distance_text(beam, ld))
-            dist_cb = f"d:ex{idx}"
         else:
             dist_txt = "·"
-            dist_cb = f"d:ex{idx}"
+        dist_cb = f"d:ex{idx}"
         angle_btn = (
             _load_field_button("·°", f"d:ea{idx}", min_width=_LOAD_COL_ANGLE)
             if t == "inclined" and ld.get("_draft_new")
@@ -327,6 +405,8 @@ def _build_load_row_buttons(beam: dict, idx: int, ld: dict) -> list[InlineKeyboa
             dir_txt = "↓" if fy_v > 0 else "↑"
         elif abs(fx_v) >= 1e-9:
             dir_txt = "→" if fx_v > 0 else "←"
+        else:
+            dir_txt = "↓"
 
     mag_txt = "0"
     if t == "moment":
@@ -385,10 +465,15 @@ def _type_picker_btn(label: str, idx: int, code: str, *, selected: bool) -> Inli
     return InlineKeyboardButton(f"{prefix}{label}", callback_data=f"d:y{idx}{code}")
 
 
-def _build_load_type_picker_rows(idx: int, current_type: str) -> list[list[InlineKeyboardButton]]:
-    """שורות בחירת סוג עומס — נפתח בלחיצה על סימון הכיוון."""
-    cur = str(current_type).lower().strip()
-    return [
+def _build_load_type_picker_rows(
+    idx: int,
+    ld: dict,
+    *,
+    adding_new: bool = False,
+) -> list[list[InlineKeyboardButton]]:
+    """שורות בחירת סוג עומס — נפתח בלחיצה על «הוסף עומס» או על כיוון בעומס חדש."""
+    cur = load_picker_kind(ld) if not adding_new else ""
+    rows = [
         [
             _type_picker_btn("↕ נקודתי", idx, "p", selected=cur == "point"),
             _type_picker_btn("↻ מומנט", idx, "m", selected=cur == "moment"),
@@ -397,11 +482,17 @@ def _build_load_type_picker_rows(idx: int, current_type: str) -> list[list[Inlin
             _type_picker_btn("↓↓ מפורס", idx, "u", selected=cur == "distributed"),
             _type_picker_btn("↘ אלכסון", idx, "i", selected=cur == "inclined"),
         ],
-        [
-            InlineKeyboardButton("🔄 היפוך כיוון", callback_data=f"d:y{idx}f"),
-            InlineKeyboardButton("↩️ חזרה", callback_data="d:x"),
-        ],
     ]
+    if adding_new:
+        rows.append([_type_picker_btn("→ צירי", idx, "a", selected=False)])
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton("🔄 היפוך כיוון", callback_data=f"d:y{idx}f"),
+                _type_picker_btn("→ צירי", idx, "a", selected=cur == "axial"),
+            ]
+        )
+    return rows
 
 
 def load_type_picker_prompt(idx: int) -> str:
@@ -450,13 +541,19 @@ def parse_draft_callback(data: str) -> DraftCallback | None:
         return DraftCallback(action="set_load_dir", index=int(body[2:]), dir="dl")
     if body.startswith("Dr") and body[2:].isdigit():
         return DraftCallback(action="set_load_dir", index=int(body[2:]), dir="dr")
-    m_type = re.match(r"^y(\d+)([pmuif])$", body)
+    m_type = re.match(r"^y(\d+)([pmuifa])$", body)
     if m_type:
         idx = int(m_type.group(1))
         code = m_type.group(2)
         if code == "f":
             return DraftCallback(action="toggle_dir", index=idx)
-        type_map = {"p": "point", "m": "moment", "u": "distributed", "i": "inclined"}
+        type_map = {
+            "p": "point",
+            "m": "moment",
+            "u": "distributed",
+            "i": "inclined",
+            "a": "axial",
+        }
         return DraftCallback(action="set_load_type", index=idx, dir=type_map[code])
     return None
 

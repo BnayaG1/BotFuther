@@ -26,8 +26,6 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Arc, Polygon
 import numpy as np
 from matplotlib.lines import Line2D
-import streamlit as st
-import streamlit.components.v1 as components
 
 import solver
 from notebook_pdf_layout import (
@@ -1899,9 +1897,6 @@ def _plot_m_on_beam_clean(
         fill_alpha=_FILL_ALPHA,
         transparent=transparent,
     )
-    ax.invert_yaxis()
-    ymin, ymax = ax.get_ylim()
-    _draw_beam_reference(ax, Lf, crit, ymin, ymax)
 
 
 def _annotate_step_blocks(
@@ -2126,6 +2121,25 @@ def build_beam_schematic_figure(
     _draw_beam_schematic(ax, L, loads, ra_pos, rb_pos, ra_x, ra_y, rb_y)
     # חשוב: לא לדרוס set_ylim / set_xlim של _draw_beam_schematic,
     # אחרת קו המידה בין הסמכים והמספר נחתכים.
+    fig.subplots_adjust(left=sub_l, right=sub_r, top=0.98, bottom=0.06)
+    return fig
+
+
+def build_cantilever_schematic_figure(
+    L: float,
+    loads: List[dict],
+    *,
+    ra_y: float = 0.0,
+    wide: bool = False,
+) -> Any:
+    """קורת זיז + מידות בלבד (ללא דיאגרמות N/Q/M) — לתצוגה זמנית במחברת."""
+    _notebook_mpl_rc()
+    fig_w = _notebook_fig_width(wide=wide)
+    sub_l, sub_r = _subplot_lr(wide=wide)
+    fig, ax = plt.subplots(1, 1, figsize=(fig_w, 2.15), facecolor="none")
+    _prep_figure_transparent(fig)
+    _prep_axis_on_paper(ax, grid=False)
+    _draw_cantilever_beam_schematic(ax, L, loads, ra_y=ra_y)
     fig.subplots_adjust(left=sub_l, right=sub_r, top=0.98, bottom=0.06)
     return fig
 
@@ -3236,6 +3250,9 @@ def render_solved_notebook(
     rb_x: float,
     rb_y: float,
 ) -> None:
+    import streamlit as st
+    import streamlit.components.v1 as components
+
     if not loads:
         st.info("הוסף עומסים על הקורה (בסרגל או בלוח) כדי לראות כאן תרגיל פתור במחברת.")
         st.caption("אם העומסים כבר מופיעים בלוח — לחץ **Apply changes** כדי לשמור אותם לחישוב ולמחברת.")
@@ -3319,6 +3336,9 @@ def build_cantilever_page_html(
 
 
 def render_cantilever_notebook(loads: List[dict], L: float, result: Dict[str, Any]) -> None:
+    import streamlit as st
+    import streamlit.components.v1 as components
+
     if not loads:
         st.info("הוסף עומסים על הקורה כדי לראות כאן תרגיל זיז פתור במחברת.")
         return

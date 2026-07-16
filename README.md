@@ -49,8 +49,10 @@ python -m bot.vision_regression
 
 ```powershell
 # אחרי יצירת repo פרטי ב-GitHub:
-.\scripts\publish-github.ps1 -RepoUrl "https://github.com/YOUR_USER/botfuther.git"
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-github.ps1 -ForceMain
 ```
+
+או לחיצה כפולה על `scripts\push-now.cmd` (עוקף את חסימת הסקריפטים).
 
 או ידנית:
 
@@ -96,7 +98,7 @@ git push -u origin master
 | `/start` | הודעת פתיחה |
 | תמונה | טיוטה + מחברת |
 | `/quota` | מכסה |
-| בוט אדמין `₪50` | קוד בלבד |
+| בוט אדמין `₪150` | קוד בלבד |
 | Redeploy | קופונים נשמרים ב-volume |
 
 ### 4. תחזוקה

@@ -288,9 +288,22 @@ COUPON_DB_PATH = Path(
     os.getenv("COUPON_DB_PATH", str(APP_DIR / "coupons.db"))
 ).resolve()
 COUPON_ACCESS_ENABLED = _env_bool("COUPON_ACCESS_ENABLED", True)
+EXERCISE_BANK_DB_PATH = Path(
+    os.getenv("EXERCISE_BANK_DB_PATH", str(APP_DIR / "exercises.db"))
+).resolve()
+EXERCISE_BANK_IMAGES_DIR = Path(
+    os.getenv(
+        "EXERCISE_BANK_IMAGES_DIR",
+        str(APP_DIR / "assets" / "exercise_bank"),
+    )
+).resolve()
 COUPON_GATE_VERSION = "v3-period"
 IMAGE_QUOTA_WINDOW_HOURS = _env_int("IMAGE_QUOTA_WINDOW_HOURS", 24)
 IMAGE_QUOTA_WINDOW_SEC = float(IMAGE_QUOTA_WINDOW_HOURS * 3600)
+IMAGE_COOLDOWN_SEC = float(max(0, _env_int("IMAGE_COOLDOWN_SEC", 600)))
+# בלי קופון פעיל: שליחת תמונות בלי מכסה, עם המתנה ארוכה יותר בין תמונות.
+IMAGE_GUEST_COOLDOWN_SEC = float(max(0, _env_int("IMAGE_GUEST_COOLDOWN_SEC", 1200)))
+EXERCISE_BANK_COOLDOWN_SEC = float(max(0, _env_int("EXERCISE_BANK_COOLDOWN_SEC", 1200)))
 FREE_TRIAL_IMAGES = max(0, _env_int("FREE_TRIAL_IMAGES", 2))
 
 # תשלום בביט לרכישת חבילה (החלף BIT_PHONE ב-.env)

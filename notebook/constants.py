@@ -99,8 +99,9 @@ _FS_TITLE = 10.5
 _FS_DIAG_MATH = _FS_LABEL * 1.4
 _FS_DIAG_UNIT = _FS_TINY * 1.8
 _POINT_CALC_FONT_MULT = 1.8
-_FS_POINT_CALC_PT = round(8.5 * _POINT_CALC_FONT_MULT, 1)  # שורות חישובי נקודות (בוט PDF)
-_FS_POINT_CALC_TITLE_PT = round(10.0 * _POINT_CALC_FONT_MULT, 1)  # כותרות N/Q/M בעמוד 2
+# הקטנה ממוקדת ל"חישובי נקודות" (עמוד 2) בלבד: -15% כולל כותרות ושורות
+_FS_POINT_CALC_PT = round(8.5 * _POINT_CALC_FONT_MULT * 0.85, 1)  # שורות חישובי נקודות (בוט PDF)
+_FS_POINT_CALC_TITLE_PT = round(10.0 * _POINT_CALC_FONT_MULT * 0.85, 1)  # כותרות N/Q/M בעמוד 2
 _FS_REACTION_CALC_PT = round(10.0 * _POINT_CALC_FONT_MULT, 1)  # ריאקציות (Σ + שורות + תשובות)
 
 # A4 (210×297 mm) — גובה iframe בפיקסלים (~96 DPI)
