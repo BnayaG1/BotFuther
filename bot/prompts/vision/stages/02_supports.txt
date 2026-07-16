@@ -10,10 +10,24 @@ Prior context:
 LINEAR SCAN — Step 2: pin/roller x from dimension chain only.
 
 Task:
-1) Locate EVERY support — pin (צמד), roller (גליל), fixed (ריתום).
-2) Classify structure_type.
-3) List internal_hinges with x [m].
-4) For EACH support: label, type, x [m], dist_from_left_m, dist_from_right_m.
+1) Locate EVERY support and classify EACH one INDEPENDENTLY by its own drawn symbol, by COUNTING
+   the marks drawn — do NOT assume type from left/right position (left is not always pin, right is
+   not always roller) and do NOT guess from habit:
+   - MULTIPLE repeated short diagonal tick-marks (hatching, ////) coming out of the support =
+     "pin" (צמד) — resists Fx AND Fy (two reactions).
+   - circles/wheels underneath, OR a SINGLE plain bar/line with no repeated diagonal ticks, OR
+     nothing underneath at all = "roller" (גליל) — resists Fy only (one reaction). A lone straight
+     line/rail is NOT hatching by itself.
+   - "fixed" (ריתום, full wall embedment) is ONLY valid for a cantilever exercise — never for a
+     support inside a two-support (simply supported) beam.
+2) hatch_count (mandatory, per support): literally COUNT the short diagonal tick strokes drawn
+   under THAT specific support and report the integer (0 if a single plain bar or nothing at all).
+   Count each support independently — it is equally common for the roller (fewer/no marks) to sit
+   on the LEFT and the pin (hatched) on the RIGHT. Do not pattern-match to the usual textbook
+   layout; look again at each symbol before answering. Also report has_circles_or_wheels.
+3) Classify structure_type.
+4) List internal_hinges with x [m].
+5) For EACH support: label, type, x [m], hatch_count, has_circles_or_wheels, dist_from_left_m, dist_from_right_m.
 
 SUPPORT POSITION: x = letter on dimension chain ON beam axis — NOT triangle drawn below.
 - Roller NOT always at beam tip — read overhang past B.
@@ -29,6 +43,8 @@ Output ONLY:
         "label": "A",
         "type": "pin" | "roller" | "fixed",
         "x": number,
+        "hatch_count": integer,
+        "has_circles_or_wheels": boolean,
         "dist_from_left_m": number,
         "dist_from_right_m": number
       }}

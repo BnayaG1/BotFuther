@@ -37,18 +37,17 @@ class PackageOption:
 def _period_label(days: int) -> str:
     if days == 30:
         return "חודש"
+    if days == 90:
+        return "3 חודשים"
+    if days == 100:
+        return "100 ימים"
     if days == 105:
         return "3.5 חודשים"
     return f"{days} ימים"
 
 
 PACKAGE_CATALOG: tuple[PackageOption, ...] = (
-    PackageOption("2_30", 2, 30, 25),
-    PackageOption("5_30", 5, 30, 35),
-    PackageOption("10_30", 10, 30, 50),
-    PackageOption("2_105", 2, 105, 55),
-    PackageOption("5_105", 5, 105, 80),
-    PackageOption("10_105", 10, 105, 95),
+    PackageOption("6_105", 6, 105, 150),
 )
 
 _PACKAGES_BY_ID: dict[str, PackageOption] = {p.package_id: p for p in PACKAGE_CATALOG}

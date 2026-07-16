@@ -2,9 +2,9 @@
 """יצירת קודי קופון חד-פעמיים ב-SQLite.
 
 דוגמה:
-    python -m bot.generate_coupons --package 2_30 --count 20
-    python -m bot.generate_coupons --quota 5 --days 105 --count 10
-    python -m bot.generate_coupons --package 10_105 --count 5 --out codes.txt
+    python -m bot.generate_coupons --package 6_105 --count 20
+    python -m bot.generate_coupons --quota 6 --days 105 --count 10
+    python -m bot.generate_coupons --package 6_105 --count 5 --out codes.txt
 """
 from __future__ import annotations
 
@@ -30,16 +30,14 @@ def _make_code(length: int = 10) -> str:
 
 def generate_coupon_codes(
     *,
-    package_id: str,
     count: int,
+    daily_quota: int,
+    period_days: int,
     length: int = 10,
 ) -> list[str]:
     """יוצר קודי קופון חדשים לחבילה ושומר ב-DB. מחזיר את הקודים שנוספו."""
     if count < 1:
         raise ValueError("count must be >= 1")
-    pkg = get_package(package_id)
-    if pkg is None:
-        raise ValueError(f"Unknown package: {package_id}")
 
     codes: list[str] = []
     seen: set[str] = set()
@@ -52,8 +50,8 @@ def generate_coupon_codes(
 
     added = insert_coupon_codes(
         codes,
-        daily_quota=pkg.daily_quota,
-        period_days=pkg.period_days,
+        daily_quota=daily_quota,
+        period_days=period_days,
     )
     return codes[:added]
 
@@ -64,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument(
         "--package",
         choices=[p.package_id for p in PACKAGE_CATALOG],
-        help="Package id, e.g. 2_30, 5_105",
+        help="Package id, e.g. 6_105",
     )
     group.add_argument(
         "--quota",
@@ -76,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         "--days",
         type=int,
         choices=sorted(VALID_PERIOD_DAYS),
-        help="Subscription period in days: 30 or 105",
+        help="Subscription period in days: 105",
     )
     parser.add_argument("--count", type=int, required=True)
     parser.add_argument("--length", type=int, default=10)
@@ -108,19 +106,11 @@ def main(argv: list[str] | None = None) -> int:
         period_days = int(args.days)
         package_id = f"{daily_quota}_{period_days}"
 
-    codes: list[str] = []
-    seen: set[str] = set()
-    while len(codes) < args.count:
-        code = normalize_coupon_code(_make_code(args.length))
-        if code in seen:
-            continue
-        seen.add(code)
-        codes.append(code)
-
     try:
         added_codes = generate_coupon_codes(
-            package_id=package_id,
             count=args.count,
+            daily_quota=daily_quota,
+            period_days=period_days,
             length=args.length,
         )
     except ValueError as exc:

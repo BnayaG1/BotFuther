@@ -19,6 +19,7 @@ from bot.config import (
 from bot.env import load_env_files, log_startup_config, require_env
 from bot.gemini_chat import gemini_runtime
 from bot.access import init_access_db
+from bot.exercise_bank import init_exercise_bank_db
 from bot.handlers import (
     cmd_coupon,
     cmd_formulas,
@@ -26,11 +27,13 @@ from bot.handlers import (
     cmd_quota,
     cmd_reset,
     cmd_start,
+    on_assistant_callback,
     on_buy_callback,
     on_draft_callback,
     on_error,
     on_formula_callback,
     on_image,
+    on_intro_callback,
     on_menu_callback,
     on_text,
 )
@@ -86,6 +89,7 @@ def main() -> None:
     token = require_env(*TELEGRAM_KEY_NAMES, label="Telegram bot token")
     gemini_runtime()
     init_access_db()
+    init_exercise_bank_db()
 
     request = HTTPXRequest(connect_timeout=30.0, read_timeout=90.0, write_timeout=90.0, pool_timeout=30.0)
     app_bot = (
@@ -109,7 +113,9 @@ def main() -> None:
     app_bot.add_handler(CallbackQueryHandler(on_menu_callback, pattern=r"^menu:"))
     app_bot.add_handler(CallbackQueryHandler(on_buy_callback, pattern=r"^buy:"))
     app_bot.add_handler(CallbackQueryHandler(on_formula_callback, pattern=r"^formula:"))
+    app_bot.add_handler(CallbackQueryHandler(on_intro_callback, pattern=r"^intro:"))
     app_bot.add_handler(CallbackQueryHandler(on_draft_callback, pattern=r"^d:"))
+    app_bot.add_handler(CallbackQueryHandler(on_assistant_callback, pattern=r"^assist:"))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.PHOTO & ~filters.Document.IMAGE, on_text))
     app_bot.add_error_handler(on_error)
 

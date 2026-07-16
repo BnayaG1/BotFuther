@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from bot.draft_format import (
+    _inclined_mag,
     apply_patch_text,
     build_extracted_from_draft,
     extracted_to_draft_text,
@@ -33,6 +34,11 @@ _APPROVE_RE = re.compile(
     r"^(אישור|מאשר|מאשרת|אשר|כן|yes|ok|okay|go|חשב|חישוב|נכון|בסדר)\.?$",
     re.IGNORECASE,
 )
+
+
+def _finalize_draft(extracted: dict) -> dict:
+    """נורמליזציה לטיוטה — בלי מיזוג עומסים נקודתיים קרובים."""
+    return finalize_beam_extraction(extracted, merge_nearby_point_loads=False)
 
 
 @dataclass
@@ -111,19 +117,19 @@ def _loads_for_validator(loads: list[dict]) -> list[dict]:
     return out
 
 
-def approve_and_solve(chat_id: int, extracted: dict) -> tuple[str, dict]:
-    """מאמת, מחשב, שומר — מחזיר (תשובה, solved)."""
+def approve_and_solve(chat_id: int, extracted: dict) -> tuple[str, dict, dict]:
+    """מאמת, מחשב, שומר — מחזיר (תשובה, solved, extracted מנורמל)."""
     from bot.solution_check import format_solve_reply, solve_extracted_beam
 
-    extracted = finalize_beam_extraction(extracted)
+    extracted = _finalize_draft(extracted)
     errors = _validate_for_solve(extracted)
     if errors:
-        return (errors[0], {})
+        return (errors[0], {}, extracted)
 
     solved = solve_extracted_beam(extracted)
     store_vision_context(chat_id, extracted, solved)
     reply = format_solve_reply(extracted, solved)
-    return reply, solved
+    return reply, solved, extracted
 
 
 def _parse_edit_number(text: str) -> float | None:
@@ -254,7 +260,7 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
         if i < 0 or i >= len(loads):
             return extracted, [f"אין עומס מספר {idx}"]
         set_load_x_user(loads[i], val)
-        _clear_draft_new_flag(loads, idx)
+        # לא מוחקים _draft_new כאן — בלי כח העומס עדיין «חדש», אבל המרחק נשמר ומוצג.
         beam["loads"] = loads
         out = dict(extracted)
         out["beam"] = beam
@@ -266,9 +272,7 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
         if val is None:
             return extracted, ["זווית לא תקינה — שלח מספר במעלות"]
         updated, patch_errors = apply_patch_text(extracted, f"load {idx} angle={val}")
-        _clear_draft_new_flag(
-            (updated.get("beam") or {}).get("loads") or [], idx
-        )
+        # זווית בלי כח — משאירים _draft_new כדי שהשורה לא תיראה «מאופסת».
         return updated, patch_errors
 
     if kind == "load_mag":
@@ -317,7 +321,7 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
                 _mark_user_mag(loads_out[idx - 1])
             _clear_draft_new_flag(loads_out, idx)
             return updated, patch_errors
-        # point: prefer Fy if exists, else Fx
+        # point / axial: צירי (Fx בלבד) לפני נקודתי אנכי
         fy = ld.get("Fy", ld.get("fy"))
         fx = ld.get("Fx", ld.get("fx"))
         try:
@@ -328,7 +332,26 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
             fx_v = float(fx) if fx is not None else 0.0
         except (TypeError, ValueError):
             fx_v = 0.0
-        if abs(fy_v) >= 1e-9 or abs(fx_v) < 1e-9:
+        if is_axial_point_load(ld):
+            signed = _axial_signed_magnitude(ld, val)
+            beam = dict(extracted.get("beam") or {})
+            loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+            i = idx - 1
+            if i < 0 or i >= len(loads):
+                return extracted, [f"אין עומס מספר {idx}"]
+            loads[i]["type"] = "point"
+            loads[i]["Fy"] = 0.0
+            loads[i]["Fx"] = signed
+            _mark_user_mag(loads[i])
+            if abs(signed) >= 1e-9:
+                loads[i].pop("_draft_new", None)
+                loads[i].pop("_draft_axial", None)
+                _clear_axial_direction_metadata(loads[i])
+            beam["loads"] = loads
+            out = dict(extracted)
+            out["beam"] = beam
+            return out, []
+        if abs(fy_v) >= 1e-9:
             signed = abs(val) if fy_v >= 0 else -abs(val)
             updated, patch_errors = apply_patch_text(extracted, f"load {idx} fy={signed}")
             loads_out = (updated.get("beam") or {}).get("loads") or []
@@ -336,8 +359,16 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
                 _mark_user_mag(loads_out[idx - 1])
             _clear_draft_new_flag(loads_out, idx)
             return updated, patch_errors
-        signed = abs(val) if fx_v >= 0 else -abs(val)
-        updated, patch_errors = apply_patch_text(extracted, f"load {idx} fx={signed}")
+        if abs(fx_v) >= 1e-9:
+            signed = abs(val) if fx_v >= 0 else -abs(val)
+            updated, patch_errors = apply_patch_text(extracted, f"load {idx} fx={signed}")
+            loads_out = (updated.get("beam") or {}).get("loads") or []
+            if 0 <= idx - 1 < len(loads_out) and isinstance(loads_out[idx - 1], dict):
+                _mark_user_mag(loads_out[idx - 1])
+            _clear_draft_new_flag(loads_out, idx)
+            return updated, patch_errors
+        signed = abs(val) if fy_v >= 0 else -abs(val)
+        updated, patch_errors = apply_patch_text(extracted, f"load {idx} fy={signed}")
         loads_out = (updated.get("beam") or {}).get("loads") or []
         if 0 <= idx - 1 < len(loads_out) and isinstance(loads_out[idx - 1], dict):
             _mark_user_mag(loads_out[idx - 1])
@@ -351,7 +382,6 @@ def toggle_load_direction(extracted: dict, load_idx: int) -> dict:
     """הופך כיוון עומס אלכסוני (dl ↔ dr)."""
     import math
 
-    from bot.vision import finalize_beam_extraction
 
     beam = dict(extracted.get("beam") or {})
     loads = [dict(ld) for ld in (beam.get("loads") or []) if isinstance(ld, dict)]
@@ -386,10 +416,78 @@ def toggle_load_direction(extracted: dict, load_idx: int) -> dict:
     beam["loads"] = loads
     out = dict(extracted)
     out["beam"] = beam
-    return finalize_beam_extraction(out)
+    return _finalize_draft(out)
 
 
 _LOAD_TYPE_CYCLE = ("point", "moment", "distributed", "inclined")
+_SETTABLE_LOAD_TYPES = _LOAD_TYPE_CYCLE + ("axial",)
+
+
+def axial_dir_icon(ld: dict) -> str:
+    """אייקון כיוון לעומס צירי — → או ←."""
+    try:
+        fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        fx = 0.0
+    if fx < -1e-9:
+        return "←"
+    if fx > 1e-9:
+        return "→"
+    from bot.vision import _read_axial_direction
+
+    return "←" if _read_axial_direction(ld) == "left" else "→"
+
+
+def _toggle_empty_axial_direction(ld: dict) -> None:
+    """הופך כיוון ברירת מחדל לעומס צירי ריק (לפני הזנת גודל)."""
+    from bot.vision import _read_axial_direction
+
+    ld["Fy"] = 0.0
+    cur = _read_axial_direction(ld) or "right"
+    ld["direction"] = "left" if cur == "right" else "right"
+    for key in ("arrow_direction", "axial_direction", "force_direction"):
+        ld.pop(key, None)
+
+
+def _axial_signed_magnitude(ld: dict, magnitude: float) -> float:
+    """מחזיר magnitude עם סימן נכון — Fx קיים, או direction כש-Fx=0."""
+    try:
+        fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        fx = 0.0
+    mag = abs(float(magnitude))
+    if abs(fx) >= 1e-9:
+        return mag if fx >= 0 else -mag
+    from bot.vision import _read_axial_direction
+
+    return -mag if _read_axial_direction(ld) == "left" else mag
+
+
+def is_axial_point_load(ld: dict) -> bool:
+    """עומס נקודתי צירי — Fx בלבד (או מסומן כצירי בטיוטה חדשה)."""
+    if str(ld.get("type", "point")).lower().strip() != "point":
+        return False
+    if ld.get("_draft_axial"):
+        return True
+    try:
+        fy = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        fy = 0.0
+    try:
+        fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        fx = 0.0
+    return abs(fy) < 1e-9 and abs(fx) >= 1e-9
+
+
+def load_picker_kind(ld: dict) -> str:
+    """סוג העומס לתצוגה בתפריט בחירת סוג."""
+    t = str(ld.get("type", "point")).lower().strip()
+    if t == "point" and is_axial_point_load(ld):
+        return "axial"
+    if t not in _LOAD_TYPE_CYCLE:
+        return "point"
+    return t
 
 
 def _empty_load_template(load_type: str, L: float) -> dict:
@@ -416,12 +514,20 @@ def _empty_load_template(load_type: str, L: float) -> dict:
             "incl_dir": "dr",
             "_draft_new": True,
         }
+    if t == "axial":
+        return {
+            "type": "point",
+            "x": 0.0,
+            "Fy": 0.0,
+            "Fx": 0.0,
+            "_draft_new": True,
+            "_draft_axial": True,
+        }
     return {"type": "point", "x": 0.0, "Fy": 0.0, "Fx": 0.0, "_draft_new": True}
 
 
 def cycle_load_type(extracted: dict, load_idx: int) -> dict:
     """מחליף סוג עומס חדש: נקודתי → מומנט → מפורס → אלכסון → נקודתי."""
-    from bot.vision import finalize_beam_extraction
 
     beam = dict(extracted.get("beam") or {})
     L = float(beam.get("L", 10.0) or 10.0)
@@ -439,7 +545,7 @@ def cycle_load_type(extracted: dict, load_idx: int) -> dict:
     beam["loads"] = loads
     out = dict(extracted)
     out["beam"] = beam
-    return finalize_beam_extraction(out)
+    return _finalize_draft(out)
 
 
 def set_load_type(extracted: dict, load_idx: int, new_type: str) -> dict:
@@ -447,7 +553,6 @@ def set_load_type(extracted: dict, load_idx: int, new_type: str) -> dict:
     import math
 
     from bot.draft_format import _inclined_mag
-    from bot.vision import finalize_beam_extraction
 
     beam = dict(extracted.get("beam") or {})
     L = float(beam.get("L", 10.0) or 10.0)
@@ -458,11 +563,12 @@ def set_load_type(extracted: dict, load_idx: int, new_type: str) -> dict:
         return extracted
     ld = loads[i]
     target = str(new_type).lower().strip()
-    if target not in _LOAD_TYPE_CYCLE:
+    if target not in _SETTABLE_LOAD_TYPES:
+        return extracted
+    current_kind = load_picker_kind(ld)
+    if current_kind == target:
         return extracted
     current = str(ld.get("type", "point")).lower().strip()
-    if current == target:
-        return extracted
 
     x = float(ld.get("x", ld.get("x1", 0.0)) or 0.0)
     x1 = float(ld.get("x1", x) or 0.0)
@@ -500,11 +606,15 @@ def set_load_type(extracted: dict, load_idx: int, new_type: str) -> dict:
             "type": "point",
             "x": x,
             "Fy": sign * mag if mag >= 1e-9 else 0.0,
-            "Fx": float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0),
+            "Fx": 0.0,
         }
-        if current == "point":
-            new_ld["Fx"] = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
-            new_ld["Fy"] = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
+    elif target == "axial":
+        new_ld = {
+            "type": "point",
+            "x": x,
+            "Fy": 0.0,
+            "Fx": sign * mag if mag >= 1e-9 else 0.0,
+        }
     elif target == "moment":
         new_ld = {"type": "moment", "x": x, "M": sign * mag}
     elif target == "distributed":
@@ -558,17 +668,23 @@ def set_load_type(extracted: dict, load_idx: int, new_type: str) -> dict:
         new_ld["_draft_new"] = True
     elif mag >= 1e-9:
         new_ld.pop("_draft_new", None)
+    if target == "axial":
+        if was_new and mag < 1e-9:
+            new_ld["_draft_axial"] = True
+        else:
+            new_ld.pop("_draft_axial", None)
+    else:
+        new_ld.pop("_draft_axial", None)
 
     loads[i] = new_ld
     beam["loads"] = loads
     out = dict(extracted)
     out["beam"] = beam
-    return finalize_beam_extraction(out)
+    return _finalize_draft(out)
 
 
 def toggle_any_load_direction(extracted: dict, load_idx: int) -> dict:
     """הופך כיוון/סימן של עומס (מתוך תפריט הסוג או ישירות)."""
-    from bot.vision import finalize_beam_extraction
 
     beam = dict(extracted.get("beam") or {})
     loads = [dict(ld) for ld in (beam.get("loads") or []) if isinstance(ld, dict)]
@@ -578,7 +694,14 @@ def toggle_any_load_direction(extracted: dict, load_idx: int) -> dict:
     ld = loads[i]
     t = str(ld.get("type", "point")).lower().strip()
     if t == "inclined":
-        return toggle_load_direction(extracted, load_idx)
+        out = toggle_load_direction(extracted, load_idx)
+        beam_out = out.get("beam") or {}
+        loads_out = beam_out.get("loads") or []
+        if 0 <= i < len(loads_out) and isinstance(loads_out[i], dict):
+            if _inclined_mag(loads_out[i]) >= 1e-9:
+                _mark_user_mag(loads_out[i])
+                loads_out[i].pop("_draft_new", None)
+        return out
     if t == "moment":
         for k in ("M", "m"):
             if ld.get(k) is not None:
@@ -587,6 +710,7 @@ def toggle_any_load_direction(extracted: dict, load_idx: int) -> dict:
                 except (TypeError, ValueError):
                     pass
         if abs(float(ld.get("M", ld.get("m", 0)) or 0.0)) >= 1e-9:
+            _mark_user_mag(ld)
             ld.pop("_draft_new", None)
     elif t == "distributed":
         for k in ("w", "q"):
@@ -596,28 +720,53 @@ def toggle_any_load_direction(extracted: dict, load_idx: int) -> dict:
                 except (TypeError, ValueError):
                     pass
         if abs(float(ld.get("w", ld.get("q", 0)) or 0.0)) >= 1e-9:
+            _mark_user_mag(ld)
             ld.pop("_draft_new", None)
-    else:  # point
-        if ld.get("Fy", ld.get("fy")) is not None:
-            try:
-                ld["Fy"] = -float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
-            except (TypeError, ValueError):
-                pass
+    elif is_axial_point_load(ld):
+        try:
+            fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            fx = 0.0
+        ld["Fy"] = 0.0
+        if abs(fx) >= 1e-9:
+            ld["Fx"] = -fx
+            _mark_user_mag(ld)
+            _clear_axial_direction_metadata(ld)
+            ld.pop("_draft_new", None)
+            ld.pop("_draft_axial", None)
+        else:
+            _toggle_empty_axial_direction(ld)
+    else:  # point אנכי
+        try:
+            fy = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            fy = 0.0
+        try:
+            fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            fx = 0.0
+        if abs(fy) >= 1e-9:
+            ld["Fy"] = -fy
+        elif abs(fx) >= 1e-9:
+            ld["Fx"] = -fx
+        elif ld.get("Fy", ld.get("fy")) is not None:
+            ld["Fy"] = -fy
         elif ld.get("Fx", ld.get("fx")) is not None:
-            try:
-                ld["Fx"] = -float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
-            except (TypeError, ValueError):
-                pass
+            ld["Fx"] = -fx
+        if abs(fy) >= 1e-9 or abs(fx) >= 1e-9:
+            _mark_user_mag(ld)
+            _clear_axial_direction_metadata(ld)
+            ld.pop("_draft_new", None)
+            ld.pop("_draft_axial", None)
     loads[i] = ld
     beam["loads"] = loads
     out = dict(extracted)
     out["beam"] = beam
-    return finalize_beam_extraction(out)
+    return _finalize_draft(out)
 
 
 def delete_load(extracted: dict, load_idx: int) -> dict:
     """מסיר עומס מהטיוטה לפי אינדקס 1-based."""
-    from bot.vision import finalize_beam_extraction
 
     beam = dict(extracted.get("beam") or {})
     loads = [dict(ld) for ld in (beam.get("loads") or []) if isinstance(ld, dict)]
@@ -628,31 +777,37 @@ def delete_load(extracted: dict, load_idx: int) -> dict:
     beam["loads"] = loads
     out = dict(extracted)
     out["beam"] = beam
-    return finalize_beam_extraction(out)
+    return _finalize_draft(out)
 
 
 def add_empty_load(extracted: dict) -> dict:
     """מוסיף שורת עומס חדשה ריקה לטיוטה."""
+    return add_load_of_type(extracted, "point")
+
+
+def add_load_of_type(extracted: dict, load_type: str) -> dict:
+    """מוסיף עומס חדש מהסוג שנבחר — שדות גודל/מיקום/זווית ריקים."""
+
     out = dict(extracted)
     beam = dict(out.get("beam") or {})
+    L = float(beam.get("L", 10.0) or 10.0)
     loads = [dict(ld) for ld in (beam.get("loads") or []) if isinstance(ld, dict)]
-    loads.append(
-        {
-            "type": "point",
-            "x": 0.0,
-            "Fy": 0.0,
-            "_draft_new": True,
-        }
-    )
+    loads.append(_empty_load_template(load_type, L))
     beam["loads"] = loads
     out["beam"] = beam
-    return out
+    return _finalize_draft(out)
 
 
 def _mark_user_mag(ld: dict) -> None:
     """מסמן עריכת כח ידנית — מונע דריסה מ-note או תיקוני חילוץ."""
     ld["_user_mag"] = True
     ld.pop("note", None)
+
+
+def _clear_axial_direction_metadata(ld: dict) -> None:
+    """מסיר מטא-דאטה של כיוון צירי מחילוץ — אחרי שהמשתמש היפך כיוון ידנית."""
+    for key in ("direction", "arrow_direction", "axial_direction", "force_direction"):
+        ld.pop(key, None)
 
 
 def _clear_draft_new_flag(loads: list[dict], idx: int) -> None:
@@ -682,7 +837,7 @@ def apply_user_edit(chat_id: int, text: str) -> tuple[dict, str, list[str]]:
         updated, patch_errors = apply_patch_text(base, text)
         errors.extend(patch_errors)
 
-    updated = finalize_beam_extraction(updated)
+    updated = _finalize_draft(updated)
     draft = extracted_to_draft_text(updated)
     persist_draft(chat_id, updated)
     return updated, draft, errors
@@ -710,7 +865,7 @@ def handle_draft_text(chat_id: int, text: str) -> DraftHandleResult:
                 handled=True,
                 reply="אין טיוטה — שלח תמונה.",
             )
-        reply, solved = approve_and_solve(chat_id, extracted)
+        reply, solved, extracted = approve_and_solve(chat_id, extracted)
         return DraftHandleResult(
             handled=True,
             approved=True,

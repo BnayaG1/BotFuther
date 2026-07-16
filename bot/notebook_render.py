@@ -116,3 +116,59 @@ def render_notebook_png_temp(extracted: dict, solved: dict) -> Path | None:
         path.unlink(missing_ok=True)
         return None
     return path
+
+
+def render_exercise_problem_png_bytes(extracted: dict) -> bytes | None:
+    """PNG של שרטוט התרגיל בלבד (קורה + עומסים) — בלי ריאקציות/דיאגרמות.
+
+    לשימוש לפני שהמשתמש בחר מצב פתרון (מציג את השאלה בלבד, לא את התשובה).
+    """
+    extracted = finalize_beam_extraction(extracted)
+    beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
+    try:
+        L = float(beam.get("L", 0))
+    except (TypeError, ValueError):
+        return None
+    if L <= 0:
+        return None
+
+    loads = _solver_loads_from_extracted(extracted)
+    if not loads:
+        return None
+
+    try:
+        import beam_notebook
+
+        nb = beam_notebook._load_live_notebook_module()
+        support_mode, ra_pos, rb_pos = resolve_beam_support_geometry(beam)
+        if support_mode == "cantilever":
+            fig = nb.build_cantilever_schematic_figure(L, loads, wide=True)
+        else:
+            fig = nb.build_beam_schematic_figure(
+                L, loads, ra_pos, rb_pos, 0.0, 0.0, 0.0, 0.0, wide=True
+            )
+        png_bytes = nb._fig_to_png_bytes(fig, style="embed", pad_inches=0.04)
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+        return png_bytes
+    except Exception as exc:
+        log.warning("Exercise problem render failed: %s", exc)
+        return None
+
+
+def render_exercise_problem_png_temp(extracted: dict) -> Path | None:
+    """PNG זמני של שרטוט התרגיל — המתקשר אחראי למחיקה."""
+    png_bytes = render_exercise_problem_png_bytes(extracted)
+    if not png_bytes:
+        return None
+    fd, name = tempfile.mkstemp(suffix="_exercise_problem.png")
+    os.close(fd)
+    path = Path(name)
+    try:
+        path.write_bytes(png_bytes)
+    except OSError as exc:
+        log.warning("Exercise problem temp write failed: %s", exc)
+        path.unlink(missing_ok=True)
+        return None
+    return path

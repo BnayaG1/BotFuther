@@ -3,10 +3,26 @@ MANDATORY ENGINEERING SCAN PROTOCOL — execute mentally IN THIS ORDER before an
 {linear_scan_protocol}
 
 ## 1. Structural elements
-A) Supports — identify EACH symbol precisely:
-   • pin / fixed support (triangle + hatch / half-chain) = סמך קבוע (צמד) — resists Fx and Fy
-   • roller (triangle + wheels / circles underneath) = סמך נייד (גליל) — resists Fy only
-   • wall / hatch / embedment = ריתום (fixed end) — Fx, Fy, and moment
+A) Supports — identify EACH symbol INDEPENDENTLY by what is actually drawn under/at it.
+   NEVER assume type from left/right position — the left support is NOT always "pin" and the
+   right support is NOT always "roller". Classify EACH support on its own visual symbol,
+   counting the actual marks drawn — do not guess from habit:
+   • MULTIPLE short diagonal parallel tick-marks (hatching, ////, a "half-chain" pattern —
+     TWO OR MORE repeated short strokes) drawn coming out of the support = type "pin" = סמך קבוע
+     — resists BOTH Fx (axial) and Fy (vertical), i.e. TWO reaction components.
+   • A SINGLE straight bar/line under the triangle (with NO repeated diagonal hatch strokes),
+     OR circles/wheels drawn under the support, OR a plain triangle with nothing under it at all
+     = type "roller" = סמך נייד — resists ONLY Fy (vertical), i.e. ONE reaction component.
+     A lone flat line/rail is NOT hatching — do not classify it as "pin" just because a line is
+     present; hatching means several repeated short diagonal ticks, not one continuous bar.
+   • "fixed" (wall / full hatch embedment, resists Fx, Fy, AND moment) applies ONLY to a
+     cantilever exercise (one wall-mounted end, free tip) — NEVER use "fixed" for a support in a
+     two-support (simply supported) beam. If a two-support beam has a support that looks
+     hatched/embedded, classify it as "pin", not "fixed".
+   • It is EQUALLY common for the roller (fewer/no hatch marks) to be drawn on the LEFT and the
+     pin (hatched) on the RIGHT as the other way around. Before deciding, literally COUNT the
+     diagonal tick strokes under EACH support separately and report that count (hatch_count) —
+     do not pattern-match to "left support usually looks like X" from habit or prior exercises.
 B) Structure type — classify the whole system:
    • simply_supported — beam on pin + roller (2 supports)
    • cantilever — one fixed end, free tip

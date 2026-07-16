@@ -195,7 +195,11 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
 
         await query.answer("מייצר...")
-        codes = generate_coupon_codes(package_id=package_id, count=count)
+        codes = generate_coupon_codes(
+            count=count,
+            daily_quota=pkg.daily_quota,
+            period_days=pkg.period_days,
+        )
         text = _format_codes_message(codes)
         chat_id = query.message.chat_id if query.message else None
         if query.message:
@@ -248,7 +252,11 @@ async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if pkg is None:
             await update.message.reply_text("חבילה לא נמצאה.")
             return
-        codes = generate_coupon_codes(package_id=pending_pkg, count=count)
+        codes = generate_coupon_codes(
+            count=count,
+            daily_quota=pkg.daily_quota,
+            period_days=pkg.period_days,
+        )
         await update.message.reply_text(
             _format_codes_message(codes),
             reply_markup=build_admin_menu_keyboard(),

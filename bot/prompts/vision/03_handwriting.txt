@@ -24,7 +24,17 @@ HANDWRITING / SKETCH (critical):
   x=0 at the leftmost chain tick. Support x = chain position of label A/B — NOT the triangle below the line.
   Example: C—4.2—A—4—D—4—E—2—F—2—B → L=16.2 m; pin A at x=4.2, roller B at x=16.2 (on axis, not outside drawing).
 - Read EVERY segment length between consecutive tick marks; SUM all segments to get L. Never invent equal 2m segments.
-- Symbols: triangle+hatching = pin; triangle+circles = roller; wall/hatch = fixed; curved arrow = moment.
+- Symbols (classify EACH support independently by its own drawn symbol, by COUNTING the marks —
+  do NOT infer type from left/right position and do NOT guess from habit):
+  triangle with MULTIPLE repeated short diagonal tick-marks (hatching, ////) = pin (קבוע, resists
+  Fx+Fy — two reactions); triangle with circles/wheels underneath, OR a SINGLE plain bar/line with
+  no repeated diagonal ticks, OR nothing underneath at all = roller (נייד, resists Fy only — one
+  reaction). A lone straight line/rail under a support is NOT hatching by itself — only several
+  repeated short diagonal strokes count as hatching (pin). Full wall hatch/embedment = fixed — ONLY
+  for a cantilever (wall-mounted) exercise, never for a support inside a two-support beam. Curved
+  arrow = moment. Report hatch_count (literal count of diagonal strokes) per support — it is
+  equally common for the roller to be on the LEFT and the pin on the RIGHT; re-check each symbol
+  on its own, do not assume the layout matches a previous exercise.
 - DUAL UNIT LABELS (critical): diagrams often show kN AND ton together, e.g. "100kn (10t)", "200kn (20t)".
   ALWAYS use the parenthetical ton value for point loads — NEVER the kN number before it.
   100 kn (10 t) ↓ → Fy=10; 200 kn (20 t) ← → Fx=-20, direction=left.
