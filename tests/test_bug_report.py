@@ -14,7 +14,7 @@ import bot.handlers as handlers
 async def test_bug_report_button_prompts_for_details():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
-    update.message.text = "🛠️ דיווח על תקלה"
+    update.message.text = handlers._PERSISTENT_BUG_REPORT_LABEL
     update.message.chat_id = 777001
     update.message.reply_text = AsyncMock()
     update.effective_chat = Chat(id=777001, type="private")
@@ -68,7 +68,7 @@ async def test_bug_report_text_forwards_via_admin_bot():
 async def test_bug_report_cancel():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
-    update.message.text = "❌ ביטול דיווח"
+    update.message.text = handlers._BUG_REPORT_CANCEL
     update.message.chat_id = 777003
     update.message.reply_text = AsyncMock()
     update.effective_chat = Chat(id=777003, type="private")

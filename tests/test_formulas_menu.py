@@ -39,21 +39,23 @@ def test_start_keyboard_includes_formulas():
     kb = handlers.build_start_keyboard()
     texts = [btn.text for row in kb.inline_keyboard for btn in row]
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-    assert "📐 נוסחאות" in texts
+    assert handlers._PERSISTENT_FORMULAS_LABEL in texts
     assert "menu:formulas" in callbacks
 
 
 def test_persistent_keyboard_includes_formulas():
     kb = handlers.build_persistent_keyboard()
     texts = [btn.text for row in kb.keyboard for btn in row]
-    assert "📐 נוסחאות" in texts
+    assert handlers._PERSISTENT_FORMULAS_LABEL in texts
+    assert handlers._PERSISTENT_ASSISTANT_LABEL in texts
+    assert "🔄 איפוס תרגיל" not in texts
 
 
 @pytest.mark.anyio
 async def test_on_text_formulas_button_opens_menu():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
-    update.message.text = "📐 נוסחאות"
+    update.message.text = handlers._PERSISTENT_FORMULAS_LABEL
     update.effective_chat = Chat(id=999010, type="private")
     update.effective_user = User(id=1010, is_bot=False, first_name="T")
     update.message.reply_text = AsyncMock()
@@ -77,7 +79,7 @@ async def test_on_text_formulas_button_opens_menu():
 async def test_formulas_locked_without_coupon():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
-    update.message.text = "📐 נוסחאות"
+    update.message.text = handlers._PERSISTENT_FORMULAS_LABEL
     update.effective_chat = Chat(id=999012, type="private")
     update.effective_user = User(id=1012, is_bot=False, first_name="T")
     update.message.reply_text = AsyncMock()
@@ -135,3 +137,30 @@ def test_formulas_locked_message_and_keyboard():
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "buy:menu" in callbacks
     assert "buy:redeem" in callbacks
+
+
+@pytest.mark.anyio
+async def test_formula_back_opens_main_action_menu_without_welcome():
+    update = MagicMock(spec=Update)
+    query = MagicMock()
+    query.data = "formula:back"
+    query.answer = AsyncMock()
+    query.message = MagicMock(spec=Message)
+    query.message.chat_id = 999020
+    query.message.delete = AsyncMock()
+    update.callback_query = query
+    update.effective_user = User(id=1020, is_bot=False, first_name="T")
+
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    with patch.object(handlers, "telegram_user_id", return_value=1020):
+        await handlers.on_formula_callback(update, context)
+
+    query.message.delete.assert_awaited_once()
+    context.bot.send_message.assert_awaited_once()
+    kwargs = context.bot.send_message.await_args.kwargs
+    assert kwargs["text"] == "בחר/י פעולה:"
+    assert isinstance(kwargs.get("reply_markup"), InlineKeyboardMarkup)
+    welcome = handlers.build_start_welcome_text()
+    assert welcome not in kwargs["text"]
