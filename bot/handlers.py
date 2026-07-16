@@ -65,14 +65,6 @@ from bot.formulas import (
     topic_image_caption_hebrew,
     topic_pending_caption_hebrew,
 )
-from intro import (
-    build_intro_menu_keyboard,
-    build_intro_topic_followup_keyboard,
-    get_intro_topic,
-    intro_menu_intro_hebrew,
-    intro_topic_body_hebrew,
-    parse_intro_callback,
-)
 from bot.draft_editor import (
     add_load_of_type,
     apply_field_edit,
@@ -177,7 +169,6 @@ _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
 _START_SEND_IMAGE_LABEL = "פתרון מלא"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
-_START_INTRO_LABEL = "מבוא"
 _START_REDEEM_COUPON_LABEL = "הזנת קוד קופון"
 _START_PURCHASE_LABEL = "רכישת חבילה"
 
@@ -341,7 +332,6 @@ def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(_START_INTRO_LABEL, callback_data="menu:intro")],
         [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
         [InlineKeyboardButton(_START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise")],
         [InlineKeyboardButton(_PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas")],
@@ -501,52 +491,6 @@ async def _send_formulas_locked(
 ) -> None:
     text = formulas_locked_reply_hebrew()
     keyboard = build_formulas_locked_keyboard()
-    try:
-        if edit_message is not None:
-            await edit_message.edit_text(
-                text,
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-            )
-            return
-        if message is not None:
-            await message.reply_text(
-                text,
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-            )
-    except BadRequest:
-        if edit_message is not None:
-            try:
-                await edit_message.edit_text(text, reply_markup=keyboard)
-                return
-            except BadRequest:
-                pass
-        if message is not None:
-            await message.reply_text(text, reply_markup=keyboard)
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id, text=text, reply_markup=keyboard
-            )
-
-
-async def _send_intro_menu(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    *,
-    message=None,
-    edit_message=None,
-) -> None:
-    """מציג תפריט מבוא לסטטיקה — פתוח לכולם."""
-    text = intro_menu_intro_hebrew()
-    keyboard = build_intro_menu_keyboard()
     try:
         if edit_message is not None:
             await edit_message.edit_text(
@@ -840,12 +784,6 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             user_id=telegram_user_id(update),
         )
         return
-    if action == "intro":
-        await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-        await _delete_callback_message(query)
-        await _send_intro_menu(context, chat_id)
-        return
     if action == "give_exercise":
         if count_exercises() <= 0:
             await query.answer("אין עדיין תרגילים מוכנים במאגר.", show_alert=True)
@@ -1000,56 +938,6 @@ async def on_assistant_callback(update: Update, context: ContextTypes.DEFAULT_TY
         send_text=_send_text_safe,
         reply_message=None,
     )
-
-
-async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query or not query.data:
-        return
-    parsed = parse_intro_callback(query.data)
-    if parsed is None:
-        await query.answer()
-        return
-    action, payload = parsed
-    chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-
-    if action == "menu":
-        await query.answer()
-        await _delete_callback_message(query)
-        await _send_intro_menu(context, chat_id)
-        return
-
-    if action == "back":
-        await query.answer()
-        await _delete_callback_message(query)
-        await _send_main_action_menu(context, chat_id)
-        return
-
-    if action == "topic":
-        topic = get_intro_topic(payload)
-        if topic is None:
-            await query.answer("נושא לא נמצא.", show_alert=True)
-            return
-        await query.answer()
-        await _delete_callback_message(query)
-        text = intro_topic_body_hebrew(topic)
-        keyboard = build_intro_topic_followup_keyboard()
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-            )
-        except BadRequest:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-            )
-        return
-
-    await query.answer()
 
 
 async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
