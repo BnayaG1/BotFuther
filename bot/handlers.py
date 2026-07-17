@@ -67,11 +67,6 @@ from bot.formulas import (
     topic_image_caption_hebrew,
     topic_pending_caption_hebrew,
 )
-from intro import (
-    build_opening_keyboard,
-    opening_message_hebrew,
-    parse_intro_callback,
-)
 from bot.draft_editor import (
     add_load_of_type,
     apply_field_edit,
@@ -167,14 +162,13 @@ _BUG_REPORT_FORCE_REPLY = ForceReply(
 )
 
 _BUG_REPORT_CANCEL = "ביטול דיווח"
-_PERSISTENT_ASSISTANT_LABEL = "עוזר אישי"
+_PERSISTENT_ASSISTANT_LABEL = "מדריך לפתרון"
 _BANK_ADD_SECRET = "BnayaG"
 _PERSISTENT_FORMULAS_LABEL = "נוסחאות"
 _PERSISTENT_QUOTA_LABEL = "מכסה"
 _PERSISTENT_COUPON_LABEL = "קופון"
 _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
-_START_INTRO_LABEL = "מבוא"
 _START_SEND_IMAGE_LABEL = "פתרון מלא"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
 _START_REDEEM_COUPON_LABEL = "הזנת קוד קופון"
@@ -317,7 +311,7 @@ def build_start_welcome_text() -> str:
         "הסטטיקה קצת יותר בקלות, בלי להיתקע שעות על אותה שאלה.\n\n"
         "השימוש בבוט פשוט: אפשר להעלות תמונה של תרגיל שאתה עובד עליו, או לבחור תרגיל "
         "מתוך המאגר המובנה שלי, שם הנתונים כבר מוגדרים. בכל מקרה, אתה יכול לבחור בין "
-        "פתרון מחברת מלא לבין ליווי צמוד של עוזר אישי. העוזר האישי הזה מלווה אותך "
+        "פתרון מחברת מלא לבין ליווי צמוד של מדריך. המדריך הזה מלווה אותך "
         "צעד-צעד עם כפתורים נוחים ומסביר את הדרך, ובנוסף יש לך אופציה נגישה לשלוף "
         "נוסחאות ספציפיות בהתאם למה שאתה צריך באותו רגע.\n\n"
         "אם יש בעיות או בקשות ספציפיות, יש אופציה לדיווח שדרכה תוכל לפנות אליי ישירות.\n\n"
@@ -344,7 +338,6 @@ def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(_START_INTRO_LABEL, callback_data="menu:intro")],
         [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
         [InlineKeyboardButton(_START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise")],
         [InlineKeyboardButton(_PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas")],
@@ -663,18 +656,6 @@ async def _send_main_action_menu(
     )
 
 
-async def _send_intro_opening(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-) -> None:
-    """שולח את הודעת הפתיחה של מבוא לסטטיקה + כפתור המשך."""
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=opening_message_hebrew(),
-        reply_markup=build_opening_keyboard(),
-    )
-
-
 async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -808,12 +789,6 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             chat_id,
             user_id=telegram_user_id(update),
         )
-        return
-    if action == "intro":
-        await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-        await _delete_callback_message(query)
-        await _send_intro_opening(context, chat_id)
         return
     if action == "give_exercise":
         if count_exercises() <= 0:
@@ -959,7 +934,7 @@ async def on_assistant_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
     if not has_active_assistant_progress(chat_id):
-        await query.answer("אין מסלול עוזר פעיל כרגע.", show_alert=True)
+        await query.answer("אין מסלול מדריך פעיל כרגע.", show_alert=True)
         return
     await query.answer()
     await handle_assistant_action(
@@ -969,21 +944,6 @@ async def on_assistant_callback(update: Update, context: ContextTypes.DEFAULT_TY
         send_text=_send_text_safe,
         reply_message=None,
     )
-
-
-async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query or not query.data:
-        return
-    action = parse_intro_callback(query.data)
-    if action is None:
-        await query.answer()
-        return
-    if action == "continue":
-        # תוכן השלב הבא יתווסף בהמשך.
-        await query.answer()
-        return
-    await query.answer()
 
 
 async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

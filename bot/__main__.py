@@ -33,7 +33,6 @@ from bot.handlers import (
     on_error,
     on_formula_callback,
     on_image,
-    on_intro_callback,
     on_menu_callback,
     on_text,
 )
@@ -112,7 +111,6 @@ def main() -> None:
     app_bot.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_image))
     app_bot.add_handler(CallbackQueryHandler(on_menu_callback, pattern=r"^menu:"))
     app_bot.add_handler(CallbackQueryHandler(on_buy_callback, pattern=r"^buy:"))
-    app_bot.add_handler(CallbackQueryHandler(on_intro_callback, pattern=r"^intro:"))
     app_bot.add_handler(CallbackQueryHandler(on_formula_callback, pattern=r"^formula:"))
     app_bot.add_handler(CallbackQueryHandler(on_draft_callback, pattern=r"^d:"))
     app_bot.add_handler(CallbackQueryHandler(on_assistant_callback, pattern=r"^assist:"))

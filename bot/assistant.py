@@ -301,7 +301,7 @@ def build_solve_mode_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("פתרון מחברת", callback_data="menu:mode:notebook")],
-            [InlineKeyboardButton("עוזר אישי", callback_data="menu:mode:assistant")],
+            [InlineKeyboardButton("מדריך לפתרון", callback_data="menu:mode:assistant")],
             [InlineKeyboardButton("חזרה", callback_data="formula:back")],
         ]
     )
@@ -312,7 +312,7 @@ def build_bank_solve_mode_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("פתרון מחברת", callback_data="menu:bank:notebook")],
-            [InlineKeyboardButton("עוזר אישי", callback_data="menu:bank:assistant")],
+            [InlineKeyboardButton("מדריך לפתרון", callback_data="menu:bank:assistant")],
         ]
     )
 

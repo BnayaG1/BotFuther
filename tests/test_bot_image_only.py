@@ -17,7 +17,7 @@ def test_welcome_text_is_image_only():
     assert "תמונה" in text
     assert "מאגר" in text
     assert "פתרון מחברת" in text
-    assert "עוזר אישי" in text
+    assert "מדריך" in text
     assert "נוסחאות" in text
     assert "דיווח" in text
     assert "סטטיקה" in text
@@ -34,12 +34,11 @@ def test_start_keyboard_has_no_concept_button():
     labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
     callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
     assert any("פתרון מלא" in label for label in labels)
-    assert any("מבוא" in label for label in labels)
-    assert "menu:intro" in callbacks
-    assert labels[0] == "מבוא"
     assert any("קופון" in label for label in labels)
     assert not any("מושג" in label for label in labels)
     assert not any("דיווח" in label for label in labels)
+    assert not any("מבוא" in label for label in labels)
+    assert "menu:intro" not in callbacks
 
 
 @pytest.mark.anyio
