@@ -73,13 +73,13 @@ def draft_data_only_text(extracted: dict) -> str:
     l_val = _fmt_num(float(beam.get("L", 0)))
 
     lines = [
-        f"📏 *אורך הקורה*   {l_val} מ'",
+        f"*אורך הקורה*   {l_val} מ'",
         "",
     ]
 
     supports = beam.get("supports") or []
     if supports:
-        lines.append("🔩 *סמכים*")
+        lines.append("*סמכים*")
         for sup in supports:
             if not isinstance(sup, dict):
                 continue
@@ -91,7 +91,7 @@ def draft_data_only_text(extracted: dict) -> str:
 
     loads = beam.get("loads") or []
     if loads:
-        lines.append("⚖️ *עומסים*")
+        lines.append("*עומסים*")
         for idx, ld in enumerate(loads, 1):
             if isinstance(ld, dict):
                 lines.append(f"   {idx}. {_load_summary_he(beam, idx, ld)}")
@@ -182,7 +182,7 @@ def build_draft_keyboard(
     beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
     rows: list[list[InlineKeyboardButton]] = []
 
-    rows.append([InlineKeyboardButton("✏️ אורך L", callback_data="d:eL")])
+    rows.append([InlineKeyboardButton("אורך L", callback_data="d:eL")])
 
     supports = beam.get("supports") or []
     sup_row: list[InlineKeyboardButton] = []
@@ -191,7 +191,7 @@ def build_draft_keyboard(
             continue
         sup_row.append(
             InlineKeyboardButton(
-                f"✏️ סמך {str(sup.get('label', idx)).strip()}",
+                f"סמך {str(sup.get('label', idx)).strip()}",
                 callback_data=f"d:eS{idx}",
             )
         )
@@ -223,11 +223,11 @@ def build_draft_keyboard(
                 ld = {}
             rows.extend(_build_load_type_picker_rows(type_picker_idx, ld))
         else:
-            rows.append([InlineKeyboardButton("➕", callback_data="d:ad")])
-            rows.append([InlineKeyboardButton("✅ חשב", callback_data="d:a")])
+            rows.append([InlineKeyboardButton("הוסף", callback_data="d:ad")])
+            rows.append([InlineKeyboardButton("חשב", callback_data="d:a")])
     else:
-        rows.append([InlineKeyboardButton("➕", callback_data="d:ad")])
-        rows.append([InlineKeyboardButton("✅ חשב", callback_data="d:a")])
+        rows.append([InlineKeyboardButton("הוסף", callback_data="d:ad")])
+        rows.append([InlineKeyboardButton("חשב", callback_data="d:a")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -321,7 +321,7 @@ def _load_field_button(text: str, callback_data: str, *, min_width: int) -> Inli
 def _load_delete_button(idx: int) -> InlineKeyboardButton:
     """כפתור מחיקה — ריבוע קבוע בקצה ימין של השורה."""
     return InlineKeyboardButton(
-        _pad_load_btn_label("🗑", _LOAD_COL_DELETE),
+        _pad_load_btn_label("מחק", _LOAD_COL_DELETE),
         callback_data=f"d:dl{idx}",
     )
 
@@ -455,13 +455,13 @@ def build_load_dir_prompt_keyboard(idx: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("↙ dl", callback_data=f"d:Dl{idx}"),
                 InlineKeyboardButton("↘ dr", callback_data=f"d:Dr{idx}"),
             ],
-            [InlineKeyboardButton("❌ ביטול", callback_data="d:x")],
+            [InlineKeyboardButton("ביטול", callback_data="d:x")],
         ]
     )
 
 
 def _type_picker_btn(label: str, idx: int, code: str, *, selected: bool) -> InlineKeyboardButton:
-    prefix = "✓ " if selected else ""
+    prefix = "> " if selected else ""
     return InlineKeyboardButton(f"{prefix}{label}", callback_data=f"d:y{idx}{code}")
 
 
@@ -488,7 +488,7 @@ def _build_load_type_picker_rows(
     else:
         rows.append(
             [
-                InlineKeyboardButton("🔄 היפוך כיוון", callback_data=f"d:y{idx}f"),
+                InlineKeyboardButton("היפוך כיוון", callback_data=f"d:y{idx}f"),
                 _type_picker_btn("→ צירי", idx, "a", selected=cur == "axial"),
             ]
         )
@@ -561,21 +561,21 @@ def parse_draft_callback(data: str) -> DraftCallback | None:
 def edit_prompt(edit: dict[str, Any], extracted: dict) -> str:
     kind = edit.get("kind")
     if kind == "L":
-        return "✏️ אורך קורה L — הקלד מספר (למשל `13` או `L=13`)"
+        return "אורך קורה L — הקלד מספר (למשל `13` או `L=13`)"
     if kind == "support":
         idx = int(edit.get("index", 1)) - 1
         supports = (extracted.get("beam") or {}).get("supports") or []
         label = supports[idx].get("label", "?") if 0 <= idx < len(supports) else "?"
-        return f"✏️ סמך {label} — הקלד x חדש"
+        return f"סמך {label} — הקלד x חדש"
     if kind == "load_dir":
         idx = int(edit.get("index", 1))
-        return f"✏️ כיוון עומס {idx}"
+        return f"כיוון עומס {idx}"
     if kind == "load":
         idx = int(edit.get("index", 1))
-        return f"✏️ עומס {idx} — הקלד תיקון"
+        return f"עומס {idx} — הקלד תיקון"
     if kind == "load_mag":
         idx = int(edit.get("index", 1))
-        return f"✏️ עומס {idx} — הקלד גודל (מספר בלבד)"
+        return f"עומס {idx} — הקלד גודל (מספר בלבד)"
     if kind == "load_x":
         idx = int(edit.get("index", 1))
         beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
@@ -583,12 +583,12 @@ def edit_prompt(edit: dict[str, Any], extracted: dict) -> str:
         ld = loads[idx - 1] if isinstance(loads, list) and 0 <= idx - 1 < len(loads) else {}
         if isinstance(ld, dict) and str(ld.get("type", "")).lower() == "distributed":
             return (
-                f"✏️ עומס {idx} (מפורס) — הקלד טווח *התחלה-סוף* "
+                f"עומס {idx} (מפורס) — הקלד טווח *התחלה-סוף* "
                 f"(למשל `3-9` או `3,9`)\n"
                 f"מספר בודד = שינוי נקודת ההתחלה בלבד"
             )
-        return f"✏️ עומס {idx} — הקלד מיקום x (מספר בלבד)"
+        return f"עומס {idx} — הקלד מיקום x (מספר בלבד)"
     if kind == "load_angle":
         idx = int(edit.get("index", 1))
-        return f"✏️ עומס {idx} — הקלד זווית במעלות (מספר בלבד)"
-    return "✏️ הקלד ערך חדש"
+        return f"עומס {idx} — הקלד זווית במעלות (מספר בלבד)"
+    return "הקלד ערך חדש"

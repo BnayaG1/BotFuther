@@ -70,7 +70,7 @@ def get_topic(topic_id: str) -> FormulaTopic | None:
 
 def formulas_menu_intro_hebrew() -> str:
     return (
-        "📐 *נוסחאות*\n\n"
+        "*נוסחאות*\n\n"
         "בחר/י נושא — ואשלח את דף הנוסחאות הרלוונטי."
     )
 
@@ -86,15 +86,15 @@ def build_formulas_menu_keyboard() -> InlineKeyboardMarkup:
                 )
             ]
         )
-    rows.append([InlineKeyboardButton("◀️ חזרה לתפריט", callback_data="formula:back")])
+    rows.append([InlineKeyboardButton("חזרה לתפריט", callback_data="formula:back")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_topic_followup_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📐 נוסחאות נוספות", callback_data="formula:menu")],
-            [InlineKeyboardButton("◀️ חזרה לתפריט", callback_data="formula:back")],
+            [InlineKeyboardButton("נוסחאות נוספות", callback_data="formula:menu")],
+            [InlineKeyboardButton("חזרה לתפריט", callback_data="formula:back")],
         ]
     )
 
@@ -123,19 +123,19 @@ def parse_formula_callback(data: str) -> tuple[str, str] | None:
 
 def topic_pending_caption_hebrew(topic: FormulaTopic) -> str:
     return (
-        f"📐 *{topic.title}*\n\n"
+        f"*{topic.title}*\n\n"
         "התמונה לנושא הזה עדיין לא הועלתה.\n"
         "בקרוב — אחרי שיתווסף הקובץ לדף הנוסחאות."
     )
 
 
 def topic_image_caption_hebrew(topic: FormulaTopic) -> str:
-    return f"📐 {topic.title}"
+    return f"{topic.title}"
 
 
 def formulas_locked_reply_hebrew() -> str:
     return (
-        "🔒 *נוסחאות זמינות למנויי חבילה*\n\n"
+        "*נוסחאות זמינות למנויי חבילה*\n\n"
         "תקופת ה-24 השעות החינמיות הסתיימה.\n"
         "כדי להמשיך לפתוח את דפי הנוסחאות צריך להפעיל *קוד קופון* "
         "(אחרי רכישת חבילה).\n\n"
@@ -148,8 +148,8 @@ def formulas_locked_reply_hebrew() -> str:
 def build_formulas_locked_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🛒 רכישת חבילה", callback_data="buy:menu")],
-            [InlineKeyboardButton("🎟️ יש לי קוד", callback_data="buy:redeem")],
-            [InlineKeyboardButton("◀️ חזרה לתפריט", callback_data="formula:back")],
+            [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")],
+            [InlineKeyboardButton("יש לי קוד", callback_data="buy:redeem")],
+            [InlineKeyboardButton("חזרה לתפריט", callback_data="formula:back")],
         ]
     )

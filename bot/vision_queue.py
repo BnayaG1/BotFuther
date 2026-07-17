@@ -197,7 +197,7 @@ async def _run_vision_extract_inner(
         except Exception as solve_exc:
             log.warning("Solve after extract failed: %s", solve_exc)
             reply = format_vision_extract_only_reply(extracted)
-            reply += f"\n\n⚠️ לא הצלחתי לחשב ריאקציות: {solve_exc}"
+            reply += f"\n\nלא הצלחתי לחשב ריאקציות: {solve_exc}"
 
     vision_cache_put(cache_key, reply)
     log.info("Vision extract chat %s OK (async)", chat_id)
@@ -279,7 +279,7 @@ async def process_vision_job(
                 reply = (
                     f"לא הצלחתי לקרוא את התמונה.\n({friendly_gemini_error(exc)})\n\n"
                     "טיפים:\n"
-                    "• שלח כקובץ 📎 לאיכות טובה יותר\n"
+                    "• שלח כקובץ לאיכות טובה יותר\n"
                     "• ודא שכל המספרים, החצים והסמכים בתוך המסגרת\n"
                     "• נסה שוב בעוד דקה"
                 )

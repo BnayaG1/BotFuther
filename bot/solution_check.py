@@ -133,11 +133,11 @@ def format_student_feedback(
     tool_name = str(solved.get("tool_name", ""))
     correct_block = format_vision_results_only(tool_name, solved.get("result") or {})
     if not issues:
-        lines = ["✅ *נכון!* הריאקציות שכתבת תואמות לחישוב לפי השרטוט."]
+        lines = ["*נכון!* הריאקציות שכתבת תואמות לחישוב לפי השרטוט."]
         if correct_block:
             lines.extend(["", "*ערכים:*", correct_block])
         return "\n".join(lines)
-    lines = ["❌ *יש הבדלים בין התשובה שלך לחישוב:*"]
+    lines = ["*יש הבדלים בין התשובה שלך לחישוב:*"]
     for issue in issues:
         lines.append(f"• {issue}")
     if correct_block:

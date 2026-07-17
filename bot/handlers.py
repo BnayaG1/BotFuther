@@ -67,6 +67,11 @@ from bot.formulas import (
     topic_image_caption_hebrew,
     topic_pending_caption_hebrew,
 )
+from intro import (
+    build_opening_keyboard,
+    opening_message_hebrew,
+    parse_intro_callback,
+)
 from bot.draft_editor import (
     add_load_of_type,
     apply_field_edit,
@@ -148,7 +153,7 @@ from bot.vision_queue import (
 log = logging.getLogger("beam_telegram_bot")
 
 _TEXT_UNHANDLED = (
-    "שלח תמונה 📸 של תרגיל, או עדכן את הטיוטה הפעילה בכפתורים."
+    "שלח תמונה של תרגיל, או עדכן את הטיוטה הפעילה בכפתורים."
 )
 
 _IMAGE_DEDUP_SEC = 120.0
@@ -169,6 +174,7 @@ _PERSISTENT_QUOTA_LABEL = "מכסה"
 _PERSISTENT_COUPON_LABEL = "קופון"
 _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
+_START_INTRO_LABEL = "מבוא"
 _START_SEND_IMAGE_LABEL = "פתרון מלא"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
 _START_REDEEM_COUPON_LABEL = "הזנת קוד קופון"
@@ -260,7 +266,7 @@ async def _deliver_approved_solve(
                     await context.bot.send_photo(
                         chat_id=chat_id,
                         photo=photo,
-                        caption="📓 פתרון מחברת מלא",
+                        caption="פתרון מחברת מלא",
                     )
             except Exception as exc:
                 log.warning("Failed to send notebook chat=%s: %s", chat_id, exc)
@@ -338,6 +344,7 @@ def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(_START_INTRO_LABEL, callback_data="menu:intro")],
         [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
         [InlineKeyboardButton(_START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise")],
         [InlineKeyboardButton(_PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas")],
@@ -386,7 +393,7 @@ def _bug_report_admin_text(
     name = first_name or "—"
     body = (report_text or "").strip()
     return (
-        "🛠️ דיווח תקלה חדש\n"
+        "דיווח תקלה חדש\n"
         f"משתמש: {name} ({uname})\n"
         f"user_id: {user_id}\n"
         f"chat_id: {chat_id}\n"
@@ -435,7 +442,7 @@ async def _prompt_bug_report(message) -> None:
     chat_id = int(message.chat_id)
     _bug_report_prompt_chats.add(chat_id)
     await message.reply_text(
-        "🛠️ *דיווח על תקלה*\n\n"
+        "*דיווח על תקלה*\n\n"
         "כתוב/י כאן במילים שלך מה קרה (או מה לא עובד).\n"
         "אחרי השליחה הדיווח יועבר אוטומטית לצוות.\n\n"
         "אפשר לבטל עם «ביטול דיווח».",
@@ -444,7 +451,7 @@ async def _prompt_bug_report(message) -> None:
     )
     try:
         await message.reply_text(
-            "כאן אפשר לרשום את פרטי התקלה 👇",
+            "כאן אפשר לרשום את פרטי התקלה:",
             reply_markup=_BUG_REPORT_FORCE_REPLY,
         )
     except BadRequest:
@@ -656,6 +663,18 @@ async def _send_main_action_menu(
     )
 
 
+async def _send_intro_opening(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    """שולח את הודעת הפתיחה של מבוא לסטטיקה + כפתור המשך."""
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=opening_message_hebrew(),
+        reply_markup=build_opening_keyboard(),
+    )
+
+
 async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -789,6 +808,12 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             chat_id,
             user_id=telegram_user_id(update),
         )
+        return
+    if action == "intro":
+        await query.answer()
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        await _send_intro_opening(context, chat_id)
         return
     if action == "give_exercise":
         if count_exercises() <= 0:
@@ -946,6 +971,21 @@ async def on_assistant_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    action = parse_intro_callback(query.data)
+    if action is None:
+        await query.answer()
+        return
+    if action == "continue":
+        # תוכן השלב הבא יתווסף בהמשך.
+        await query.answer()
+        return
+    await query.answer()
+
+
 async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -1023,7 +1063,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = telegram_chat_id(update)
     reset_user_session(chat_id)
     await update.message.reply_text(
-        "המצב אופס. שלח/י תמונה חדשה 📸 של התרגיל.",
+        "המצב אופס. שלח/י תמונה חדשה של התרגיל.",
         reply_markup=build_persistent_keyboard(),
     )
 
@@ -1196,7 +1236,7 @@ async def _apply_pending_edit(
                 extracted,
                 edit=edit,
             )
-        await _send_text_safe(context, chat_id, f"⚠️ {errors[0]}")
+        await _send_text_safe(context, chat_id, f"{errors[0]}")
         return True
 
     await _dismiss_edit_prompt(context, chat_id)
@@ -1541,7 +1581,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         if sent:
             await update.message.reply_text(
-                "✅ תודה! הדיווח נשלח לצוות. נטפל בזה בהקדם.",
+                "תודה! הדיווח נשלח לצוות. נטפל בזה בהקדם.",
                 reply_markup=build_persistent_keyboard(),
             )
         else:
@@ -1632,7 +1672,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             except BadRequest as exc:
                 log.warning("Draft message edit failed: %s", exc)
             if draft_result.errors:
-                await _send_text_safe(context, chat_id, f"⚠️ {draft_result.errors[0]}")
+                await _send_text_safe(context, chat_id, f"{draft_result.errors[0]}")
         return
 
     await _reply_text_safe(
@@ -1677,7 +1717,7 @@ async def reply_from_vision_extract(
             reply = (
                 f"לא הצלחתי לקרוא את התמונה.\n({friendly_gemini_error(exc)})\n\n"
                 "טיפים:\n"
-                "• שלח כקובץ 📎 לאיכות טובה יותר\n"
+                "• שלח כקובץ לאיכות טובה יותר\n"
                 "• ודא שכל המספרים, החצים והסמכים בתוך המסגרת"
             )
     finally:
@@ -1749,7 +1789,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if isinstance(reply_markup, InlineKeyboardMarkup):
                 await _reply_text_safe(
                     update.message,
-                    "התפריט למטה זמין תמיד 👇",
+                    "התפריט למטה זמין תמיד",
                 )
             return
         log.info(

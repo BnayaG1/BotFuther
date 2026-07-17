@@ -38,6 +38,13 @@ _UNAUTHORIZED_TEXT = "גישה נדחתה."
 
 
 def _welcome_text() -> str:
+    if len(PACKAGE_CATALOG) == 1:
+        pkg = PACKAGE_CATALOG[0]
+        period = _period_label(pkg.period_days)
+        return (
+            "ניהול קופונים\n"
+            f"חבילה יחידה: ₪{pkg.price_ils} · {pkg.daily_quota}/יום · {period}"
+        )
     return "ניהול קופונים"
 
 

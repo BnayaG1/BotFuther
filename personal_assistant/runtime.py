@@ -139,7 +139,7 @@ def has_active_assistant_progress(chat_id: int) -> bool:
 
 
 def build_back_button() -> InlineKeyboardButton:
-    return InlineKeyboardButton("🔙 חזרה", callback_data="assist:back")
+    return InlineKeyboardButton("חזרה", callback_data="assist:back")
 
 
 def _build_spacer_button() -> InlineKeyboardButton:

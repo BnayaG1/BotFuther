@@ -439,11 +439,11 @@ def ping_reply_hebrew() -> str:
 
     if COUPON_ACCESS_ENABLED:
         return (
-            "✅ הבוט פעיל.\n"
-            "שלח/י תמונה 📸 של תרגיל — בלי קופון יש המתנה בין תמונות.\n"
+            "הבוט פעיל.\n"
+            "שלח/י תמונה של תרגיל — בלי קופון יש המתנה בין תמונות.\n"
             "לבדיקת מכסה: /quota"
         )
-    return "✅ הבוט פעיל."
+    return "הבוט פעיל."
 
 
 def insert_coupon_codes(
@@ -1047,24 +1047,24 @@ def redeem_reply_hebrew(result: RedeemResult) -> str:
     period_label = _period_label_hebrew(period_days) if period_days else ""
     if result.status == RedeemStatus.BANK_UNLOCK_OK:
         return (
-            "✅ הקוד הופעל.\n"
+            "הקוד הופעל.\n"
             "מאגר התרגילים פתוח לך בלי הגבלת זמן בין תרגילים."
         )
     if result.status == RedeemStatus.OK:
         period_timer = ""
         if result.period_expires_at is not None:
             left = max(0.0, float(result.period_expires_at) - time.time())
-            period_timer = f"\n⏳ המנוי פעיל לעוד *{_format_duration_hebrew(left)}* ({period_label})."
+            period_timer = f"\nהמנוי פעיל לעוד *{_format_duration_hebrew(left)}* ({period_label})."
         if tier == VIP_UNLIMITED_DAILY_QUOTA:
             return (
-                f"✅ הקופון הופעל.\n"
+                f"הקופון הופעל.\n"
                 f"גישה חופשית לתמונות (בלי מגבלת מכסה/המתנה) למשך {period_label}."
                 f"{period_timer}\n"
                 "מאגר התרגילים פתוח לך בלי הגבלת זמן בין תרגילים.\n"
                 "שלח/י עכשיו תמונה של התרגיל."
             )
         return (
-            f"✅ הקופון הופעל.\n"
+            f"הקופון הופעל.\n"
             f"מכסה: עד {tier} תמונות ביום (חלון 24 שעות).{period_timer}\n"
             "שלח/י עכשיו תמונה של התרגיל."
         )
@@ -1097,13 +1097,13 @@ def image_access_reply_hebrew(result: ImageAccessResult) -> str:
         )
     if result.status == ImageAccessStatus.ACCESS_EXPIRED:
         return (
-            "⏱️ תקופת המנוי שלך הסתיימה.\n"
+            "תקופת המנוי שלך הסתיימה.\n"
             "כדי להמשיך — הפעיל/י קוד קופון חדש או רכש/י חבילה (/coupon)."
         )
     if result.status == ImageAccessStatus.NO_ENTITLEMENT:
         return (
             "כדי לפענח תמונה צריך קוד קופון פעיל.\n"
-            "לחץ/י «🎟️ הזן קוד קופון» בתפריט (/start) או שלח/י /coupon."
+            "לחץ/י «הזנת קוד קופון» בתפריט (/start) או שלח/י /coupon."
         )
     if result.status == ImageAccessStatus.COOLDOWN:
         secs = result.cooldown_remaining_sec or 0.0
@@ -1137,7 +1137,7 @@ def image_access_reply_hebrew(result: ImageAccessResult) -> str:
 
 def coupon_prompt_text_hebrew() -> str:
     return (
-        "🎟️ *הזנת קוד קופון*\n\n"
+        "*הזנת קוד קופון*\n\n"
         "שלח/י את הקוד בטקסט (8–16 תווים, אותיות ומספרים בלבד).\n"
         "כל קוד כולל מכסה יומית ותקופת מנוי (חודש או 3.5 חודשים).\n"
         "לאחר הפעלה תוכל/י לשלוח תמונות לפי המכסה.\n\n"
@@ -1149,7 +1149,7 @@ def _period_timer_line(result: ImageAccessResult) -> str:
     if result.period_expires_sec is None or result.period_expires_sec <= 0:
         return ""
     return (
-        f"⏳ המנוי פעיל לעוד {_format_duration_hebrew(result.period_expires_sec)}."
+        f"המנוי פעיל לעוד {_format_duration_hebrew(result.period_expires_sec)}."
     )
 
 
@@ -1157,7 +1157,7 @@ def quota_status_reply_hebrew(result: ImageAccessResult) -> str:
     hours = int(IMAGE_QUOTA_WINDOW_SEC // 3600)
     if result.status == ImageAccessStatus.ACCESS_EXPIRED:
         return (
-            "⏱️ תקופת המנוי הסתיימה.\n"
+            "תקופת המנוי הסתיימה.\n"
             "הפעיל/י קוד קופון חדש או רכש/י חבילה — /coupon"
         )
     if result.status == ImageAccessStatus.TRIAL_EXHAUSTED:
@@ -1171,20 +1171,20 @@ def quota_status_reply_hebrew(result: ImageAccessResult) -> str:
             secs = result.cooldown_remaining_sec or 0.0
             left = max(1, int((secs + 59) // 60))
             return (
-                f"📷 גישה חופשית לתמונות (בלי מכסה יומית).\n"
+                f"גישה חופשית לתמונות (בלי מכסה יומית).\n"
                 f"המתנה בין תמונות: {guest_mins} דקות.\n"
                 f"אפשר לשלוח תמונה נוספת בעוד כ-{left} דקות.\n"
                 "למכסה מהירה יותר — הפעיל/י קוד קופון: /coupon"
             )
         return (
-            f"📷 גישה חופשית לתמונות (בלי מכסה יומית).\n"
+            f"גישה חופשית לתמונות (בלי מכסה יומית).\n"
             f"המתנה בין תמונות: {guest_mins} דקות.\n"
             f"נשלחו עד כה {result.images_used} תמונות.\n"
             "למכסה מהירה יותר — הפעיל/י קוד קופון: /coupon"
         )
     if result.status == ImageAccessStatus.NO_ENTITLEMENT:
         return (
-            "📷 גישה חופשית לתמונות (בלי מכסה יומית).\n"
+            "גישה חופשית לתמונות (בלי מכסה יומית).\n"
             "שלח/י תמונה של תרגיל כדי להתחיל."
         )
     if result.status == ImageAccessStatus.QUOTA_EXCEEDED:
@@ -1202,7 +1202,7 @@ def quota_status_reply_hebrew(result: ImageAccessResult) -> str:
         lines.append("אפשר לשדרג עם קוד קופון נוסף — /coupon")
         return "\n".join(lines)
     lines = [
-        f"✅ מנוי פעיל — נותרו {result.images_remaining} מתוך {result.tier_limit} "
+        f"מנוי פעיל — נותרו {result.images_remaining} מתוך {result.tier_limit} "
         f"תמונות היום (חלון {hours} שעות).",
     ]
     period_line = _period_timer_line(result)

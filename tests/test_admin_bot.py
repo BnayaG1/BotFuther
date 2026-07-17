@@ -45,6 +45,10 @@ def test_admin_menu_keyboard_shows_payment_amounts():
     for pkg in PACKAGE_CATALOG:
         assert _admin_menu_button_label(pkg) in labels
     assert "₪150" in labels
+    # חבילה יחידה בלבד — בלי מחירים ישנים בתפריט
+    price_labels = [lbl for lbl in labels if lbl.startswith("₪")]
+    assert price_labels == ["₪150"]
+    assert "תפריט" in labels
 
 
 @pytest.mark.anyio

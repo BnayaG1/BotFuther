@@ -533,7 +533,8 @@ async def test_assistant_yes_on_ax_when_no_horizontal_loads_shows_ax_zero_messag
     body = send_text.await_args.args[2]
     assert "אין כוחות על ציר הx" in body
     assert "Ax = 0" in body
-    assert "⬆️" in body
+    assert "Ax = 0" in body
+    assert "⬆️" not in body
 
 
 @pytest.mark.anyio

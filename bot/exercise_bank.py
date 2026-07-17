@@ -413,7 +413,7 @@ async def deliver_exercise_bank_after_approve(
         await send_text(
             context,
             chat_id,
-            f"ℹ️ תרגיל עם הנתונים האלה כבר קיים במאגר (מספר #{duplicate_id}) — לא נוסף בשנית.",
+            f"תרגיל עם הנתונים האלה כבר קיים במאגר (מספר #{duplicate_id}) — לא נוסף בשנית.",
         )
         return
 
@@ -444,5 +444,5 @@ async def deliver_exercise_bank_after_approve(
     await send_text(
         context,
         chat_id,
-        f"✅ התרגיל נוסף למאגר התרגילים (מספר #{exercise_id}).",
+        f"התרגיל נוסף למאגר התרגילים (מספר #{exercise_id}).",
     )

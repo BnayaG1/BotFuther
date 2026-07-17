@@ -126,7 +126,7 @@ def test_reactions_keyboard_layout_simply_supported():
     rows = kb.inline_keyboard
     assert [[b.text for b in row] for row in rows] == [
         ["Ax", "המשך"],
-        ["Ay", "🔙 חזרה"],
+        ["Ay", "חזרה"],
         ["By", " "],
     ]
     assert [b.callback_data for b in rows[0]] == [
@@ -149,7 +149,7 @@ def test_reactions_keyboard_layout_cantilever():
     rows = kb.inline_keyboard
     assert [[b.text for b in row] for row in rows] == [
         ["Ax", "המשך"],
-        ["Ma", "🔙 חזרה"],
+        ["Ma", "חזרה"],
         ["Ay", " "],
     ]
     assert [b.callback_data for b in rows[0]] == [
@@ -198,7 +198,7 @@ async def test_handle_goto_jumps_to_chosen_reaction():
     kb = send_text.await_args.kwargs["reply_markup"]
     assert [[b.text for b in row] for row in kb.inline_keyboard] == [
         ["Ax", "המשך"],
-        ["Ay", "🔙 חזרה"],
+        ["Ay", "חזרה"],
         ["By", " "],
     ]
     runtime.clear_personal_assistant_progress(chat_id)
@@ -288,7 +288,7 @@ def test_advance_decomp_flow_to_reactions():
     kb = runtime.keyboard_for_progress(progress)
     assert [b.text for row in kb.inline_keyboard for b in row] == [
         "לעומס הבא",
-        "🔙 חזרה",
+        "חזרה",
     ]
 
     progress = runtime.advance_on_next(progress)
@@ -299,7 +299,7 @@ def test_advance_decomp_flow_to_reactions():
     kb = runtime.keyboard_for_progress(progress)
     assert [b.text for row in kb.inline_keyboard for b in row] == [
         "לשלב הריאקציות",
-        "🔙 חזרה",
+        "חזרה",
     ]
 
     progress = runtime.advance_on_next(progress)
@@ -329,7 +329,7 @@ def test_empty_decomposition_next_enters_reactions():
     kb = runtime.keyboard_for_progress(progress)
     assert [b.text for row in kb.inline_keyboard for b in row] == [
         "לשלב הריאקציות",
-        "🔙 חזרה",
+        "חזרה",
     ]
     progress = runtime.advance_on_next(progress)
     assert isinstance(progress, ReactionProgress)
@@ -358,7 +358,7 @@ async def test_handle_next_advances_to_next_load():
     kb = send_text.await_args.kwargs["reply_markup"]
     assert [b.text for row in kb.inline_keyboard for b in row] == [
         "לשלב הריאקציות",
-        "🔙 חזרה",
+        "חזרה",
     ]
 
 

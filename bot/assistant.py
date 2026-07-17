@@ -300,9 +300,9 @@ def solve_mode_picker_intro_hebrew() -> str:
 def build_solve_mode_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📓 פתרון מחברת", callback_data="menu:mode:notebook")],
-            [InlineKeyboardButton("🧑‍🏫 עוזר אישי", callback_data="menu:mode:assistant")],
-            [InlineKeyboardButton("◀️ חזרה", callback_data="formula:back")],
+            [InlineKeyboardButton("פתרון מחברת", callback_data="menu:mode:notebook")],
+            [InlineKeyboardButton("עוזר אישי", callback_data="menu:mode:assistant")],
+            [InlineKeyboardButton("חזרה", callback_data="formula:back")],
         ]
     )
 
@@ -311,8 +311,8 @@ def build_bank_solve_mode_keyboard() -> InlineKeyboardMarkup:
     """בחירת מצב פתרון לתרגיל שנשלף מהמאגר (בלי כפתור חזרה — אין טיוטה קודמת)."""
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📓 פתרון מחברת", callback_data="menu:bank:notebook")],
-            [InlineKeyboardButton("🧑‍🏫 עוזר אישי", callback_data="menu:bank:assistant")],
+            [InlineKeyboardButton("פתרון מחברת", callback_data="menu:bank:notebook")],
+            [InlineKeyboardButton("עוזר אישי", callback_data="menu:bank:assistant")],
         ]
     )
 
@@ -325,7 +325,7 @@ def build_assistant_step_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if include_prev:
-        rows.append([InlineKeyboardButton("↩️", callback_data="assist:prev")])
+        rows.append([InlineKeyboardButton("חזרה", callback_data="assist:prev")])
     if include_explain:
         rows.append([InlineKeyboardButton("הסבר לי", callback_data="assist:explain")])
     if include_show_solution:
@@ -388,7 +388,7 @@ def build_reactions_step_keyboard(
 
     rows: list[list[InlineKeyboardButton]] = []
     if include_prev:
-        rows.append([InlineKeyboardButton("↩️", callback_data="assist:prev")])
+        rows.append([InlineKeyboardButton("חזרה", callback_data="assist:prev")])
     for i in range(3):
         row = [left[i]]
         if i < len(right):
@@ -451,7 +451,7 @@ def solve_mode_prompt_hebrew(mode: SolveMode) -> str:
             "אזהה את הנתונים ותוכל/י לתקן אותם לפני השמירה."
         )
     return (
-        "מעולה — שלח/י עכשיו תמונה 📸 של התרגיל.\n"
+        "מעולה — שלח/י עכשיו תמונה של התרגיל.\n"
         "אחזיר פתרון מחברת מלא."
     )
 
@@ -721,7 +721,7 @@ def build_ax_equation_message_hebrew(extracted: dict) -> str:
             "בתרגיל שלנו אין כוחות על ציר הx שהולכים ימינה או שמאלה, ולכן המשוואה תיהיה:\n"
             "Ax = 0\n"
             "ומכיוון שלא היו עומסים זאת תיהיה גם בתוצאה:\n"
-            "⬆️ Ax = 0"
+            "Ax = 0"
         )
     # build final equation (no ΣFx)
     pieces = ["Ax"]

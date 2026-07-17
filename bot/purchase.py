@@ -59,7 +59,7 @@ def get_package(package_id: str) -> PackageOption | None:
 
 def purchase_menu_intro_hebrew() -> str:
     return (
-        "🛒 *רכישת חבילה*\n\n"
+        "*רכישת חבילה*\n\n"
         "בחר/י את החבילה המתאימה.\n"
         "אחרי אישור תקבל/י הוראות תשלום בביט — "
         "לאחר האישור שלנו יישלח אליך קוד קופון.\n\n"
@@ -79,7 +79,7 @@ def build_purchase_menu_keyboard() -> InlineKeyboardMarkup:
             ]
         )
     rows.append(
-        [InlineKeyboardButton("🎟️ יש לי קוד", callback_data="buy:redeem")]
+        [InlineKeyboardButton("יש לי קוד", callback_data="buy:redeem")]
     )
     rows.append([InlineKeyboardButton("ביטול", callback_data="buy:cancel")])
     return InlineKeyboardMarkup(rows)
@@ -90,12 +90,12 @@ def build_package_confirm_keyboard(package_id: str) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    "✅ אישור והמשך לתשלום",
+                    "אישור והמשך לתשלום",
                     callback_data=f"buy:confirm:{package_id}",
                 )
             ],
             [
-                InlineKeyboardButton("◀️ חזרה", callback_data="buy:menu"),
+                InlineKeyboardButton("חזרה", callback_data="buy:menu"),
                 InlineKeyboardButton("ביטול", callback_data="buy:cancel"),
             ],
         ]
@@ -104,7 +104,7 @@ def build_package_confirm_keyboard(package_id: str) -> InlineKeyboardMarkup:
 
 def package_confirm_text_hebrew(pkg: PackageOption) -> str:
     return (
-        "📋 *סיכום החבילה*\n\n"
+        "*סיכום החבילה*\n\n"
         f"{pkg.summary_hebrew()}\n\n"
         "לאשר ולקבל פרטי תשלום בביט?"
     )
@@ -112,7 +112,7 @@ def package_confirm_text_hebrew(pkg: PackageOption) -> str:
 
 def payment_instructions_hebrew(pkg: PackageOption) -> str:
     return (
-        "✅ *הבקשה נקלטה*\n\n"
+        "*הבקשה נקלטה*\n\n"
         f"{pkg.summary_hebrew()}\n\n"
         "*לתשלום בביט:*\n"
         f"העבר/י *₪{pkg.price_ils}* לטלפון:\n"
@@ -129,7 +129,7 @@ def build_payment_keyboard() -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    "📱 שלח אישור תשלום בוואטסאפ",
+                    "שלח אישור תשלום בוואטסאפ",
                     url=PAYMENT_CONFIRM_WHATSAPP_URL,
                 )
             ]
@@ -148,7 +148,7 @@ def admin_purchase_notification_hebrew(
     uname = f"@{username}" if username else "—"
     name = first_name or "—"
     return (
-        f"🛒 בקשת רכישה #{request_id}\n"
+        f"בקשת רכישה #{request_id}\n"
         f"משתמש: {name} ({uname})\n"
         f"user_id: {user_id}\n"
         f"חבילה: {pkg.label_hebrew()}\n"

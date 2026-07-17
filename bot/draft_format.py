@@ -299,7 +299,7 @@ def extracted_to_draft_text(extracted: dict) -> str:
     """ממיר חילוץ לטקסט שניתן לערוך."""
     beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
     lines = [
-        "📋 *טיוטה — בדוק וערוך:*",
+        "*טיוטה — בדוק וערוך:*",
         "",
         f"L={_fmt_num(float(beam.get('L', 0)))}",
         "",

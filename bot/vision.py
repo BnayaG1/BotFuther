@@ -1583,7 +1583,7 @@ def extract_exercise_with_retries(
         if last_error is not None:
             raise last_error
         raise ValueError(
-            "חילוץ מהיר לא הצליח — שלח שוב כקובץ (📎 Document) או כבה VISION_FAST_MODE."
+            "חילוץ מהיר לא הצליח — שלח שוב כקובץ (Document) או כבה VISION_FAST_MODE."
         )
 
     # 2) Accuracy path: staged extraction (up to 5 calls) under remaining time budget.
@@ -1752,7 +1752,7 @@ def extract_exercise_with_retries(
                     validation_issues=validation_issues,
                 )
             raise ValueError(
-                "חילוץ לא מלא — שלח שוב כקובץ (📎 Document) או נסה בעוד דקה.\n"
+                "חילוץ לא מלא — שלח שוב כקובץ (Document) או נסה בעוד דקה.\n"
                 + "; ".join(validation_issues[:5])
             )
         log.warning("Returning best partial extraction after validation failures")
@@ -4719,7 +4719,7 @@ def format_beam_load_he(item: dict) -> str:
         )
     if t == "moment":
         m_val = float(item.get("M", item.get("m", 0.0)))
-        sense = " ↻" if m_val > 0 else " ↺" if m_val < 0 else ""
+        sense = " (עם שעון)" if m_val > 0 else " (נגד שעון)" if m_val < 0 else ""
         return (
             f"מומנט{sense} {_fmt_m(abs(m_val))} טון·מ "
             f"ב-x={_fmt_m(item.get('x'))} m"
@@ -4728,7 +4728,7 @@ def format_beam_load_he(item: dict) -> str:
         fx = float(item.get("Fx", item.get("fx", 0.0)))
         fy = float(item.get("Fy", item.get("fy", 0.0)))
         mag = math.hypot(fx, fy)
-        side = "↙" if fx < 0 else "↘"
+        side = "dl" if fx < 0 else "dr"
         return (
             f"עומס אלכסוני {_fmt_m(mag)} טון {side} ב-x={_fmt_m(item.get('x'))} m "
             f"(Fx={_fmt_m(fx)}, Fy={_fmt_m(fy)} טון)"
@@ -4874,15 +4874,15 @@ def _format_numbered_load_line(idx: int, ld: dict) -> str:
     if t == "moment":
         m_val = _safe_load_float(ld.get("M", ld.get("m", 0.0)))
         x = _fmt_m(ld.get("x"))
-        # Website convention: ↻ (clockwise) positive, ↺ negative.
-        sense = " (↻)" if m_val > 0 else " (↺)" if m_val < 0 else ""
+        # Website convention: clockwise positive, counter-clockwise negative.
+        sense = " (עם שעון)" if m_val > 0 else " (נגד שעון)" if m_val < 0 else ""
         return f"עומס {idx}, מומנט{sense}: {_fmt_ton(abs(m_val))} טון·מ, x={x}."
     if t == "inclined":
         fx = _safe_load_float(ld.get("Fx", ld.get("fx", 0.0)))
         fy = _safe_load_float(ld.get("Fy", ld.get("fy", 0.0)))
         mag = math.hypot(fx, fy)
         x = _fmt_m(ld.get("x"))
-        side = "↙" if fx < 0 else "↘"
+        side = "dl" if fx < 0 else "dr"
         angle = ld.get("angle_deg")
         if angle is not None:
             return (
@@ -4973,17 +4973,16 @@ def format_identified_structure_block(extracted: dict) -> str:
     if exercise_type == "cog":
         cog_data = extracted.get("cog") if isinstance(extracted.get("cog"), dict) else {}
         shapes = cog_data.get("shapes") or []
-        lines.append("📐 סוג מבנה: חישוב מרכז כובד")
-        lines.append(f"🔷 חתכים: {len(shapes)}")
+        lines.append("סוג מבנה: חישוב מרכז כובד")
+        lines.append(f"חתכים: {len(shapes)}")
         return "\n".join(lines)
 
     beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
-    lines.append(f"📐 סוג מבנה: {_structure_type_he(beam)}")
-    lines.append(f"📏 אורך קורה: {_fmt_m(beam.get('L', '?'))} מטר")
+    lines.append(f"סוג מבנה: {_structure_type_he(beam)}")
+    lines.append(f"אורך קורה: {_fmt_m(beam.get('L', '?'))} מטר")
 
     for sup_line in _support_display_lines(beam):
-        icon = "🔩" if "קבוע" in sup_line else "⚙️" if "נייד" in sup_line else "🧱"
-        lines.append(f"{icon} {sup_line}")
+        lines.append(sup_line)
 
     hinges = beam.get("internal_hinges") or []
     if isinstance(hinges, list) and hinges:
@@ -4996,19 +4995,19 @@ def format_identified_structure_block(extracted: dict) -> str:
             hx = _fmt_m(h.get("x"))
             hinge_parts.append(f"{lbl + ' ' if lbl else ''}x={hx}")
         if hinge_parts:
-            lines.append(f"🔗 פרקים: {', '.join(hinge_parts)}")
+            lines.append(f"פרקים: {', '.join(hinge_parts)}")
 
     sorted_loads = _sorted_beam_loads(beam)
     if not sorted_loads:
-        lines.append("⚖️ עומסים: לא זוהו")
+        lines.append("עומסים: לא זוהו")
     else:
         for idx, ld in enumerate(sorted_loads, 1):
             line = _format_numbered_load_line(idx, ld)
-            lines.append(f"⚖️ {line}")
+            lines.append(line)
 
     st = str(beam.get("structure_type", "")).lower()
     if st == "truss":
-        lines.append("ℹ️ מסבך — ייתכן שנדרש ניתוח ייעודי")
+        lines.append("מסבך — ייתכן שנדרש ניתוח ייעודי")
 
     return "\n".join(lines)
 
@@ -5130,7 +5129,7 @@ def solve_from_vision_data(data: dict) -> dict:
 
 
 def summarize_vision_extraction(data: dict) -> str:
-    lines: list[str] = ["📐 מה שחילצתי מהתרגיל:"]
+    lines: list[str] = ["מה שחילצתי מהתרגיל:"]
     focus = data.get("image_focus")
     if isinstance(focus, dict):
         region = str(focus.get("exercise_region", "")).strip()
@@ -5480,7 +5479,7 @@ def format_vision_extract_only_reply(extracted: dict) -> str:
     questions = collect_extraction_uncertainties(extracted)
     if not questions:
         return block
-    lines = [block, "", "❓ *לא היה לי ברור — אשמח להבהרה:*"]
+    lines = [block, "", "*לא היה לי ברור — אשמח להבהרה:*"]
     for idx, question in enumerate(questions[:6], 1):
         lines.append(f"{idx}. {question}")
     lines.append("")

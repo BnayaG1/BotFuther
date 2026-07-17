@@ -111,7 +111,7 @@ RETRY_BASE_DELAY_SEC = _env_float("GEMINI_RETRY_BASE_DELAY_SEC", 1.5)
 
 IMAGE_ONLY_TEXT_REPLY = (
     "אני עובד רק מתמונות של תרגילים.\n"
-    "שלח/י תמונה 📸 של הקורה והעומסים — ואחזיר לך פתרון מלא.\n"
+    "שלח/י תמונה של הקורה והעומסים — ואחזיר לך פתרון מלא.\n"
     "לבדיקת מכסה: /quota"
 )
 
@@ -147,7 +147,7 @@ VISION_TOTAL_BUDGET_SEC = _env_float("VISION_TOTAL_BUDGET_SEC", 120.0)
 
 # עיבוד תמונה ברקע — תשובה מיידית "מעבד..." ואז שליחת תוצאה.
 VISION_ASYNC_ENABLED = _env_bool("VISION_ASYNC_ENABLED", True)
-VISION_ASYNC_ACK_TEXT = "⏳"
+VISION_ASYNC_ACK_TEXT = "מעבד..."
 
 # מגבלות כדי לשמור על התקציב.
 VISION_MAX_MODELS_PER_IMAGE = _env_int("VISION_MAX_MODELS_PER_IMAGE", 1)
@@ -303,7 +303,7 @@ IMAGE_QUOTA_WINDOW_SEC = float(IMAGE_QUOTA_WINDOW_HOURS * 3600)
 IMAGE_COOLDOWN_SEC = float(max(0, _env_int("IMAGE_COOLDOWN_SEC", 600)))
 # בלי קופון פעיל: שליחת תמונות בלי מכסה, עם המתנה ארוכה יותר בין תמונות.
 IMAGE_GUEST_COOLDOWN_SEC = float(max(0, _env_int("IMAGE_GUEST_COOLDOWN_SEC", 1200)))
-EXERCISE_BANK_COOLDOWN_SEC = float(max(0, _env_int("EXERCISE_BANK_COOLDOWN_SEC", 1200)))
+EXERCISE_BANK_COOLDOWN_SEC = float(max(0, _env_int("EXERCISE_BANK_COOLDOWN_SEC", 900)))
 FREE_TRIAL_IMAGES = max(0, _env_int("FREE_TRIAL_IMAGES", 2))
 
 # תשלום בביט לרכישת חבילה (החלף BIT_PHONE ב-.env)

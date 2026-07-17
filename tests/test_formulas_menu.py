@@ -94,7 +94,7 @@ async def test_formulas_locked_without_access():
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
-    assert "מנויי חבילה" in args[0] or "🔒" in args[0]
+    assert "מנויי חבילה" in args[0]
     assert "24" in args[0]
     kb = kwargs.get("reply_markup")
     assert isinstance(kb, InlineKeyboardMarkup)
@@ -157,7 +157,7 @@ def test_bot_commands_menu_includes_formulas():
 
 def test_formulas_locked_message_and_keyboard():
     text = formulas.formulas_locked_reply_hebrew()
-    assert "מנויי חבילה" in text or "🔒" in text
+    assert "מנויי חבילה" in text
     assert "24" in text
     kb = formulas.build_formulas_locked_keyboard()
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
