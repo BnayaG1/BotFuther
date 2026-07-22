@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from notebook_pdf_layout import CANTILEVER_BOT_LAYOUT, NotebookPdfLayout, assert_page2_fits
+from notebook.pdf_layout import CANTILEVER_BOT_LAYOUT, NotebookPdfLayout, assert_page2_fits
 
 
 def build_cantilever_page_html(

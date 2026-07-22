@@ -7,9 +7,9 @@ from dataclasses import replace
 import fitz
 import pytest
 
-import beam_notebook as bn
-import solver
-from notebook_pdf_layout import DEFAULT_BOT_LAYOUT, assert_page2_fits, estimate_page2_height_mm
+import notebook as bn
+import core.statics_calculator as solver
+from notebook.pdf_layout import DEFAULT_BOT_LAYOUT, assert_page2_fits, estimate_page2_height_mm
 
 
 def _reference_loads():

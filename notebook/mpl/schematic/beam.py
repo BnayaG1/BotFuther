@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-import solver
+import core.statics_calculator as solver
 
 from notebook.constants import _BEAM_MAIN_LW, _INK
 

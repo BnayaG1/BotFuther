@@ -5,7 +5,9 @@ __pycache__
 *.pyc
 .pytest_cache
 .git
+.cursor
 _bot_temp_images
 coupons.db
+exercises.db
 *.db-journal
 validator_images/failures

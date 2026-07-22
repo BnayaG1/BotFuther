@@ -121,7 +121,7 @@ def get_solve_mode(chat_id: int) -> SolveMode:
 
 def reset_user_session(chat_id: int) -> None:
     """איפוס מלא — /reset."""
-    from bot.vision import clear_vision_context
+    from bot.draft_session import clear_vision_context
 
     clear_vision_context(chat_id)
     _sessions.pop(chat_id, None)
@@ -156,7 +156,7 @@ def pop_assistant_message_ids(chat_id: int) -> list[int]:
 
 def begin_image_session(chat_id: int, *, solve_mode: SolveMode = SolveMode.NOTEBOOK) -> SolutionSession:
     """תמונה חדשה — מוחק תרגיל קודם, מתחיל session ריק."""
-    from bot.vision import clear_vision_context
+    from bot.draft_session import clear_vision_context
 
     clear_vision_context(chat_id)
     _assistant_progress.pop(int(chat_id), None)

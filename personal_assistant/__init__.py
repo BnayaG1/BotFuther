@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""עוזר אישי — תיקייה לכל שלב; bot.assistant הישן נשאר לייחוס."""
+"""עוזר אישי — תיקייה לכל שלב."""
 
 from personal_assistant.flow import (
     AssistantStepId,

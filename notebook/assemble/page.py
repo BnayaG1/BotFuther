@@ -5,8 +5,8 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-import solver
-from notebook_pdf_layout import DEFAULT_BOT_LAYOUT, NotebookPdfLayout, assert_page2_fits
+import core.statics_calculator as solver
+from notebook.pdf_layout import DEFAULT_BOT_LAYOUT, NotebookPdfLayout, assert_page2_fits
 
 
 def build_page_html(

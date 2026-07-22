@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from notebook_pdf_layout import DEFAULT_BOT_LAYOUT, panel_height_in, point_calc_top_gap_mm
+from notebook.pdf_layout import DEFAULT_BOT_LAYOUT, panel_height_in, point_calc_top_gap_mm
 
 # צבעי «דיו» כמו בתמונת הדוגמה
 _INK = "#1a1a1b"

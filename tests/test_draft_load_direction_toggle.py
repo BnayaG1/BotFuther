@@ -11,7 +11,7 @@ import bot.handlers as handlers
 from bot.draft_editor import toggle_any_load_direction
 from bot.draft_keyboard import draft_display_text
 from bot.solution_session import reset_user_session
-from bot.vision import get_draft_type_picker_idx, set_draft_pending
+from bot.draft_session import get_draft_type_picker_idx, set_draft_pending
 
 EXTRACTED = {
     "beam": {

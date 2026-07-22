@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
 
-import solver
+import core.statics_calculator as solver
 
 from notebook.constants import _BLUE, _GREEN, _PAPER, _RED, _U_FORCE, _U_MOMENT
 

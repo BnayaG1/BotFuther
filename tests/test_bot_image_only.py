@@ -8,7 +8,7 @@ import pytest
 from telegram import Chat, Message, Update, User
 
 from bot.config import IMAGE_ONLY_TEXT_REPLY
-from bot.handlers import build_start_keyboard, build_start_welcome_text, on_text
+from bot.handlers import INTRO_AVAILABLE, build_start_keyboard, build_start_welcome_text, on_text
 
 
 def test_welcome_text_is_image_only():
@@ -37,8 +37,13 @@ def test_start_keyboard_has_no_concept_button():
     assert any("קופון" in label for label in labels)
     assert not any("מושג" in label for label in labels)
     assert not any("דיווח" in label for label in labels)
-    assert not any("מבוא" in label for label in labels)
-    assert "menu:intro" not in callbacks
+    if INTRO_AVAILABLE:
+        assert any("מבוא" in label for label in labels)
+        assert "menu:intro" in callbacks
+        assert labels[0] == "מבוא"
+    else:
+        assert not any("מבוא" in label for label in labels)
+        assert "menu:intro" not in callbacks
 
 
 @pytest.mark.anyio

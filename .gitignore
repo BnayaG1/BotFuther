@@ -9,6 +9,7 @@ __pycache__/
 _bot_temp_images/
 *.lock
 coupons.db
+exercises.db
 coupons.backup*.db
 *.db-journal
 *.log

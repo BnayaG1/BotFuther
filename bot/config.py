@@ -21,9 +21,10 @@ def _is_cloud_runtime() -> bool:
 
 
 def _dotenv_candidates() -> tuple[Path, ...]:
-    paths = [APP_DIR / ".env", Path.cwd() / ".env"]
+    """Same search order as ``bot.env.load_env_files`` (project .env wins via override)."""
+    paths: list[Path] = [APP_DIR / ".env", Path.cwd() / ".env"]
     if not _is_cloud_runtime():
-        paths.append(APP_DIR.parent / ".env")
+        paths.insert(0, APP_DIR.parent / ".env")
     return tuple(paths)
 
 
@@ -281,8 +282,6 @@ COG_CATALOG_ALIASES: dict[str, str] = {
     "צינור": "צינור עגול",
     "צינור עגול": "צינור עגול",
 }
-
-TEMP_IMAGE_DIR = APP_DIR / "_bot_temp_images"
 
 COUPON_DB_PATH = Path(
     os.getenv("COUPON_DB_PATH", str(APP_DIR / "coupons.db"))

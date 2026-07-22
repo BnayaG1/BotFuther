@@ -26,12 +26,14 @@ python -m bot
 
 | תיקייה | תפקיד |
 |--------|--------|
-| `bot/` | לוגיקת הבוט, vision, טיוטה, handlers |
-| `core/` | ויזואליזציה ומנוע סטטיקה |
-| `solver.py` | חישובי קורה (מחברת) |
-| `beam_notebook.py` | רינדור PDF/PNG של פתרון מחברת |
+| `bot/` | טלגרם, vision, טיוטה, handlers, גישה/רכישה |
+| `core/` | מנוע סטטיקה, validation, מרכז כובד |
+| `notebook/` | רינדור PDF/PNG של פתרון מחברת |
+| `personal_assistant/` | מדריך פתרון שלב-אחר-שלב |
+| `assets/` | תמונות בנק תרגילים ונוסחאות |
 | `validator_images/` | regression ל-vision |
 | `tests/` | בדיקות |
+| `docs/` | הוראות Deploy (Railway) |
 
 ## בדיקות
 

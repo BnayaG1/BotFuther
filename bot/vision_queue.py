@@ -24,15 +24,17 @@ from bot.gemini_chat import friendly_gemini_error, gemini_runtime
 from bot.prompt_loader import build_vision_extra_instruction
 from bot.solution_check import format_solve_reply, solve_extracted_beam
 from bot.system_prompt import get_vision_learned_hint
+from bot.draft_session import (
+    set_draft_pending,
+    store_extracted_exercise,
+    store_vision_context,
+)
 from bot.vision import (
     _is_retryable_vision_error,
     extract_exercise_with_retries,
     finalize_beam_extraction,
     format_vision_extract_only_reply,
     package_extraction_response,
-    set_draft_pending,
-    store_extracted_exercise,
-    store_vision_context,
 )
 
 log = logging.getLogger("beam_telegram_bot")

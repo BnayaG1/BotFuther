@@ -6,14 +6,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram import CallbackQuery, Chat, InlineKeyboardMarkup, Message, Update, User
 
-import bot.assistant as assistant
 import bot.handlers as handlers
+import bot.solve_mode as solve_mode
 import bot.solution_session as solution_session
 from bot.solution_session import SolveMode
+from personal_assistant import runtime as pa_runtime
 
 
 def test_build_solve_mode_keyboard():
-    kb = assistant.build_solve_mode_keyboard()
+    kb = solve_mode.build_solve_mode_keyboard()
     assert isinstance(kb, InlineKeyboardMarkup)
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "menu:mode:notebook" in callbacks
@@ -21,17 +22,17 @@ def test_build_solve_mode_keyboard():
 
 
 def test_solve_mode_prompts_ask_for_image():
-    assert "תמונה" in assistant.solve_mode_prompt_hebrew(SolveMode.NOTEBOOK)
-    assert "תמונה" in assistant.solve_mode_prompt_hebrew(SolveMode.ASSISTANT)
-    assert "מחברת" in assistant.solve_mode_prompt_hebrew(SolveMode.NOTEBOOK)
-    assert "שלב-אחר-שלב" in assistant.solve_mode_prompt_hebrew(SolveMode.ASSISTANT)
+    assert "תמונה" in solve_mode.solve_mode_prompt_hebrew(SolveMode.NOTEBOOK)
+    assert "תמונה" in solve_mode.solve_mode_prompt_hebrew(SolveMode.ASSISTANT)
+    assert "מחברת" in solve_mode.solve_mode_prompt_hebrew(SolveMode.NOTEBOOK)
+    assert "שלב-אחר-שלב" in solve_mode.solve_mode_prompt_hebrew(SolveMode.ASSISTANT)
 
 
 def test_parse_menu_mode_action():
-    assert assistant.parse_menu_mode_action("mode:notebook") == SolveMode.NOTEBOOK
-    assert assistant.parse_menu_mode_action("mode:assistant") == SolveMode.ASSISTANT
-    assert assistant.parse_menu_mode_action("mode:unknown") is None
-    assert assistant.parse_menu_mode_action("new") is None
+    assert solve_mode.parse_menu_mode_action("mode:notebook") == SolveMode.NOTEBOOK
+    assert solve_mode.parse_menu_mode_action("mode:assistant") == SolveMode.ASSISTANT
+    assert solve_mode.parse_menu_mode_action("mode:unknown") is None
+    assert solve_mode.parse_menu_mode_action("new") is None
 
 
 @pytest.mark.anyio
@@ -184,18 +185,19 @@ async def test_deliver_after_draft_approve_notebook_uses_full_solve():
     edit_draft = AsyncMock()
     deliver_notebook = AsyncMock()
 
-    with patch.object(assistant, "is_assistant_mode", return_value=False):
-        await assistant.deliver_after_draft_approve(
-            context,
-            88005,
-            extracted={},
-            reply="ok",
-            solved={"result": {}},
-            draft_msg_id=10,
-            deliver_notebook=deliver_notebook,
-            send_text=send_text,
-            edit_draft_message=edit_draft,
-        )
+    with patch.object(pa_runtime, "is_assistant_mode", return_value=False):
+        with patch.object(pa_runtime, "is_add_to_bank_mode", return_value=False):
+            await pa_runtime.deliver_after_draft_approve(
+                context,
+                88005,
+                extracted={},
+                reply="ok",
+                solved={"result": {}},
+                draft_msg_id=10,
+                deliver_notebook=deliver_notebook,
+                send_text=send_text,
+                edit_draft_message=edit_draft,
+            )
 
     deliver_notebook.assert_awaited_once()
     send_text.assert_not_awaited()
@@ -208,11 +210,11 @@ async def test_deliver_after_draft_approve_assistant_skips_full_solve():
     edit_draft = AsyncMock()
     deliver_notebook = AsyncMock()
 
-    with patch.object(assistant, "is_assistant_mode", return_value=True):
+    with patch.object(pa_runtime, "is_assistant_mode", return_value=True):
         with patch.object(
-            assistant, "deliver_assistant_after_approve", new_callable=AsyncMock
+            pa_runtime, "deliver_assistant_after_approve", new_callable=AsyncMock
         ) as mock_assistant:
-            await assistant.deliver_after_draft_approve(
+            await pa_runtime.deliver_after_draft_approve(
                 context,
                 88006,
                 extracted={},
@@ -230,39 +232,43 @@ async def test_deliver_after_draft_approve_assistant_skips_full_solve():
 
 @pytest.mark.anyio
 async def test_assistant_after_approve_does_not_render_notebook():
+    chat_id = 88007
+    pa_runtime.clear_personal_assistant_progress(chat_id)
     context = MagicMock()
     context.bot.delete_message = AsyncMock()
     send_text = AsyncMock()
     edit_draft = AsyncMock()
 
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "support_mode": "simply_supported",
+            "supports": [
+                {"label": "A", "type": "pin", "x": 0.0},
+                {"label": "B", "type": "roller", "x": 10.0},
+            ],
+            "loads": [],
+        },
+    }
+
     with patch("bot.notebook_render.render_notebook_png_temp") as mock_render:
-        with patch.object(assistant, "present_assistant_step", new_callable=AsyncMock):
-            await assistant.deliver_assistant_after_approve(
-                context,
-                88007,
-                extracted={
-                    "exercise_type": "beam",
-                    "beam": {
-                        "L": 10.0,
-                        "support_mode": "simply_supported",
-                        "supports": [
-                            {"label": "A", "type": "pin", "x": 0.0},
-                            {"label": "B", "type": "roller", "x": 10.0},
-                        ],
-                        "loads": [],
-                    },
-                },
-                reply="ok",
-                solved={"result": {"reactions": []}},
-                draft_msg_id=12,
-                send_text=send_text,
-                edit_draft_message=edit_draft,
-            )
+        await pa_runtime.deliver_assistant_after_approve(
+            context,
+            chat_id,
+            extracted=extracted,
+            reply="ok",
+            solved={"result": {"reactions": []}},
+            draft_msg_id=12,
+            send_text=send_text,
+            edit_draft_message=edit_draft,
+        )
 
     mock_render.assert_not_called()
     send_text.assert_awaited()
     bodies = [call.args[2] for call in send_text.await_args_list]
-    assert any("בשלב הראשון" in b for b in bodies)
+    assert any("מדובר בתרגיל" in b or "איך תרצה להמשיך" in b for b in bodies)
     context.bot.delete_message.assert_awaited_once_with(
-        chat_id=88007, message_id=12
+        chat_id=chat_id, message_id=12
     )
+    pa_runtime.clear_personal_assistant_progress(chat_id)

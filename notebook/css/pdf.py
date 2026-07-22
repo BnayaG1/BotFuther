@@ -13,7 +13,7 @@ from notebook.constants import (
     _RED,
     _UI_FONT_CSS,
 )
-from notebook_pdf_layout import PAGE_BREAK_CSS
+from notebook.pdf_layout import PAGE_BREAK_CSS
 
 
 # PyMuPDF Story — CSS ייעודי (לא iframe!) כדי שלא יישאר max-height:297mm / overflow:hidden

@@ -20,13 +20,14 @@ from bot.draft_format import (
     set_support_x_user,
     sync_beam_distributed_loads,
 )
-from bot.vision import (
-    finalize_beam_extraction,
+from bot.draft_session import (
     get_stored_vision_extracted,
     is_draft_pending,
     set_draft_pending,
     store_vision_context,
 )
+from bot.vision import finalize_beam_extraction
+
 
 log = logging.getLogger("draft_editor")
 
@@ -845,7 +846,7 @@ def apply_user_edit(chat_id: int, text: str) -> tuple[dict, str, list[str]]:
 
 def persist_draft(chat_id: int, extracted: dict) -> None:
     """שומר טיוטה ושומר על message_id של ההודעה המקורית."""
-    from bot.vision import get_draft_message_ref
+    from bot.draft_session import get_draft_message_ref
 
     draft = extracted_to_draft_text(extracted)
     ref = get_draft_message_ref(chat_id)

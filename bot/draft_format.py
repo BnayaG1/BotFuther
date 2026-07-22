@@ -232,10 +232,23 @@ def _inclined_dir(ld: dict) -> str:
     return "dl" if fx < 0 else "dr"
 
 
+def _recompute_inclined_components(
+    magnitude_ton: float,
+    angle_deg: float = 30.0,
+    *,
+    incl_dir: str = "dr",
+) -> tuple[float, float]:
+    """Fx,Fy from magnitude+angle; incl_dir dl=↙ (Fx<0), dr=↘ (Fx>0)."""
+    rad = math.radians(angle_deg)
+    fx_mag = magnitude_ton * math.cos(rad)
+    fy_mag = magnitude_ton * math.sin(rad)
+    if str(incl_dir).lower() == "dl":
+        return -abs(fx_mag), abs(fy_mag)
+    return abs(fx_mag), abs(fy_mag)
+
+
 def _sync_inclined_components(ld: dict) -> dict:
     """מעדכן Fx/Fy לפי mag+angle+dir — כדי ש-finalize לא ידרוס זווית מעריכה."""
-    from bot.vision import _recompute_inclined_components
-
     out = dict(ld)
     mag = float(out.get("magnitude_ton", 0.0) or 0.0)
     if mag < 1e-6:

@@ -2,7 +2,7 @@
 """תצוגת דף מחברת — מבוסס על תרגיל פתור ידני (שרטוט + דיאגרמות + חישובים).
 
 BOT PATH (Telegram): build_page_html → _notebook_css_for_pdf → PyMuPDF Story → PNG
-  פריסת PDF: notebook_pdf_layout.DEFAULT_BOT_LAYOUT (לא iframe CSS / לא transform).
+  פריסת PDF: notebook.pdf_layout.DEFAULT_BOT_LAYOUT (לא iframe CSS / לא transform).
 
 IFRAME PATH (Streamlit תצוגה): _wrap_iframe_document → _NOTEBOOK_IFRAME_CSS (transform על גרפים).
 """
@@ -27,8 +27,8 @@ from matplotlib.patches import Arc, Polygon
 import numpy as np
 from matplotlib.lines import Line2D
 
-import solver
-from notebook_pdf_layout import (
+import core.statics_calculator as solver
+from notebook.pdf_layout import (
     DEFAULT_BOT_LAYOUT,
     PAGE_BREAK_CSS,
     NotebookPdfLayout,

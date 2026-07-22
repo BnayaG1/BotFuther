@@ -5,7 +5,7 @@ import html as html_lib
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-import solver
+import core.statics_calculator as solver
 
 from notebook.html.math_format import _clean_math_text, _join_calc_terms
 from notebook.html.primitives import _nb_step_html

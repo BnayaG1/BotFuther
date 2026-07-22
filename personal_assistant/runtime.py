@@ -40,7 +40,7 @@ from bot.solution_session import (
     get_solve_mode,
     pop_assistant_message_ids,
 )
-from bot.vision import set_draft_error_message_id
+from bot.draft_session import set_draft_error_message_id
 
 log = logging.getLogger("beam_telegram_bot")
 
@@ -179,13 +179,19 @@ def build_exercise_finished_keyboard() -> InlineKeyboardMarkup:
 
 
 def build_begin_decomposition_keyboard() -> InlineKeyboardMarkup:
-    """פתיחה כשיש עומסים לפרוק — בלי קיצור לריאקציות (רק אחרי סיום הפרוק)."""
+    """פתיחה כשיש עומסים לפרוק — פירוק, או דילוג ישירות לריאקציות."""
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
                     "נתחיל בפירוק העומסים",
                     callback_data="assist:begin_decomposition",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "מעבר לריאקציות",
+                    callback_data=f"assist:{_ASSISTANT_TO_REACTIONS}",
                 )
             ],
         ]
@@ -453,20 +459,12 @@ async def handle_assistant_action(
         return
 
     if action == _ASSISTANT_TO_REACTIONS:
-        # קיצור רק בפתיחה כשאין עומסים לפרוק («המשך לריאקציות»).
-        # כשיש עומסים — עוברים דרך «לשלב הריאקציות» אחרי סיום הפרוק.
+        # קיצור מפתיחה — בלי עומסים («המשך לריאקציות») או דילוג על פירוק («מעבר לריאקציות»).
         if not isinstance(progress, OpeningProgress):
             await send_text(
                 context,
                 chat_id,
                 "הפעולה הזו עדיין לא זמינה — השתמשו בכפתור שמתחת להודעה.",
-            )
-            return
-        if len(decomposition_load_entries(progress.extracted)) > 0:
-            await send_text(
-                context,
-                chat_id,
-                "קודם סיימו את פירוק העומסים — לחצו «נתחיל בפירוק העומסים».",
             )
             return
         _push_personal_assistant_history(chat_id, progress)
@@ -489,10 +487,20 @@ async def handle_assistant_action(
         await _delete_tracked_messages(context, chat_id)
         clear_personal_assistant_progress(chat_id)
         clear_assistant_prev_stack(chat_id)
+        # Inline + ReplyKeyboard לא יכולים על אותה הודעה — כמו ב-/start:
+        # קודם טקסט עם המקלדת הקבועה, ואז תפריט הכפתורים.
+        from bot.handlers.router import build_persistent_keyboard
+
         await send_text(
             context,
             chat_id,
             _EXERCISE_FINISHED_TEXT,
+            reply_markup=build_persistent_keyboard(),
+        )
+        await send_text(
+            context,
+            chat_id,
+            "בחר/י פעולה:",
             reply_markup=build_exercise_finished_keyboard(),
         )
         return

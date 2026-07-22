@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
-import solver
+import core.statics_calculator as solver
 
 
 def clean_math_signs(text):

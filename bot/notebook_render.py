@@ -60,11 +60,8 @@ def render_notebook_png_bytes(extracted: dict, solved: dict) -> bytes | None:
 
     tool_name = str(solved.get("tool_name", "")).strip()
     try:
-        import beam_notebook
-        import solver
-        # טען את beam_notebook מחדש מהדיסק כדי למנוע מצב שבו תהליך רץ
-        # ממשיך להשתמש בגרסה ישנה של פריסת PDF/גרפים (בעיית גלישה/קיטוע).
-        nb = beam_notebook._load_live_notebook_module()
+        import notebook as nb
+        import core.statics_calculator as solver
 
         if tool_name == "beam_solve_cantilever":
             result = solver.solve_cantilever_beam(loads, L)
@@ -137,9 +134,8 @@ def render_exercise_problem_png_bytes(extracted: dict) -> bytes | None:
         return None
 
     try:
-        import beam_notebook
+        import notebook as nb
 
-        nb = beam_notebook._load_live_notebook_module()
         support_mode, ra_pos, rb_pos = resolve_beam_support_geometry(beam)
         if support_mode == "cantilever":
             fig = nb.build_cantilever_schematic_figure(L, loads, wide=True)

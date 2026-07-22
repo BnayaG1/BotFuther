@@ -243,11 +243,16 @@ async def test_handle_finish_sends_completion_menu_and_clears_progress():
     )
 
     assert runtime.get_personal_assistant_progress(chat_id) is None
-    text = send_text.await_args.args[2]
-    assert "איזה יופי, סיימנו את התרגיל" in text
-    assert "איך תרצה להמשיך" in text
-    kb = send_text.await_args.kwargs["reply_markup"]
-    assert [[b.text, b.callback_data] for row in kb.inline_keyboard for b in row] == [
+    assert send_text.await_count == 2
+    first_text = send_text.await_args_list[0].args[2]
+    assert "איזה יופי, סיימנו את התרגיל" in first_text
+    assert "איך תרצה להמשיך" in first_text
+    first_kb = send_text.await_args_list[0].kwargs["reply_markup"]
+    assert hasattr(first_kb, "keyboard")  # ReplyKeyboardMarkup
+    second_text = send_text.await_args_list[1].args[2]
+    assert second_text == "בחר/י פעולה:"
+    second_kb = send_text.await_args_list[1].kwargs["reply_markup"]
+    assert [[b.text, b.callback_data] for row in second_kb.inline_keyboard for b in row] == [
         ["תרגול", "menu:give_exercise"],
         ["פתרון מלא", "menu:new"],
         ["נוסחאות", "menu:formulas"],
@@ -389,7 +394,7 @@ async def test_deliver_sends_opening_with_begin_button():
     assert "איך תרצה להמשיך" in bodies[1]
     last_kb = send_text.await_args_list[-1].kwargs.get("reply_markup")
     callbacks = [b.callback_data for row in last_kb.inline_keyboard for b in row]
-    assert callbacks == ["assist:begin_decomposition"]
+    assert callbacks == ["assist:begin_decomposition", "assist:to_reactions"]
 
 
 @pytest.mark.anyio
@@ -425,7 +430,7 @@ def test_opening_keyboard_has_no_back_button():
         for b in row
     ]
     assert "assist:back" not in callbacks
-    assert callbacks == ["assist:begin_decomposition"]
+    assert callbacks == ["assist:begin_decomposition", "assist:to_reactions"]
 
 
 def test_opening_keyboard_no_loads_is_continue_to_reactions_only():
@@ -451,9 +456,11 @@ def test_opening_keyboard_no_loads_is_continue_to_reactions_only():
 
 def test_opening_keyboard_with_loads_keeps_decomposition_buttons():
     kb = runtime.build_opening_keyboard(EXTRACTED)
-    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert callbacks == ["assist:begin_decomposition"]
-    assert "assist:to_reactions" not in callbacks
+    rows = kb.inline_keyboard
+    texts = [b.text for row in rows for b in row]
+    callbacks = [b.callback_data for row in rows for b in row]
+    assert texts == ["נתחיל בפירוק העומסים", "מעבר לריאקציות"]
+    assert callbacks == ["assist:begin_decomposition", "assist:to_reactions"]
 
 @pytest.mark.anyio
 async def test_deliver_no_loads_sends_continue_to_reactions_button():
@@ -644,7 +651,7 @@ async def test_to_reactions_from_opening_without_loads_enters_reactions():
 
 
 @pytest.mark.anyio
-async def test_to_reactions_blocked_when_opening_has_loads():
+async def test_to_reactions_from_opening_with_loads_enters_reactions():
     chat_id = 88032
     runtime.clear_personal_assistant_progress(chat_id)
     begin_image_session(chat_id, solve_mode=SolveMode.ASSISTANT)
@@ -657,9 +664,19 @@ async def test_to_reactions_blocked_when_opening_has_loads():
     await runtime.handle_assistant_action(
         context, chat_id, "to_reactions", send_text=send_text
     )
+
+    progress = runtime.get_personal_assistant_progress(chat_id)
+    assert isinstance(progress, ReactionProgress)
+    assert progress.equation == ReactionEquation.ENTRY
+    assert progress.decomposed_load_indices == []
     text = send_text.await_args.args[2]
-    assert "פירוק העומסים" in text
-    assert isinstance(runtime.get_personal_assistant_progress(chat_id), OpeningProgress)
+    assert "הגענו לשלב הריאקציות" in text
+    assert "באיזו ריאקציה להתחיל" in text
+    assert "מכיוון שלא היה עומסים לפרק" not in text
+
+    await runtime.handle_assistant_action(context, chat_id, "back", send_text=send_text)
+    restored = runtime.get_personal_assistant_progress(chat_id)
+    assert isinstance(restored, OpeningProgress)
     runtime.clear_personal_assistant_progress(chat_id)
 
 

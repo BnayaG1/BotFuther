@@ -107,7 +107,19 @@ def test_reactions_entry_shows_opening_message():
 
 
 def test_reactions_entry_skip_no_decomposition_note():
-    progress = enter_reactions(SIMPLY, decomposed_load_indices=[])
+    no_decomp_loads = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 5.0,
+            "support_mode": "simply_supported",
+            "supports": [
+                {"label": "A", "type": "pin", "x": 0.0},
+                {"label": "B", "type": "roller", "x": 5.0},
+            ],
+            "loads": [{"type": "point", "x": 2.0, "Fy": 3.0}],
+        },
+    }
+    progress = enter_reactions(no_decomp_loads, decomposed_load_indices=[])
     text = build_current_screen_hebrew(progress)
     assert "מכיוון שלא היה עומסים לפרק, אנחנו עוברים" in text
     assert "מציאת הריאקציות" in text
@@ -115,6 +127,18 @@ def test_reactions_entry_skip_no_decomposition_note():
     assert "לחץ/י כדי להתחיל" in text
     assert "סיימנו את פירוק העומסים" not in text
     assert "נשתמש בעומסים שפירקנו" not in text
+    assert "הגענו לשלב הריאקציות" not in text
+
+
+def test_reactions_entry_skipped_with_loads_present():
+    """דילוג על פירוק כשיש עומסים — לא מציגים «לא היה עומסים לפרק»."""
+    progress = enter_reactions(SIMPLY, decomposed_load_indices=[])
+    text = build_current_screen_hebrew(progress)
+    assert "הגענו לשלב הריאקציות" in text
+    assert "באיזו ריאקציה להתחיל" in text
+    assert "המשך" in text
+    assert "מכיוון שלא היה עומסים לפרק" not in text
+    assert "סיימנו את פירוק העומסים" not in text
 
 
 def test_enter_and_advance_simply_supported_to_done():

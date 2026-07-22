@@ -23,8 +23,8 @@ def test_formulas_catalog_and_parse():
     assert formulas.parse_formula_callback("buy:menu") is None
     titles = [t.title for t in formulas.FORMULA_TOPICS]
     assert titles == [
-        "נוסחות לתרגילי סמכים",
-        "נוסחאות לתרגילי ריתום",
+        "משוואות לתרגילי סמכים",
+        "משוואות לתרגילי ריתום",
         "סרטוט הגרפים",
         "נוסחאות לחישוב שטחים",
         "וקטורים\\אלכסוניים",

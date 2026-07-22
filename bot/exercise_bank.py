@@ -19,7 +19,7 @@ from bot.config import (
     EXERCISE_BANK_DB_PATH,
     EXERCISE_BANK_IMAGES_DIR,
 )
-from bot.vision import set_draft_error_message_id
+from bot.draft_session import set_draft_error_message_id
 
 log = logging.getLogger("beam_telegram_bot")
 

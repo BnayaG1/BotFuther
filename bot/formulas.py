@@ -31,12 +31,12 @@ class FormulaTopic:
 FORMULA_TOPICS: tuple[FormulaTopic, ...] = (
     FormulaTopic(
         "supports_formulas",
-        "נוסחות לתרגילי סמכים",
+        "משוואות לתרגילי סמכים",
         "supports_formulas.png",
     ),
     FormulaTopic(
         "cantilever_formulas",
-        "נוסחאות לתרגילי ריתום",
+        "משוואות לתרגילי ריתום",
         "cantilever_formulas.png",
     ),
     FormulaTopic(

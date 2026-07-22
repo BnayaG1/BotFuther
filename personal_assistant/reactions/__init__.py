@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from personal_assistant.decomposition import decomposition_load_entries
 from personal_assistant.reactions.cantilever import sigma_fx as cantilever_sigma_fx
 from personal_assistant.reactions.cantilever import sigma_ma as cantilever_sigma_ma
 from personal_assistant.reactions.cantilever import (
@@ -186,9 +187,11 @@ def set_reaction_phase(
 
 def _build_entry_step_hebrew(progress: ReactionProgress) -> str:
     had_decomposition = bool(progress.decomposed_load_indices)
+    has_loads_to_decompose = len(decomposition_load_entries(progress.extracted)) > 0
     return build_reactions_opening_message_hebrew(
         beam_kind=progress.beam_kind.value,
         had_decomposition=had_decomposition,
+        has_loads_to_decompose=has_loads_to_decompose,
     )
 
 

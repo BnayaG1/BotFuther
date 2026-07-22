@@ -6,7 +6,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 from matplotlib.patches import Arc
 
-import solver
+import core.statics_calculator as solver
 
 from notebook.constants import _NOTEBOOK_GRID_Y, _RED
 

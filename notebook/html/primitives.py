@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html as html_lib
 
-import solver
+import core.statics_calculator as solver
 
 from notebook.html.math_format import _clean_math_text
 

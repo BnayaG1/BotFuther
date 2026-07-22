@@ -9,7 +9,7 @@ import numpy as np
 
 from notebook.constants import _BLUE, _GREEN, _RED, _U_FORCE, _U_MOMENT
 from notebook.export.png import _fig_to_png_bytes
-from notebook_pdf_layout import DEFAULT_BOT_LAYOUT, NotebookPdfLayout, forces_gaps_mm, panel_height_in
+from notebook.pdf_layout import DEFAULT_BOT_LAYOUT, NotebookPdfLayout, forces_gaps_mm, panel_height_in
 
 
 def _forces_diagram_html(
