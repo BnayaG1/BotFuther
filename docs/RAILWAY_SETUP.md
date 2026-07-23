@@ -10,9 +10,12 @@
 
 1. Service → **Volumes** → **Add Volume**
 2. Mount path: `/data`
-3. Set variable: `COUPON_DB_PATH=/data/coupons.db`
+3. Set variables:
+   - `COUPON_DB_PATH=/data/coupons.db`
+   - `EXERCISE_BANK_DB_PATH=/data/exercises.db` (אופציונלי — ברירת מחדל בענן כש־`/data` קיים)
+   - `EXERCISE_BANK_IMAGES_DIR=/data/exercise_bank` (אופציונלי — אותו עניין)
 
-Without the volume, coupons and user access reset on every redeploy.
+Without the volume, coupons / user access / exercise bank reset on every redeploy.
 
 ## 3. Environment variables
 
@@ -23,6 +26,8 @@ Copy from local `.env` into Railway **Variables** (never commit `.env`).
 | `TELEGRAM_BOT_TOKEN` | Yes | User bot (@BotFather) |
 | `GEMINI_VISION_API_KEY` | Yes | Vision API |
 | `COUPON_DB_PATH` | Yes | `/data/coupons.db` |
+| `EXERCISE_BANK_DB_PATH` | No | Default `/data/exercises.db` on cloud |
+| `EXERCISE_BANK_IMAGES_DIR` | No | Default `/data/exercise_bank` on cloud |
 | `ADMIN_BOT_TOKEN` | No | Admin coupon bot |
 | `ADMIN_USER_IDS` | No | e.g. `843647241` |
 | `BIT_PHONE` | No | Bit payment phone |

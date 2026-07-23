@@ -18,6 +18,8 @@ from bot.config import (
     EXERCISE_BANK_COOLDOWN_SEC,
     EXERCISE_BANK_DB_PATH,
     EXERCISE_BANK_IMAGES_DIR,
+    EXERCISE_BANK_SEED_DB_PATH,
+    EXERCISE_BANK_SEED_IMAGES_DIR,
 )
 from bot.draft_session import set_draft_error_message_id
 
@@ -75,7 +77,8 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_exercise_bank_db() -> None:
-    """אתחול DB בהפעלת הבוט — מבטיח שהטבלה קיימת."""
+    """אתחול DB בהפעלת הבוט — מבטיח שהטבלה קיימת (וממלא seed אם ריק)."""
+    _seed_exercise_bank_if_needed()
     _connect()
     ensure_exercise_bank_images_dir()
 
@@ -91,6 +94,60 @@ def close_exercise_bank_db() -> None:
 def ensure_exercise_bank_images_dir() -> Path:
     EXERCISE_BANK_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     return EXERCISE_BANK_IMAGES_DIR
+
+
+def _exercise_count_at(path: Path) -> int | None:
+    """מספר תרגילים ב-DB; None אם הקובץ לא קיים / לא תקין."""
+    if not path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(str(path))
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM exercises").fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def _seed_exercise_bank_if_needed() -> None:
+    """אם המאגר ריק (טיפוסי אחרי deploy) — מעתיקים seed מה-image ל-Volume/נתיב היעד."""
+    db_path = Path(EXERCISE_BANK_DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    images_dir = ensure_exercise_bank_images_dir()
+
+    seed_images = Path(EXERCISE_BANK_SEED_IMAGES_DIR)
+    if seed_images.is_dir():
+        for src in seed_images.glob("*.jpg"):
+            dest = images_dir / src.name
+            if not dest.is_file():
+                try:
+                    shutil.copy2(src, dest)
+                except OSError as exc:
+                    log.warning(
+                        "Failed copying seed exercise image %s: %s", src.name, exc
+                    )
+
+    seed_db = Path(EXERCISE_BANK_SEED_DB_PATH)
+    current_count = _exercise_count_at(db_path)
+    if current_count and current_count > 0:
+        return
+    if not seed_db.is_file():
+        log.warning("Exercise bank empty and no seed DB at %s", seed_db)
+        return
+    try:
+        shutil.copy2(seed_db, db_path)
+        log.info(
+            "Seeded exercise bank from %s -> %s (%s exercises)",
+            seed_db,
+            db_path,
+            _exercise_count_at(db_path),
+        )
+    except OSError as exc:
+        log.error("Failed seeding exercise bank DB: %s", exc)
 
 
 _DUP_ROUND_DECIMALS = 2

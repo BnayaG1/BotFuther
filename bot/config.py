@@ -287,15 +287,34 @@ COUPON_DB_PATH = Path(
     os.getenv("COUPON_DB_PATH", str(APP_DIR / "coupons.db"))
 ).resolve()
 COUPON_ACCESS_ENABLED = _env_bool("COUPON_ACCESS_ENABLED", True)
-EXERCISE_BANK_DB_PATH = Path(
-    os.getenv("EXERCISE_BANK_DB_PATH", str(APP_DIR / "exercises.db"))
+
+
+def _default_exercise_bank_db_path() -> Path:
+    raw = os.getenv("EXERCISE_BANK_DB_PATH", "").strip()
+    if raw:
+        return Path(raw).resolve()
+    # בענן — על ה-Volume, כדי שהמאגר לא יימחק בכל deploy.
+    if _is_cloud_runtime() and Path("/data").is_dir():
+        return Path("/data/exercises.db").resolve()
+    return (APP_DIR / "exercises.db").resolve()
+
+
+def _default_exercise_bank_images_dir() -> Path:
+    raw = os.getenv("EXERCISE_BANK_IMAGES_DIR", "").strip()
+    if raw:
+        return Path(raw).resolve()
+    if _is_cloud_runtime() and Path("/data").is_dir():
+        return Path("/data/exercise_bank").resolve()
+    return (APP_DIR / "assets" / "exercise_bank").resolve()
+
+
+EXERCISE_BANK_DB_PATH = _default_exercise_bank_db_path()
+EXERCISE_BANK_IMAGES_DIR = _default_exercise_bank_images_dir()
+# עותק seed בתוך ה-image — משמש למילוי מאגר ריק אחרי deploy.
+EXERCISE_BANK_SEED_DB_PATH = (
+    APP_DIR / "assets" / "exercise_bank" / "exercises.seed.db"
 ).resolve()
-EXERCISE_BANK_IMAGES_DIR = Path(
-    os.getenv(
-        "EXERCISE_BANK_IMAGES_DIR",
-        str(APP_DIR / "assets" / "exercise_bank"),
-    )
-).resolve()
+EXERCISE_BANK_SEED_IMAGES_DIR = (APP_DIR / "assets" / "exercise_bank").resolve()
 COUPON_GATE_VERSION = "v3-period"
 IMAGE_QUOTA_WINDOW_HOURS = _env_int("IMAGE_QUOTA_WINDOW_HOURS", 24)
 IMAGE_QUOTA_WINDOW_SEC = float(IMAGE_QUOTA_WINDOW_HOURS * 3600)

@@ -37,13 +37,44 @@ CANTILEVER_EXTRACTED = {
 def bank_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_exercises.db"
     images_dir = tmp_path / "exercise_bank_images"
+    missing_seed = tmp_path / "missing_seed.db"
     monkeypatch.setattr(config, "EXERCISE_BANK_DB_PATH", db_path)
     monkeypatch.setattr(config, "EXERCISE_BANK_IMAGES_DIR", images_dir)
+    monkeypatch.setattr(config, "EXERCISE_BANK_SEED_DB_PATH", missing_seed)
+    monkeypatch.setattr(config, "EXERCISE_BANK_SEED_IMAGES_DIR", tmp_path / "no_seed_images")
     monkeypatch.setattr(exercise_bank, "EXERCISE_BANK_DB_PATH", db_path)
     monkeypatch.setattr(exercise_bank, "EXERCISE_BANK_IMAGES_DIR", images_dir)
+    monkeypatch.setattr(exercise_bank, "EXERCISE_BANK_SEED_DB_PATH", missing_seed)
+    monkeypatch.setattr(
+        exercise_bank, "EXERCISE_BANK_SEED_IMAGES_DIR", tmp_path / "no_seed_images"
+    )
     exercise_bank.close_exercise_bank_db()
     exercise_bank.init_exercise_bank_db()
     yield
+    exercise_bank.close_exercise_bank_db()
+
+
+def test_seed_restores_empty_bank(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    seed_src = Path(__file__).resolve().parents[1] / "assets" / "exercise_bank" / "exercises.seed.db"
+    if not seed_src.is_file():
+        pytest.skip("exercises.seed.db not present")
+    db_path = tmp_path / "empty.db"
+    images_dir = tmp_path / "imgs"
+    images_dir.mkdir()
+    monkeypatch.setattr(exercise_bank, "EXERCISE_BANK_DB_PATH", db_path)
+    monkeypatch.setattr(exercise_bank, "EXERCISE_BANK_IMAGES_DIR", images_dir)
+    monkeypatch.setattr(exercise_bank, "EXERCISE_BANK_SEED_DB_PATH", seed_src)
+    monkeypatch.setattr(
+        exercise_bank,
+        "EXERCISE_BANK_SEED_IMAGES_DIR",
+        seed_src.parent,
+    )
+    exercise_bank.close_exercise_bank_db()
+    exercise_bank.init_exercise_bank_db()
+    assert exercise_bank.count_exercises() == 27
+    assert (images_dir / "1.jpg").is_file()
     exercise_bank.close_exercise_bank_db()
 
 
