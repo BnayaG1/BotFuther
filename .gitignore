@@ -18,7 +18,3 @@ learned_extraction_rules.json
 validator_images/**/*.last_run.json
 validator_images/failures/
 .pytest_cache/
-
-# מבוא לסטטיקה — בפיתוח מקומי בלבד (לא בפריסה לשרת)
-intro/
-tests/test_intro_opening.py
