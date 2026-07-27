@@ -33,7 +33,7 @@ VIP_UNLIMITED_DAILY_QUOTA = 999
 VALID_TIERS = VALID_DAILY_QUOTAS
 _QUOTA_SQL_LIST = ", ".join(str(q) for q in sorted(VALID_DAILY_QUOTAS))
 _PERIOD_SQL_LIST = ", ".join(str(d) for d in sorted(VALID_PERIOD_DAYS))
-# חלון חינמי לספריית נוסחאות: 24 שעות מ־first_seen_at (ראה ensure_user_first_seen).
+# חלון חינמי לנוסחאות + תרגול: 24 שעות מ־first_seen_at (ראה ensure_user_first_seen).
 FORMULAS_FREE_WINDOW_SEC = 24 * 3600
 
 
@@ -921,9 +921,9 @@ def ensure_user_first_seen(user_id: int, *, now: float | None = None) -> float:
     """
     מחזיר first_seen_at קבוע למשתמש; יוצר רשומה בפעם הראשונה.
 
-    כלל חלון הנוסחאות החינמי: השעון מתחיל באינטראקציה הראשונה שנרשמת
-    (בדרך כלל /start דרך ensure_user_first_seen, או בפתיחת נוסחאות דרך
-    has_formulas_access). הערך לא משתנה אחרי יצירה.
+    כלל החלון החינמי (נוסחאות + תרגול): השעון מתחיל באינטראקציה הראשונה
+    שנרשמת (בדרך כלל /start, או בפתיחת נוסחאות/תרגול דרך has_formulas_access).
+    הערך לא משתנה אחרי יצירה.
     """
     conn = _connect()
     ts = time.time() if now is None else float(now)
@@ -951,10 +951,15 @@ def has_formulas_free_window(user_id: int, *, now: float | None = None) -> bool:
 
 
 def has_formulas_access(user_id: int) -> bool:
-    """True אם קופון פעיל או בתוך חלון 24 השעות החינמיות לנוסחאות."""
+    """True אם קופון פעיל או בתוך חלון 24ש' חינמיות — לנוסחאות ולתרגול."""
     if has_active_coupon_access(user_id):
         return True
     return has_formulas_free_window(user_id)
+
+
+def has_practice_access(user_id: int) -> bool:
+    """אותו שער כמו נוסחאות: קופון רגיל פעיל או חלון 24ש' חינמי."""
+    return has_formulas_access(user_id)
 
 
 def consume_image_slot(user_id: int) -> ImageAccessResult:

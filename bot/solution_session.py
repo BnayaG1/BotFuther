@@ -25,6 +25,7 @@ class SolutionSession:
     started_at: float = field(default_factory=time.monotonic)
     phase: str = "extracting"  # extracting | draft | solved
     solve_mode: SolveMode = SolveMode.NOTEBOOK
+    from_practice: bool = False
     assistant_beam_kind: str | None = None
     assistant_message_ids: list[int] = field(default_factory=list)
     # snapshot stack for ↩️: restores exact previously sent assistant message
@@ -50,6 +51,10 @@ _assistant_progress: dict[int, AssistantProgress] = {}
 _pending_bank_exercise: dict[int, tuple[int, dict]] = {}
 # תמונת מקור בהמתנה לאישור «הוספה למאגר» (לפני prepare_image_for_vision).
 _pending_bank_submission_image: dict[int, Path] = {}
+# הודעות צ'אט של תרגול נוכחי (תמונה, בחירת מצב, מחברת…) — למחיקה ביציאה/סיום.
+_practice_chat_message_ids: dict[int, list[int]] = {}
+# הודעות צ'אט של נוסחאות (תפריט / דפי נוסחאות) — למחיקה ביציאה.
+_formulas_chat_message_ids: dict[int, list[int]] = {}
 
 
 def _next_session_id() -> int:
@@ -58,8 +63,11 @@ def _next_session_id() -> int:
     return _session_seq
 
 
-def has_active_image_session(chat_id: int) -> bool:
-    return chat_id in _sessions
+def end_practice_session(chat_id: int) -> None:
+    """מסיים session שנוצר מתרגול (אם קיים)."""
+    session = _sessions.get(int(chat_id))
+    if session is not None and session.from_practice:
+        _sessions.pop(int(chat_id), None)
 
 
 def get_solution_session(chat_id: int) -> SolutionSession | None:
@@ -80,8 +88,69 @@ def set_pending_bank_exercise(chat_id: int, exercise_id: int, extracted: dict) -
     _pending_bank_exercise[int(chat_id)] = (int(exercise_id), extracted)
 
 
+def clear_pending_bank_exercise(chat_id: int) -> None:
+    _pending_bank_exercise.pop(int(chat_id), None)
+
+
 def consume_pending_bank_exercise(chat_id: int) -> tuple[int, dict] | None:
     return _pending_bank_exercise.pop(int(chat_id), None)
+
+
+def begin_practice_chat_trail(chat_id: int) -> None:
+    """מתחיל מעקב חדש אחרי הודעות תרגול בצ'אט."""
+    _practice_chat_message_ids[int(chat_id)] = []
+
+
+def append_practice_chat_message_id(chat_id: int, message_id: int | None) -> None:
+    if message_id is None:
+        return
+    mid = int(message_id)
+    if mid <= 0:
+        return
+    ids = _practice_chat_message_ids.setdefault(int(chat_id), [])
+    if mid not in ids:
+        ids.append(mid)
+
+
+def pop_practice_chat_message_ids(chat_id: int) -> list[int]:
+    return list(_practice_chat_message_ids.pop(int(chat_id), []))
+
+
+def has_practice_chat_trail(chat_id: int) -> bool:
+    return bool(_practice_chat_message_ids.get(int(chat_id))) or int(chat_id) in _pending_bank_exercise
+
+
+def discard_practice_chat_trail(chat_id: int) -> None:
+    """מנקה מעקב בזיכרון בלי מחיקת הודעות בטלגרם."""
+    _practice_chat_message_ids.pop(int(chat_id), None)
+
+
+def begin_formulas_chat_trail(chat_id: int) -> None:
+    """מתחיל מעקב חדש אחרי הודעות נוסחאות בצ'אט."""
+    _formulas_chat_message_ids[int(chat_id)] = []
+
+
+def append_formulas_chat_message_id(chat_id: int, message_id: int | None) -> None:
+    if message_id is None:
+        return
+    mid = int(message_id)
+    if mid <= 0:
+        return
+    ids = _formulas_chat_message_ids.setdefault(int(chat_id), [])
+    if mid not in ids:
+        ids.append(mid)
+
+
+def pop_formulas_chat_message_ids(chat_id: int) -> list[int]:
+    return list(_formulas_chat_message_ids.pop(int(chat_id), []))
+
+
+def has_formulas_chat_trail(chat_id: int) -> bool:
+    return bool(_formulas_chat_message_ids.get(int(chat_id)))
+
+
+def discard_formulas_chat_trail(chat_id: int) -> None:
+    _formulas_chat_message_ids.pop(int(chat_id), None)
 
 
 def set_pending_bank_submission_image(chat_id: int, image_path: Path) -> None:
@@ -128,6 +197,8 @@ def reset_user_session(chat_id: int) -> None:
     _pending_solve_mode.pop(chat_id, None)
     _assistant_progress.pop(chat_id, None)
     _pending_bank_exercise.pop(chat_id, None)
+    discard_practice_chat_trail(chat_id)
+    discard_formulas_chat_trail(chat_id)
     clear_pending_bank_submission_image(chat_id)
     try:
         from personal_assistant.runtime import clear_personal_assistant_progress
@@ -154,7 +225,12 @@ def pop_assistant_message_ids(chat_id: int) -> list[int]:
     return ids
 
 
-def begin_image_session(chat_id: int, *, solve_mode: SolveMode = SolveMode.NOTEBOOK) -> SolutionSession:
+def begin_image_session(
+    chat_id: int,
+    *,
+    solve_mode: SolveMode = SolveMode.NOTEBOOK,
+    from_practice: bool = False,
+) -> SolutionSession:
     """תמונה חדשה — מוחק תרגיל קודם, מתחיל session ריק."""
     from bot.draft_session import clear_vision_context
 
@@ -172,13 +248,15 @@ def begin_image_session(chat_id: int, *, solve_mode: SolveMode = SolveMode.NOTEB
         session_id=_next_session_id(),
         phase="extracting",
         solve_mode=solve_mode,
+        from_practice=bool(from_practice),
     )
     _sessions[chat_id] = session
     log.info(
-        "New image session chat=%s session_id=%s mode=%s",
+        "New image session chat=%s session_id=%s mode=%s from_practice=%s",
         chat_id,
         session.session_id,
         solve_mode.value,
+        bool(from_practice),
     )
     return session
 

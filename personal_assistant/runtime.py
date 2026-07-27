@@ -484,13 +484,15 @@ async def handle_assistant_action(
                 "הפעולה הזו עדיין לא זמינה — השתמשו בכפתור שמתחת להודעה.",
             )
             return
-        await _delete_tracked_messages(context, chat_id)
-        clear_personal_assistant_progress(chat_id)
-        clear_assistant_prev_stack(chat_id)
+        from bot.handlers.router import (
+            build_persistent_keyboard,
+            cleanup_practice_chat,
+        )
+
+        # מוחק את כל הודעות התרגיל (תמונה + מדריך) לפני תפריט הסיום.
+        await cleanup_practice_chat(context, chat_id)
         # Inline + ReplyKeyboard לא יכולים על אותה הודעה — כמו ב-/start:
         # קודם טקסט עם המקלדת הקבועה, ואז תפריט הכפתורים.
-        from bot.handlers.router import build_persistent_keyboard
-
         await send_text(
             context,
             chat_id,

@@ -18,3 +18,6 @@ learned_extraction_rules.json
 validator_images/**/*.last_run.json
 validator_images/failures/
 .pytest_cache/
+exercise_generator/output/**
+!exercise_generator/output/.gitkeep
+!exercise_generator/output/.gitignore

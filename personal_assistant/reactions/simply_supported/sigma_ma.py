@@ -8,6 +8,10 @@ from dataclasses import dataclass
 
 from bot.draft_format import _fmt_num, _inclined_mag, distributed_span_from_left
 from bot.vision import resolve_beam_support_geometry
+from core.distributed_moments import (
+    UDL_SPLIT_ABOUT_PIVOT_HE,
+    distributed_moment_segments_about,
+)
 
 
 def _beam_from_extracted(extracted: dict) -> dict:
@@ -86,6 +90,8 @@ class _MaVerticalTerm:
     ld: dict | None = None
     is_cw_moment: bool | None = None
     """עבור kind=="moment" — הכיוון (עם/נגד השעון) נלקח ישירות מסימן M, לא ממנוף."""
+    split_intro: bool = False
+    """True על החלק הראשון של מפורס שפוצל סביב נקודת המומנט."""
 
 
 def _collect_ma_vertical_terms(
@@ -133,19 +139,23 @@ def _collect_ma_vertical_terms(
                 if w_abs < 1e-12 or length < 1e-12:
                     continue
                 x1, x2 = distributed_span_from_left(ld, beam)
-                x_centroid = (float(x1) + float(x2)) / 2.0
-                force = w_abs * length
                 w_raw = float(ld.get("w", ld.get("q", 0.0)) or 0.0)
-                terms.append(
-                    _MaVerticalTerm(
-                        kind="distributed",
-                        x=x_centroid,
-                        dist=abs(x_centroid - ra_pos),
-                        force_txt=_fmt_num(force),
-                        vertical_down=w_raw >= 0,
-                        ld=ld,
+                segs = distributed_moment_segments_about(w_abs, x1, x2, ra_pos)
+                split = len(segs) > 1
+                for i, seg in enumerate(segs):
+                    if abs(seg.force) < 1e-12 or seg.dist < 1e-12:
+                        continue
+                    terms.append(
+                        _MaVerticalTerm(
+                            kind="distributed",
+                            x=seg.centroid,
+                            dist=seg.dist,
+                            force_txt=_fmt_num(abs(seg.force)),
+                            vertical_down=w_raw >= 0,
+                            ld=ld,
+                            split_intro=bool(split and i == 0),
+                        )
                     )
-                )
                 continue
             if t == "inclined":
                 fy = _inclined_fy_ton(ld)
@@ -269,6 +279,8 @@ def build_by_ma_equation_message_hebrew(extracted: dict, *, prefix: str = "") ->
         return "\n".join(lines)
 
     for i, term in enumerate(terms):
+        if term.split_intro:
+            lines.append(UDL_SPLIT_ABOUT_PIVOT_HE)
         desc = _describe_ma_vertical_term_hebrew(term, ra_pos, first=(i == 0))
         if i == 0:
             lines.append(desc)

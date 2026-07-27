@@ -6,7 +6,9 @@ import asyncio
 import copy
 import logging
 import shutil
+import tempfile
 import time
+from pathlib import Path
 
 from telegram import (
     ForceReply,
@@ -38,6 +40,7 @@ from bot.access import (
     ensure_user_first_seen,
     has_active_coupon_access,
     has_formulas_access,
+    has_practice_access,
     image_access_reply_hebrew,
     looks_like_coupon_code,
     ping_reply_hebrew,
@@ -128,9 +131,22 @@ from bot.exercise_bank import (
 from bot.solution_check import solve_extracted_beam
 from bot.solution_session import (
     SolveMode,
+    append_formulas_chat_message_id,
+    append_practice_chat_message_id,
+    begin_formulas_chat_trail,
     begin_image_session,
+    begin_practice_chat_trail,
+    clear_assistant_prev_stack,
+    clear_pending_bank_exercise,
     consume_pending_bank_exercise,
     consume_pending_solve_mode,
+    end_practice_session,
+    get_solution_session,
+    has_formulas_chat_trail,
+    has_practice_chat_trail,
+    pop_assistant_message_ids,
+    pop_formulas_chat_message_ids,
+    pop_practice_chat_message_ids,
     reset_user_session,
     set_pending_bank_exercise,
     set_pending_bank_submission_image,
@@ -182,6 +198,23 @@ _BUG_REPORT_FORCE_REPLY = ForceReply(
 _BUG_REPORT_CANCEL = "ביטול דיווח"
 _PERSISTENT_ASSISTANT_LABEL = "מדריך לפתרון"
 _BANK_ADD_SECRET = "BnayaG"
+# קיצור זמני: שליחת אות B מייצרת תרגיל מהמחולל ושולחת אותו
+_GENERATED_EXERCISE_TRIGGER = "B"
+_GENERATED_EXERCISE_ID = 0
+
+
+def _bank_extracted_for_solve(extracted: dict) -> dict:
+    """מכין extracted ממאגר/מחולל לפני מדריך/פתרון.
+
+    תרגילי מחולל התרגילים כבר מדויקים — ``finalize_beam_extraction`` (תיקוני vision)
+    משחית בהם מיקומי סמכים ומידות. מדלגים עליו כשמסומן במטא.
+    """
+    data = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    skip = bool(meta.get("skip_vision_normalize")) or meta.get("source") == "exercise_generator"
+    if skip:
+        return data
+    return finalize_beam_extraction(data)
 _PERSISTENT_FORMULAS_LABEL = "נוסחאות"
 _PERSISTENT_QUOTA_LABEL = "מכסה"
 _PERSISTENT_COUPON_LABEL = "קופון"
@@ -259,9 +292,13 @@ async def _deliver_approved_solve(
     """אחרי אישור טיוטה: טקסט פתרון ואז תמונת מחברת מלאה."""
     has_result = bool((solved or {}).get("result"))
     notebook_path = None
+    session = get_solution_session(chat_id)
+    track_practice = bool(session is not None and session.from_practice)
 
     if reply:
         sent = await _send_text_safe(context, chat_id, reply)
+        if track_practice:
+            _track_sent_message(chat_id, sent)
         # אם זה לא פתרון (למשל שגיאת validator) — נשמור message_id כדי למחוק בניסיון הבא.
         if not has_result:
             try:
@@ -276,11 +313,13 @@ async def _deliver_approved_solve(
         if notebook_path is not None:
             try:
                 with notebook_path.open("rb") as photo:
-                    await context.bot.send_photo(
+                    sent = await context.bot.send_photo(
                         chat_id=chat_id,
                         photo=photo,
                         caption="פתרון מחברת מלא",
                     )
+                if track_practice:
+                    _track_sent_message(chat_id, sent)
             except Exception as exc:
                 log.warning("Failed to send notebook chat=%s: %s", chat_id, exc)
 
@@ -309,6 +348,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is not None:
         ensure_user_first_seen(int(user.id))
+    chat_id = telegram_chat_id(update)
+    leave_session = get_solution_session(chat_id)
+    if has_practice_chat_trail(chat_id) or (
+        leave_session is not None and leave_session.from_practice
+    ):
+        await cleanup_practice_chat(context, chat_id)
+    await _leave_formulas_chat_if_needed(context, chat_id)
     text = build_start_welcome_text()
     keyboard = build_start_keyboard()
     try:
@@ -522,13 +568,14 @@ async def _send_purchase_menu(
             )
 
 
-async def _send_formulas_locked(
+async def _send_content_locked(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     *,
     message=None,
     edit_message=None,
 ) -> None:
+    """נעילת נוסחאות/תרגול אחרי חלון 24ש' בלי קופון."""
     text = formulas_locked_reply_hebrew()
     keyboard = build_formulas_locked_keyboard()
     try:
@@ -567,6 +614,10 @@ async def _send_formulas_locked(
             )
 
 
+# תאימות לשם הישן
+_send_formulas_locked = _send_content_locked
+
+
 async def _send_formulas_menu(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -578,7 +629,7 @@ async def _send_formulas_menu(
     """מציג תפריט נוסחאות לקופון פעיל או בתוך 24ש' ראשונות; אחרת נעילה."""
     uid = int(user_id) if user_id is not None else None
     if COUPON_ACCESS_ENABLED and (uid is None or not has_formulas_access(uid)):
-        await _send_formulas_locked(
+        await _send_content_locked(
             context,
             chat_id,
             message=message,
@@ -586,24 +637,27 @@ async def _send_formulas_menu(
         )
         return
 
+    if not has_formulas_chat_trail(chat_id):
+        begin_formulas_chat_trail(chat_id)
+
     text = formulas_menu_intro_hebrew()
     keyboard = build_formulas_menu_keyboard()
+    sent = None
     try:
         if edit_message is not None:
-            await edit_message.edit_text(
+            sent = await edit_message.edit_text(
                 text,
                 reply_markup=keyboard,
                 parse_mode="Markdown",
             )
-            return
-        if message is not None:
-            await message.reply_text(
+        elif message is not None:
+            sent = await message.reply_text(
                 text,
                 reply_markup=keyboard,
                 parse_mode="Markdown",
             )
         else:
-            await context.bot.send_message(
+            sent = await context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
                 reply_markup=keyboard,
@@ -612,16 +666,21 @@ async def _send_formulas_menu(
     except BadRequest:
         if edit_message is not None:
             try:
-                await edit_message.edit_text(text, reply_markup=keyboard)
-                return
+                sent = await edit_message.edit_text(text, reply_markup=keyboard)
             except BadRequest:
-                pass
-        if message is not None:
-            await message.reply_text(text, reply_markup=keyboard)
+                sent = None
+        elif message is not None:
+            sent = await message.reply_text(text, reply_markup=keyboard)
         else:
-            await context.bot.send_message(
+            sent = await context.bot.send_message(
                 chat_id=chat_id, text=text, reply_markup=keyboard
             )
+    if sent is None and edit_message is not None:
+        append_formulas_chat_message_id(
+            chat_id, getattr(edit_message, "message_id", None)
+        )
+    else:
+        append_formulas_chat_message_id(chat_id, getattr(sent, "message_id", None))
 
 
 async def _send_coupon_redeem_prompt(
@@ -671,6 +730,71 @@ async def _delete_callback_message(query) -> None:
         log.debug("Could not clear callback keyboard: %s", exc)
 
 
+async def cleanup_formulas_chat(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    """מוחק מהצ'אט את כל הודעות הנוסחאות של הסשן הנוכחי."""
+    ids = pop_formulas_chat_message_ids(chat_id)
+    seen: set[int] = set()
+    for mid in ids:
+        mid_i = int(mid)
+        if mid_i <= 0 or mid_i in seen:
+            continue
+        seen.add(mid_i)
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid_i)
+        except Exception:
+            pass
+
+
+async def _leave_formulas_chat_if_needed(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    if has_formulas_chat_trail(chat_id):
+        await cleanup_formulas_chat(context, chat_id)
+
+
+async def cleanup_practice_chat(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    clear_progress: bool = True,
+) -> None:
+    """מוחק מהצ'אט את כל הודעות התרגול הנוכחי (תמונה/מצב/מחברת/מדריך)."""
+    ids = pop_practice_chat_message_ids(chat_id)
+    ids.extend(pop_assistant_message_ids(chat_id))
+    seen: set[int] = set()
+    for mid in ids:
+        mid_i = int(mid)
+        if mid_i <= 0 or mid_i in seen:
+            continue
+        seen.add(mid_i)
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid_i)
+        except Exception:
+            pass
+    if clear_progress:
+        clear_pending_bank_exercise(chat_id)
+        try:
+            from personal_assistant.runtime import clear_personal_assistant_progress
+
+            clear_personal_assistant_progress(chat_id)
+        except Exception:
+            pass
+        clear_assistant_prev_stack(chat_id)
+        end_practice_session(chat_id)
+
+
+def _track_sent_message(chat_id: int, sent: object | None) -> None:
+    try:
+        mid = int(getattr(sent, "message_id", 0) or 0)
+    except (TypeError, ValueError):
+        return
+    append_practice_chat_message_id(chat_id, mid)
+
+
 async def _send_main_action_menu(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -717,6 +841,12 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+    leave_session = get_solution_session(chat_id)
+    if has_practice_chat_trail(chat_id) or (
+        leave_session is not None and leave_session.from_practice
+    ):
+        await cleanup_practice_chat(context, chat_id)
+    await _leave_formulas_chat_if_needed(context, chat_id)
 
     if action == "cancel":
         await query.answer()
@@ -818,19 +948,35 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not query or not query.data or not query.data.startswith("menu:"):
         return
     action = query.data.split(":", 1)[-1]
+    chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+
+    # יציאה מתרגול לנושא אחר — מוחקים את הודעות התרגיל מהצ'אט.
+    if action in ("new", "formulas", "intro", "coupon") or action.startswith("mode:"):
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+
+    # יציאה מנוסחאות לנושא אחר — מוחקים את הודעות הנוסחאות מהצ'אט.
+    if action in ("new", "intro", "coupon", "give_exercise") or action.startswith(
+        "mode:"
+    ):
+        await _leave_formulas_chat_if_needed(context, chat_id)
+
     if action == "coupon":
         if not COUPON_ACCESS_ENABLED:
             await query.answer("מערכת הקופונים כבויה.", show_alert=True)
             return
         await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _delete_callback_message(query)
         await _send_purchase_menu(context, chat_id)
         return
     if action == "formulas":
         await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _delete_callback_message(query)
+        # כניסה מחדש — מנקים סשן נוסחאות קודם אם נשאר בצ'אט.
+        await cleanup_formulas_chat(context, chat_id)
         await _send_formulas_menu(
             context,
             chat_id,
@@ -842,15 +988,21 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("המבוא בפיתוח ולא זמין כאן כרגע.", show_alert=True)
             return
         await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _delete_callback_message(query)
         await _send_intro_opening(context, chat_id)
         return
     if action == "give_exercise":
+        user_id = telegram_user_id(update)
+        if COUPON_ACCESS_ENABLED and not has_practice_access(user_id):
+            await query.answer()
+            await _delete_callback_message(query)
+            await cleanup_practice_chat(context, chat_id)
+            await _leave_formulas_chat_if_needed(context, chat_id)
+            await _send_content_locked(context, chat_id)
+            return
         if count_exercises() <= 0:
             await query.answer("אין עדיין תרגילים מוכנים במאגר.", show_alert=True)
             return
-        user_id = telegram_user_id(update)
         cool = exercise_bank_cooldown_remaining_sec(user_id)
         if cool is not None:
             mins = max(1, int((cool + 59) // 60))
@@ -860,8 +1012,9 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             return
         await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _delete_callback_message(query)
+        await cleanup_practice_chat(context, chat_id)
+        begin_practice_chat_trail(chat_id)
         picked = pick_next_exercise_for_user(user_id)
         if picked is None:
             await _send_text_safe(context, chat_id, "אין עדיין תרגילים מוכנים במאגר.")
@@ -872,10 +1025,11 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if stored_image is not None:
             try:
                 with stored_image.open("rb") as photo:
-                    await context.bot.send_photo(
+                    sent = await context.bot.send_photo(
                         chat_id=chat_id,
                         photo=photo,
                     )
+                _track_sent_message(chat_id, sent)
                 photo_sent = True
             except Exception as exc:
                 log.warning(
@@ -885,15 +1039,15 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     exc,
                 )
         if not photo_sent:
-            # תרגילים ישנים בלי תמונה שמורה — רינדור מהנתונים כגיבוי.
             problem_path = render_exercise_problem_png_temp(extracted)
             if problem_path is not None:
                 try:
                     with problem_path.open("rb") as photo:
-                        await context.bot.send_photo(
+                        sent = await context.bot.send_photo(
                             chat_id=chat_id,
                             photo=photo,
                         )
+                    _track_sent_message(chat_id, sent)
                     photo_sent = True
                 except Exception as exc:
                     log.warning(
@@ -904,25 +1058,21 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if not photo_sent:
             from bot.draft_format import extracted_to_draft_text
 
-            # רק תיאור הנתונים — בלי כותרת/מספר תרגיל (לא רלוונטיות כאן).
             draft_lines = extracted_to_draft_text(extracted).split("\n")
             data_text = "\n".join(draft_lines[2 : draft_lines.index("---")]).strip()
-            await _send_text_safe(
-                context,
-                chat_id,
-                data_text,
-            )
+            sent = await _send_text_safe(context, chat_id, data_text)
+            _track_sent_message(chat_id, sent)
         set_pending_bank_exercise(chat_id, exercise_id, extracted)
         keyboard = build_bank_solve_mode_keyboard()
-        await context.bot.send_message(
+        sent = await context.bot.send_message(
             chat_id=chat_id,
             text="איך תרצה/י לפתור את התרגיל?",
             reply_markup=keyboard,
         )
+        _track_sent_message(chat_id, sent)
         return
     if action == "new":
         await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _delete_callback_message(query)
         text = solve_mode_picker_intro_hebrew()
         keyboard = build_solve_mode_keyboard()
@@ -939,7 +1089,6 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer()
             return
         await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _delete_callback_message(query)
         prompt = select_solve_mode(chat_id, mode)
         await _send_text_safe(context, chat_id, prompt)
@@ -950,7 +1099,6 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer()
             return
         await query.answer()
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         await _delete_callback_message(query)
         pending = consume_pending_bank_exercise(chat_id)
         if pending is None:
@@ -959,12 +1107,18 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             return
         _exercise_id, bank_extracted = pending
-        normalized = finalize_beam_extraction(copy.deepcopy(bank_extracted))
+        if int(_exercise_id) == _GENERATED_EXERCISE_ID:
+            if isinstance(bank_extracted, dict):
+                meta = dict(bank_extracted.get("meta") or {})
+                meta.setdefault("source", "exercise_generator")
+                meta["skip_vision_normalize"] = True
+                bank_extracted = {**bank_extracted, "meta": meta}
+        normalized = _bank_extracted_for_solve(bank_extracted)
         try:
             bank_solved = solve_extracted_beam(normalized)
         except Exception:
             bank_solved = {"result": {"reactions_ton": {}}}
-        begin_image_session(chat_id, solve_mode=mode)
+        begin_image_session(chat_id, solve_mode=mode, from_practice=True)
         await deliver_after_draft_approve(
             context,
             chat_id,
@@ -1032,6 +1186,11 @@ async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     action, payload = parsed
     chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
     user_id = telegram_user_id(update)
+    leave_session = get_solution_session(chat_id)
+    if has_practice_chat_trail(chat_id) or (
+        leave_session is not None and leave_session.from_practice
+    ):
+        await cleanup_practice_chat(context, chat_id)
 
     if action in ("menu",):
         await query.answer()
@@ -1046,6 +1205,7 @@ async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if action == "back":
         await query.answer()
         await _delete_callback_message(query)
+        await cleanup_formulas_chat(context, chat_id)
         await _send_main_action_menu(context, chat_id)
         return
 
@@ -1057,36 +1217,42 @@ async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if COUPON_ACCESS_ENABLED and not has_formulas_access(user_id):
             await query.answer("נוסחאות למנויי חבילה בלבד.", show_alert=True)
             await _delete_callback_message(query)
-            await _send_formulas_locked(context, chat_id)
+            await cleanup_formulas_chat(context, chat_id)
+            await _send_content_locked(context, chat_id)
             return
         await query.answer()
         await _delete_callback_message(query)
+        if not has_formulas_chat_trail(chat_id):
+            begin_formulas_chat_trail(chat_id)
         image_path = topic.image_path()
         followup = build_topic_followup_keyboard()
         if image_path is not None:
             try:
                 with image_path.open("rb") as fh:
-                    await context.bot.send_photo(
+                    sent = await context.bot.send_photo(
                         chat_id=chat_id,
                         photo=fh,
                         caption=topic_image_caption_hebrew(topic),
                         reply_markup=followup,
                     )
+                append_formulas_chat_message_id(chat_id, getattr(sent, "message_id", None))
             except Exception:
                 log.exception("Failed sending formula image for %s", topic.topic_id)
-                await context.bot.send_message(
+                sent = await context.bot.send_message(
                     chat_id=chat_id,
                     text=topic_pending_caption_hebrew(topic),
                     reply_markup=followup,
                     parse_mode="Markdown",
                 )
+                append_formulas_chat_message_id(chat_id, getattr(sent, "message_id", None))
         else:
-            await context.bot.send_message(
+            sent = await context.bot.send_message(
                 chat_id=chat_id,
                 text=topic_pending_caption_hebrew(topic),
                 reply_markup=followup,
                 parse_mode="Markdown",
             )
+            append_formulas_chat_message_id(chat_id, getattr(sent, "message_id", None))
         return
 
     await query.answer()
@@ -1120,6 +1286,7 @@ async def cmd_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
     chat_id = telegram_chat_id(update)
+    await _leave_formulas_chat_if_needed(context, chat_id)
     await _send_purchase_menu(
         context, chat_id, message=update.message
     )
@@ -1146,6 +1313,7 @@ async def cmd_formulas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
     chat_id = telegram_chat_id(update)
+    await cleanup_formulas_chat(context, chat_id)
     await _send_formulas_menu(
         context,
         chat_id,
@@ -1558,18 +1726,98 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 
+async def _deliver_generated_exercise(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    user_id: int | None = None,
+) -> None:
+    """מייצר תרגיל חדש מהמחולל, שולח PNG, ומציע מצב פתרון כמו מאגר."""
+    if (
+        COUPON_ACCESS_ENABLED
+        and user_id is not None
+        and not has_practice_access(int(user_id))
+    ):
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        await _send_content_locked(context, chat_id)
+        return
+    try:
+        from exercise_generator.pipeline import generate_exercise
+    except ImportError as exc:
+        log.exception("exercise_generator import failed: %s", exc)
+        await _send_text_safe(
+            context,
+            chat_id,
+            "מחולל התרגילים לא זמין כרגע. נסי/ה שוב מאוחר יותר.",
+        )
+        return
+
+    await cleanup_practice_chat(context, chat_id)
+    await _leave_formulas_chat_if_needed(context, chat_id)
+    begin_practice_chat_trail(chat_id)
+    try:
+        with tempfile.TemporaryDirectory(prefix="exgen_") as td:
+            artifact = generate_exercise(out_dir=Path(td), stem="live")
+            png_path = artifact.png_path
+            extracted = copy.deepcopy(artifact.extracted)
+            meta = dict(extracted.get("meta") or {})
+            meta["source"] = "exercise_generator"
+            meta["skip_vision_normalize"] = True
+            extracted["meta"] = meta
+            with png_path.open("rb") as photo:
+                sent = await context.bot.send_photo(chat_id=chat_id, photo=photo)
+            _track_sent_message(chat_id, sent)
+    except Exception as exc:
+        log.exception("Failed to generate/send exercise chat=%s: %s", chat_id, exc)
+        await _send_text_safe(
+            context,
+            chat_id,
+            "לא הצלחתי להכין תרגיל כרגע. נסי/ה שוב בעוד רגע.",
+        )
+        return
+
+    set_pending_bank_exercise(chat_id, _GENERATED_EXERCISE_ID, extracted)
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text="איך תרצה/י לפתור את התרגיל?",
+        reply_markup=build_bank_solve_mode_keyboard(),
+    )
+    _track_sent_message(chat_id, sent)
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
     chat_id = telegram_chat_id(update)
     text = update.message.text.strip()
 
+    if text.upper() == _GENERATED_EXERCISE_TRIGGER:
+        await _deliver_generated_exercise(
+            context,
+            chat_id,
+            user_id=telegram_user_id(update),
+        )
+        return
+
     if text == _PERSISTENT_ASSISTANT_LABEL:
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
         prompt = select_solve_mode(chat_id, SolveMode.ASSISTANT)
         await _reply_text_safe(update.message, prompt)
         return
 
     if text == _PERSISTENT_MAIN_LABEL:
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
         await _send_main_action_menu(
             context,
             chat_id,
@@ -1632,12 +1880,25 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if text == _PERSISTENT_COUPON_LABEL:
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
         await cmd_coupon(update, context)
         return
     if text == _PERSISTENT_QUOTA_LABEL:
+        await _leave_formulas_chat_if_needed(context, chat_id)
         await cmd_quota(update, context)
         return
     if text == _PERSISTENT_FORMULAS_LABEL:
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+        await cleanup_formulas_chat(context, chat_id)
         await _send_formulas_menu(
             context,
             chat_id,
@@ -1646,6 +1907,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     if text == _PERSISTENT_BUG_REPORT_LABEL:
+        await _leave_formulas_chat_if_needed(context, chat_id)
         await _prompt_bug_report(update.message)
         return
 
@@ -1799,6 +2061,13 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reload_system_instruction_if_changed()
 
     log.info("Image from chat %s", chat_id)
+
+    leave_session = get_solution_session(chat_id)
+    if has_practice_chat_trail(chat_id) or (
+        leave_session is not None and leave_session.from_practice
+    ):
+        await cleanup_practice_chat(context, chat_id)
+    await _leave_formulas_chat_if_needed(context, chat_id)
 
     pending_mode = consume_pending_solve_mode(chat_id)
     solve_mode = pending_mode or SolveMode.NOTEBOOK

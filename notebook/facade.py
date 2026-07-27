@@ -2285,33 +2285,38 @@ def _distributed_moment_terms_about(
     w: float, x1: float, x2: float, x_ref: float
 ) -> List[Tuple[float, str]]:
     """איברי מומנט מעומס מפורס — מפוצל לשניים אם חוצה את נקודת הסימון."""
+    from core.distributed_moments import distributed_moment_segments_about
+
     out: List[Tuple[float, str]] = []
-    xa = float(x1)
-    xb = float(x2)
-    if xb < xa:
-        xa, xb = xb, xa
-    span = xb - xa
-    if abs(w) < 1e-9 or span <= 1e-9:
-        return out
-    xref = float(x_ref)
-    eps = 1e-9
-
-    def _segment(seg_a: float, seg_b: float) -> None:
-        seg_span = seg_b - seg_a
-        if seg_span <= eps:
-            return
-        resultant = w * seg_span
-        arm = (seg_a + seg_b) / 2.0 - xref
-        term = _moment_term_string(resultant, arm)
+    for seg in distributed_moment_segments_about(w, x1, x2, x_ref):
+        term = _moment_term_string(seg.force, seg.arm)
         if term:
-            out.append((seg_a, term))
-
-    if xa < xref - eps and xb > xref + eps:
-        _segment(xa, xref)
-        _segment(xref, xb)
-    else:
-        _segment(xa, xb)
+            out.append((seg.x1, term))
     return out
+
+
+def _udl_split_note_html_for_pivot(loads: List[dict], x_ref: float) -> str:
+    """משפט קצר לפני ΣM כשמפורס חוצה את נקודת הסימון."""
+    from core.distributed_moments import (
+        UDL_SPLIT_ABOUT_PIVOT_HE,
+        distributed_crosses_pivot,
+    )
+
+    for ld in loads:
+        if not isinstance(ld, dict) or ld.get("type") != "distributed":
+            continue
+        try:
+            x1 = float(ld.get("x1", 0.0) or 0.0)
+            x2 = float(ld.get("x2", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if distributed_crosses_pivot(x1, x2, x_ref):
+            note = html_lib.escape(UDL_SPLIT_ABOUT_PIVOT_HE)
+            return (
+                f'<div style="direction:rtl;text-align:right;font-size:12px;'
+                f'line-height:1.35;margin:0 0 4px 0;color:#222;">{note}</div>'
+            )
+    return ""
 
 
 def _notebook_calc_stub_under_beam(
@@ -2511,6 +2516,9 @@ def _notebook_calc_stub_under_beam(
     ]
     if support_mode == "cantilever" and cantilever_result is not None:
         if mg_calc:
+            note_wall = _udl_split_note_html_for_pivot(loads, 0.0)
+            if note_wall:
+                calc_rows.append(note_wall)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     mg_line,
@@ -2521,6 +2529,9 @@ def _notebook_calc_stub_under_beam(
                 )
             )
         if ay_calc:
+            note_tip = _udl_split_note_html_for_pivot(loads, float(L))
+            if note_tip:
+                calc_rows.append(note_tip)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     ay_header_line,
@@ -2532,6 +2543,9 @@ def _notebook_calc_stub_under_beam(
             )
     else:
         if ma_calc:
+            note_a = _udl_split_note_html_for_pivot(loads, float(ra_pos))
+            if note_a:
+                calc_rows.append(note_a)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     ma_line,
@@ -2542,6 +2556,9 @@ def _notebook_calc_stub_under_beam(
                 )
             )
         if support_mode == "supports" and mb_calc:
+            note_b = _udl_split_note_html_for_pivot(loads, float(rb_pos))
+            if note_b:
+                calc_rows.append(note_b)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     mb_line,
