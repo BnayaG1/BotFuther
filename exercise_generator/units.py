@@ -14,19 +14,18 @@ def kn_to_ton(kn: float) -> float:
 
 
 def format_force_hebrew(ton: float) -> str:
-    """שתי שורות: kN ואז טון בסוגריים."""
-    kn = ton_to_kn(ton)
-    return f"{_fmt(kn)} ק\"נ\n({_fmt(ton)} טון)"
+    """מספר + t צמוד (למשל 6t)."""
+    return f"{_fmt(ton)}t"
 
 
 def format_udl_hebrew(ton_per_m: float) -> str:
-    kn = ton_to_kn(ton_per_m)
-    return f"{_fmt(kn)} ק\"נ למ\"א\n({_fmt(ton_per_m)} טון למ\"א)"
+    """מספר + t/m צמוד (למשל 4t/m)."""
+    return f"{_fmt(ton_per_m)}t/m"
 
 
 def format_moment_hebrew(ton_m: float) -> str:
-    kn = ton_to_kn(ton_m)
-    return f"{_fmt(kn)} ק\"נ·מ\n({_fmt(ton_m)} טון·מ)"
+    """מספר + tm צמוד (למשל 3tm)."""
+    return f"{_fmt(ton_m)}tm"
 
 
 def _fmt(value: float) -> str:

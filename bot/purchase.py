@@ -63,7 +63,7 @@ def purchase_menu_intro_hebrew() -> str:
         "בחר/י את החבילה המתאימה.\n"
         "אחרי אישור תקבל/י הוראות תשלום בביט — "
         "לאחר האישור שלנו יישלח אליך קוד קופון.\n\n"
-        "כבר יש לך קוד? לחץ/י «יש לי קוד»."
+        "כבר יש לך קוד? שלח/י אותו כהודעת טקסט לבוט."
     )
 
 
@@ -78,9 +78,6 @@ def build_purchase_menu_keyboard() -> InlineKeyboardMarkup:
                 )
             ]
         )
-    rows.append(
-        [InlineKeyboardButton("יש לי קוד", callback_data="buy:redeem")]
-    )
     rows.append([InlineKeyboardButton("ביטול", callback_data="buy:cancel")])
     return InlineKeyboardMarkup(rows)
 

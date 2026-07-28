@@ -239,7 +239,19 @@ def solve_cantilever_beam(loads: List[dict], L: float) -> Dict[str, Any]:
             positions.extend([x1, x2])
         elif load["type"] == "moment":
             x = float(load["x"])
-            load_moment_about_wall -= float(load["M"])
+            _m = float(load["M"])
+            # M>0 = עם השעון בשרטוט; במחשבון הקורה (Σ בקיר) התרומה היא −M
+            load_moment_about_wall -= _m
+            # #region agent log
+            try:
+                import json as _json, time as _time
+                from pathlib import Path as _Path
+                _p = _Path(__file__).resolve().parents[1] / "debug-1522a6.log"
+                with _p.open("a", encoding="utf-8") as _f:
+                    _f.write(_json.dumps({"sessionId":"1522a6","runId":"post-fix","hypothesisId":"D","location":"statics_calculator.py:solve_cantilever","message":"calculator moment contrib","data":{"M":_m,"contrib_to_wall_sum":-_m,"x":x},"timestamp":int(_time.time()*1000)})+"\n")
+            except Exception:
+                pass
+            # #endregion
             positions.append(x)
         elif load["type"] == "inclined":
             x = float(load["x"])

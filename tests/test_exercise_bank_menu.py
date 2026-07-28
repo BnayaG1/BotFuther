@@ -22,27 +22,7 @@ def test_start_keyboard_has_give_exercise_but_no_add_button():
     assert not any(label == "➕" for label in labels)
 
 
-@pytest.mark.anyio
-async def test_give_exercise_shows_toast_when_bank_empty():
-    update = MagicMock(spec=Update)
-    query = MagicMock(spec=CallbackQuery)
-    query.data = "menu:give_exercise"
-    query.answer = AsyncMock()
-    query.message = MagicMock(spec=Message)
-    update.callback_query = query
-    update.effective_user = User(id=801, is_bot=False, first_name="T")
-
-    context = MagicMock()
-
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_practice_access", return_value=True), \
-        patch.object(handlers, "count_exercises", return_value=0):
-        await handlers.on_menu_callback(update, context)
-
-    query.answer.assert_awaited_once()
-    args, kwargs = query.answer.await_args
-    assert "אין עדיין תרגילים" in args[0]
-    assert kwargs.get("show_alert") is True
+from bot.access import AccessSource, ImageAccessResult, ImageAccessStatus
 
 
 @pytest.mark.anyio
@@ -61,56 +41,37 @@ async def test_give_exercise_locked_without_access():
     context = MagicMock()
     context.bot.send_message = AsyncMock()
 
+    denied = ImageAccessResult(
+        status=ImageAccessStatus.DAILY_LIMIT,
+        access_source=AccessSource.RESTRICTED,
+        feature="practice",
+        cooldown_remaining_sec=3600,
+        window_reset_sec=3600,
+    )
+
     with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_practice_access", return_value=False), \
-        patch.object(handlers, "count_exercises", return_value=3) as mock_count, \
-        patch.object(handlers, "pick_next_exercise_for_user") as mock_pick:
+        patch.object(handlers, "check_practice_feature_access", return_value=denied), \
+        patch("exercise_generator.pipeline.generate_exercise") as mock_gen:
         await handlers.on_menu_callback(update, context)
 
     query.answer.assert_awaited_once_with()
     query.message.delete.assert_awaited_once()
-    mock_count.assert_not_called()
-    mock_pick.assert_not_called()
+    mock_gen.assert_not_called()
     context.bot.send_message.assert_awaited()
-    text = context.bot.send_message.await_args.kwargs.get("text") or ""
-    if not text and context.bot.send_message.await_args.args:
-        text = context.bot.send_message.await_args.args[1] if len(context.bot.send_message.await_args.args) > 1 else ""
-    # send_message may use kwargs chat_id/text
     kwargs = context.bot.send_message.await_args.kwargs
+    text = kwargs.get("text") or ""
+    if not text and context.bot.send_message.await_args.args:
+        text = (
+            context.bot.send_message.await_args.args[1]
+            if len(context.bot.send_message.await_args.args) > 1
+            else ""
+        )
     text = kwargs.get("text", text)
-    assert "תרגול" in text or "24" in text
+    assert "תרגול" in text or "יממה" in text
 
 
 @pytest.mark.anyio
-async def test_give_exercise_shows_toast_when_cooldown_active():
-    update = MagicMock(spec=Update)
-    query = MagicMock(spec=CallbackQuery)
-    query.data = "menu:give_exercise"
-    query.answer = AsyncMock()
-    query.message = MagicMock(spec=Message)
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_user = User(id=888, is_bot=False, first_name="T")
-
-    context = MagicMock()
-
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_practice_access", return_value=True), \
-        patch.object(handlers, "count_exercises", return_value=3), \
-        patch.object(handlers, "exercise_bank_cooldown_remaining_sec", return_value=900.0), \
-        patch.object(handlers, "pick_next_exercise_for_user") as mock_pick:
-        await handlers.on_menu_callback(update, context)
-
-    query.answer.assert_awaited_once()
-    args, kwargs = query.answer.await_args
-    assert "דקות" in args[0]
-    assert kwargs.get("show_alert") is True
-    mock_pick.assert_not_called()
-    query.message.delete.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_give_exercise_sends_stored_photo_and_mode_picker():
+async def test_give_exercise_sends_generated_exercise_and_mode_picker(tmp_path):
     chat_id = 99010
     update = MagicMock(spec=Update)
     query = MagicMock(spec=CallbackQuery)
@@ -126,36 +87,46 @@ async def test_give_exercise_sends_stored_photo_and_mode_picker():
     context.bot.send_photo = AsyncMock(return_value=MagicMock(message_id=501))
     context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=502))
 
-    extracted = {"beam": {"L": 6.0, "supports": [], "loads": []}}
+    png = tmp_path / "live.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {"L": 6.0, "supports": [], "loads": []},
+        "meta": {"family": "overhang_stepped_udl", "seed": 1},
+    }
+    fake_art = MagicMock()
+    fake_art.png_path = png
+    fake_art.extracted = extracted
+
     solution_session._pending_bank_exercise.pop(chat_id, None)
     solution_session.discard_practice_chat_trail(chat_id)
 
-    fake_path = MagicMock()
-    fake_path.open = MagicMock()
-    fake_path.open.return_value.__enter__ = MagicMock(return_value=MagicMock())
-    fake_path.open.return_value.__exit__ = MagicMock(return_value=False)
+    ok = ImageAccessResult(
+        status=ImageAccessStatus.OK,
+        access_source=AccessSource.FREE_WINDOW,
+        feature="practice",
+    )
 
     with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_practice_access", return_value=True), \
-        patch.object(handlers, "count_exercises", return_value=3), \
-        patch.object(handlers, "exercise_bank_cooldown_remaining_sec", return_value=None), \
-        patch.object(
-            handlers, "pick_next_exercise_for_user", return_value=(42, extracted)
-        ) as mock_pick, \
-        patch.object(handlers, "get_exercise_image_path", return_value=fake_path) as mock_img, \
-        patch.object(handlers, "render_exercise_problem_png_temp") as mock_render:
+        patch.object(handlers, "check_practice_feature_access", return_value=ok), \
+        patch.object(handlers, "consume_practice_slot", return_value=ok), \
+        patch(
+            "exercise_generator.pipeline.generate_exercise", return_value=fake_art
+        ) as mock_gen:
         await handlers.on_menu_callback(update, context)
 
     query.answer.assert_awaited_once_with()
     query.message.delete.assert_awaited_once()
-    mock_pick.assert_called_once_with(777)
-    mock_img.assert_called_once_with(42)
-    mock_render.assert_not_called()
+    mock_gen.assert_called_once()
     context.bot.send_photo.assert_awaited_once()
     assert context.bot.send_photo.await_args.kwargs["chat_id"] == chat_id
     context.bot.send_message.assert_awaited_once()
     assert "לפתור" in context.bot.send_message.await_args.kwargs["text"]
-    assert solution_session._pending_bank_exercise.get(chat_id) == (42, extracted)
+    pending = solution_session.consume_pending_bank_exercise(chat_id)
+    assert pending is not None
+    assert pending[0] == handlers._GENERATED_EXERCISE_ID
+    assert pending[1]["meta"]["source"] == "exercise_generator"
+    assert pending[1]["meta"]["skip_vision_normalize"] is True
     tracked = solution_session.pop_practice_chat_message_ids(chat_id)
     assert tracked == [501, 502]
 
@@ -184,8 +155,7 @@ async def test_leaving_to_formulas_deletes_practice_chat_messages():
     context.bot.delete_message = AsyncMock()
     context.bot.send_message = AsyncMock()
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_formulas_access", return_value=True):
+    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
         await handlers.on_menu_callback(update, context)
 
     deleted = {
@@ -195,93 +165,6 @@ async def test_leaving_to_formulas_deletes_practice_chat_messages():
     assert deleted == {11, 22}
     assert solution_session._pending_bank_exercise.get(chat_id) is None
     assert not solution_session.has_practice_chat_trail(chat_id)
-
-
-@pytest.mark.anyio
-async def test_give_exercise_falls_back_to_render_when_no_stored_image():
-    chat_id = 99010
-    update = MagicMock(spec=Update)
-    query = MagicMock(spec=CallbackQuery)
-    query.data = "menu:give_exercise"
-    query.answer = AsyncMock()
-    query.message = MagicMock(spec=Message)
-    query.message.chat_id = chat_id
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_user = User(id=777, is_bot=False, first_name="T")
-
-    context = MagicMock()
-    context.bot.send_photo = AsyncMock(return_value=MagicMock(message_id=601))
-    context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=602))
-
-    extracted = {"beam": {"L": 6.0, "supports": [], "loads": []}}
-    solution_session._pending_bank_exercise.pop(chat_id, None)
-    solution_session.discard_practice_chat_trail(chat_id)
-
-    fake_path = MagicMock()
-
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_practice_access", return_value=True), \
-        patch.object(handlers, "count_exercises", return_value=3), \
-        patch.object(handlers, "exercise_bank_cooldown_remaining_sec", return_value=None), \
-        patch.object(
-            handlers, "pick_next_exercise_for_user", return_value=(42, extracted)
-        ) as mock_pick, \
-        patch.object(handlers, "get_exercise_image_path", return_value=None), \
-        patch.object(handlers, "render_exercise_problem_png_temp", return_value=fake_path):
-        await handlers.on_menu_callback(update, context)
-
-    query.answer.assert_awaited_once_with()
-    query.message.delete.assert_awaited_once()
-    mock_pick.assert_called_once_with(777)
-    context.bot.send_photo.assert_awaited_once()
-    assert context.bot.send_photo.await_args.kwargs["chat_id"] == chat_id
-    context.bot.send_message.assert_awaited_once()
-    assert "לפתור" in context.bot.send_message.await_args.kwargs["text"]
-    assert solution_session._pending_bank_exercise.get(chat_id) == (42, extracted)
-    fake_path.unlink.assert_called_once_with(missing_ok=True)
-    solution_session.discard_practice_chat_trail(chat_id)
-
-
-@pytest.mark.anyio
-async def test_give_exercise_falls_back_to_text_when_render_fails():
-    chat_id = 99011
-    update = MagicMock(spec=Update)
-    query = MagicMock(spec=CallbackQuery)
-    query.data = "menu:give_exercise"
-    query.answer = AsyncMock()
-    query.message = MagicMock(spec=Message)
-    query.message.chat_id = chat_id
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_user = User(id=778, is_bot=False, first_name="T")
-
-    context = MagicMock()
-    context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=701))
-
-    extracted = {"beam": {"L": 6.0, "supports": [], "loads": []}}
-    solution_session._pending_bank_exercise.pop(chat_id, None)
-    solution_session.discard_practice_chat_trail(chat_id)
-
-    mock_send_text = AsyncMock(return_value=MagicMock(message_id=700))
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_practice_access", return_value=True), \
-        patch.object(handlers, "count_exercises", return_value=1), \
-        patch.object(handlers, "exercise_bank_cooldown_remaining_sec", return_value=None), \
-        patch.object(
-            handlers, "pick_next_exercise_for_user", return_value=(7, extracted)
-        ), \
-        patch.object(handlers, "get_exercise_image_path", return_value=None), \
-        patch.object(handlers, "render_exercise_problem_png_temp", return_value=None), \
-        patch.object(handlers, "_send_text_safe", new=mock_send_text):
-        await handlers.on_menu_callback(update, context)
-
-    query.message.delete.assert_awaited_once()
-    mock_send_text.assert_awaited()
-    assert context.bot.send_message.await_count == 1
-    assert "לפתור" in context.bot.send_message.await_args.kwargs["text"]
-    assert solution_session._pending_bank_exercise.get(chat_id) == (7, extracted)
-    solution_session.discard_practice_chat_trail(chat_id)
 
 
 @pytest.mark.anyio
@@ -348,59 +231,7 @@ async def test_bank_mode_choice_without_pending_exercise_sends_hint():
 
 
 @pytest.mark.anyio
-async def test_bnaya_g_secret_sets_pending_mode_and_prompts():
-    chat_id = 88040
-    update = MagicMock(spec=Update)
-    update.message = MagicMock(spec=Message)
-    update.message.text = handlers._BANK_ADD_SECRET
-    update.message.reply_text = AsyncMock()
-    update.effective_chat = Chat(id=chat_id, type="private")
-    update.effective_user = User(id=1, is_bot=False, first_name="T")
-
-    context = MagicMock()
-    solution_session._pending_solve_mode.pop(chat_id, None)
-
-    with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
-        with patch.object(handlers, "has_active_assistant_progress", return_value=False):
-            await handlers.on_text(update, context)
-
-    assert solution_session._pending_solve_mode.get(chat_id) == SolveMode.ADD_TO_BANK
-    update.message.reply_text.assert_awaited_once()
-    assert "למאגר" in update.message.reply_text.await_args.args[0]
-
-
-@pytest.mark.anyio
-async def test_on_image_add_to_bank_skips_quota_consumption():
-    chat_id = 88041
-    solution_session.set_pending_solve_mode(chat_id, SolveMode.ADD_TO_BANK)
-
-    update = MagicMock(spec=Update)
-    update.message = MagicMock(spec=Message)
-    update.message.message_id = 5
-    update.message.reply_text = AsyncMock()
-    update.effective_chat = Chat(id=chat_id, type="private")
-    update.effective_user = User(id=5, is_bot=False, first_name="T")
-
-    context = MagicMock()
-
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-        with patch.object(handlers, "consume_image_slot") as mock_consume:
-            with patch.object(handlers, "begin_image_session") as mock_begin:
-                mock_begin.return_value = MagicMock()
-                with patch.object(
-                    handlers,
-                    "save_message_image_to_temp",
-                    side_effect=RuntimeError("stop"),
-                ):
-                    with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
-                        await handlers.on_image(update, context)
-
-    mock_consume.assert_not_called()
-    mock_begin.assert_called_once_with(chat_id, solve_mode=SolveMode.ADD_TO_BANK)
-
-
-@pytest.mark.anyio
-async def test_on_image_notebook_mode_still_consumes_quota():
+async def test_on_image_notebook_mode_checks_solve_access_without_consume():
     chat_id = 88042
     solution_session._pending_solve_mode.pop(chat_id, None)
 
@@ -413,18 +244,14 @@ async def test_on_image_notebook_mode_still_consumes_quota():
 
     context = MagicMock()
 
-    from bot.access import AccessSource, ImageAccessResult, ImageAccessStatus
-
     ok_result = ImageAccessResult(
         status=ImageAccessStatus.OK,
-        tier_limit=2,
-        images_used=1,
-        images_remaining=1,
-        access_source=AccessSource.TRIAL,
+        access_source=AccessSource.FREE_WINDOW,
+        feature="solve",
     )
 
     with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-        with patch.object(handlers, "consume_image_slot", return_value=ok_result) as mock_consume:
+        with patch.object(handlers, "check_solve_access", return_value=ok_result) as mock_check:
             with patch.object(handlers, "begin_image_session") as mock_begin:
                 mock_begin.return_value = MagicMock()
                 with patch.object(
@@ -433,7 +260,8 @@ async def test_on_image_notebook_mode_still_consumes_quota():
                     side_effect=RuntimeError("stop"),
                 ):
                     with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
-                        await handlers.on_image(update, context)
+                        with patch.object(handlers, "telegram_user_id", return_value=6):
+                            await handlers.on_image(update, context)
 
-    mock_consume.assert_called_once()
+    mock_check.assert_called_once()
     mock_begin.assert_called_once_with(chat_id, solve_mode=SolveMode.NOTEBOOK)

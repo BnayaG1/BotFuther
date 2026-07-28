@@ -10,7 +10,6 @@ from telegram import Chat, Message, Update, User
 from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 import bot.handlers as handlers
-import bot.solution_session as solution_session
 from bot.solution_session import SolveMode
 
 
@@ -48,15 +47,12 @@ async def test_on_text_quota_button_triggers_quota_flow():
 
     context = MagicMock()
 
-    fake_access_result = SimpleNamespace(status="OK")
-
     with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-        with patch.object(handlers, "check_image_access", return_value=fake_access_result):
-            with patch.object(handlers, "quota_status_reply_hebrew", return_value="quota reply"):
-                with patch.object(handlers, "telegram_user_id", return_value=222):
-                    with patch.object(handlers, "handle_draft_text") as mock_draft:
-                        await handlers.on_text(update, context)
-                        mock_draft.assert_not_called()
+        with patch.object(handlers, "quota_status_for_user", return_value="quota reply"):
+            with patch.object(handlers, "telegram_user_id", return_value=222):
+                with patch.object(handlers, "handle_draft_text") as mock_draft:
+                    await handlers.on_text(update, context)
+                    mock_draft.assert_not_called()
 
     update.message.reply_text.assert_awaited_once()
     args, kwargs = update.message.reply_text.await_args
@@ -86,11 +82,13 @@ async def test_on_text_assistant_button_sets_pending_mode():
     chat_id = 999003
 
     with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
-        with patch.object(handlers, "has_active_assistant_progress", return_value=False):
-            with patch.object(
-                handlers, "select_solve_mode", return_value="שלח/י תמונה"
-            ) as mock_select:
-                await handlers.on_text(update, context)
+        with patch.object(handlers, "telegram_user_id", return_value=333):
+            with patch.object(handlers, "COUPON_ACCESS_ENABLED", False):
+                with patch.object(handlers, "has_active_assistant_progress", return_value=False):
+                    with patch.object(
+                        handlers, "select_solve_mode", return_value="שלח/י תמונה"
+                    ) as mock_select:
+                        await handlers.on_text(update, context)
 
     mock_select.assert_called_once_with(chat_id, SolveMode.ASSISTANT)
     update.message.reply_text.assert_awaited_once()
@@ -102,7 +100,7 @@ async def test_on_text_assistant_button_sets_pending_mode():
 def test_persistent_keyboard_excludes_add_exercise_plus_button():
     kb = handlers.build_persistent_keyboard()
     texts = [btn.text for row in kb.keyboard for btn in row]
-    assert handlers._BANK_ADD_SECRET not in texts
+    assert "BnayaG" not in texts
     assert "➕" not in texts
     assert not any("הוסף תרגיל למאגר" in t for t in texts)
 
@@ -112,6 +110,8 @@ def test_persistent_keyboard_includes_main_button():
     texts = [btn.text for row in kb.keyboard for btn in row]
     assert handlers._PERSISTENT_MAIN_LABEL in texts
     assert "ראשי" in texts
+    assert handlers._PERSISTENT_QUOTA_LABEL not in texts
+    assert handlers._PERSISTENT_ASSISTANT_LABEL not in texts
 
 
 @pytest.mark.anyio
@@ -119,45 +119,28 @@ async def test_on_text_main_button_shows_start_menu():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
     update.message.text = handlers._PERSISTENT_MAIN_LABEL
+    update.message.message_id = 50
     update.effective_chat = Chat(id=999005, type="private")
     update.effective_user = User(id=777, is_bot=False, first_name="T")
     update.message.reply_text = AsyncMock()
 
     context = MagicMock()
+    context.bot.send_message = AsyncMock()
+    context.bot.delete_message = AsyncMock()
     chat_id = 999005
 
     with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
         with patch.object(handlers, "has_active_assistant_progress", return_value=False):
-            await handlers.on_text(update, context)
+            with patch.object(handlers, "wipe_chat_after_anchor", new_callable=AsyncMock) as mock_wipe:
+                await handlers.on_text(update, context)
 
-    update.message.reply_text.assert_awaited_once()
-    args, kwargs = update.message.reply_text.await_args
-    assert args[0] == "בחר/י פעולה:"
+    mock_wipe.assert_awaited_once()
+    assert mock_wipe.await_args.kwargs.get("through_message_id") == 50
+    context.bot.send_message.assert_awaited_once()
+    args, kwargs = context.bot.send_message.await_args
+    assert kwargs.get("text") == "בחר/י פעולה:" or (args and args[0] == chat_id)
+    assert kwargs.get("text") == "בחר/י פעולה:"
     assert isinstance(kwargs.get("reply_markup"), InlineKeyboardMarkup)
-
-
-@pytest.mark.anyio
-async def test_on_text_bnaya_g_secret_sets_pending_mode():
-    update = MagicMock(spec=Update)
-    update.message = MagicMock(spec=Message)
-    update.message.text = handlers._BANK_ADD_SECRET
-    update.effective_chat = Chat(id=999004, type="private")
-    update.effective_user = User(id=666, is_bot=False, first_name="T")
-    update.message.reply_text = AsyncMock()
-
-    context = MagicMock()
-    chat_id = 999004
-    solution_session._pending_solve_mode.pop(chat_id, None)
-
-    with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
-        with patch.object(handlers, "has_active_assistant_progress", return_value=False):
-            await handlers.on_text(update, context)
-
-    assert solution_session._pending_solve_mode.get(chat_id) == SolveMode.ADD_TO_BANK
-    update.message.reply_text.assert_awaited_once()
-    args, kwargs = update.message.reply_text.await_args
-    assert "למאגר" in args[0]
-    assert isinstance(kwargs.get("reply_markup"), ReplyKeyboardMarkup)
 
 
 def test_persistent_keyboard_never_removed_in_handlers_module():

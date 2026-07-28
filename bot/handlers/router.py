@@ -27,24 +27,23 @@ from bot.config import (
     ADMIN_USER_IDS,
     BOT_DISPLAY_NAME,
     COUPON_ACCESS_ENABLED,
-    FREE_TRIAL_IMAGES,
     IMAGE_ONLY_TEXT_REPLY,
     VISION_ASYNC_ENABLED,
 )
 from bot.access import (
     ImageAccessStatus,
-    check_image_access,
-    consume_image_slot,
+    check_practice_feature_access,
+    check_solve_access,
+    consume_practice_slot,
+    consume_solve_slot,
     coupon_prompt_text_hebrew,
     create_purchase_request,
     ensure_user_first_seen,
     has_active_coupon_access,
-    has_formulas_access,
-    has_practice_access,
     image_access_reply_hebrew,
     looks_like_coupon_code,
     ping_reply_hebrew,
-    quota_status_reply_hebrew,
+    quota_status_for_user,
     redeem_coupon,
     redeem_reply_hebrew,
 )
@@ -106,27 +105,19 @@ from bot.draft_keyboard import (
     parse_draft_callback,
     should_open_type_picker_on_direction_click,
 )
-from bot.notebook_render import render_exercise_problem_png_temp, render_notebook_png_temp
+from bot.notebook_render import render_notebook_png_temp
 from bot.gemini_chat import friendly_gemini_error
 from bot.solve_mode import (
     build_bank_solve_mode_keyboard,
-    build_solve_mode_keyboard,
     parse_bank_mode_action,
     parse_menu_mode_action,
     select_solve_mode,
-    solve_mode_picker_intro_hebrew,
 )
 from personal_assistant.runtime import (
     deliver_after_draft_approve,
     handle_assistant_action,
     has_active_assistant_progress,
     parse_assistant_callback,
-)
-from bot.exercise_bank import (
-    count_exercises,
-    exercise_bank_cooldown_remaining_sec,
-    get_exercise_image_path,
-    pick_next_exercise_for_user,
 )
 from bot.solution_check import solve_extracted_beam
 from bot.solution_session import (
@@ -140,7 +131,10 @@ from bot.solution_session import (
     clear_pending_bank_exercise,
     consume_pending_bank_exercise,
     consume_pending_solve_mode,
+    discard_formulas_chat_trail,
+    discard_practice_chat_trail,
     end_practice_session,
+    get_chat_anchor_message_id,
     get_solution_session,
     has_formulas_chat_trail,
     has_practice_chat_trail,
@@ -148,6 +142,7 @@ from bot.solution_session import (
     pop_formulas_chat_message_ids,
     pop_practice_chat_message_ids,
     reset_user_session,
+    set_chat_anchor_message_id,
     set_pending_bank_exercise,
     set_pending_bank_submission_image,
 )
@@ -197,7 +192,6 @@ _BUG_REPORT_FORCE_REPLY = ForceReply(
 
 _BUG_REPORT_CANCEL = "ביטול דיווח"
 _PERSISTENT_ASSISTANT_LABEL = "מדריך לפתרון"
-_BANK_ADD_SECRET = "BnayaG"
 # קיצור זמני: שליחת אות B מייצרת תרגיל מהמחולל ושולחת אותו
 _GENERATED_EXERCISE_TRIGGER = "B"
 _GENERATED_EXERCISE_ID = 0
@@ -221,7 +215,7 @@ _PERSISTENT_COUPON_LABEL = "קופון"
 _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
 _START_INTRO_LABEL = "מבוא"
-_START_SEND_IMAGE_LABEL = "פתרון מלא"
+_START_SEND_IMAGE_LABEL = "פתרון לתרגיל"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
 _START_REDEEM_COUPON_LABEL = "הזנת קוד קופון"
 _START_PURCHASE_LABEL = "רכישת חבילה"
@@ -359,13 +353,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = build_start_keyboard()
     try:
         # שולחים את המקלדת הקבועה (התפריט הזמין תמיד) עם הודעת הפתיחה.
-        await update.message.reply_text(
+        welcome = await update.message.reply_text(
             text, reply_markup=build_persistent_keyboard(), parse_mode="Markdown"
         )
     except BadRequest as exc:
         if "parse entities" not in str(exc).lower():
             raise
-        await update.message.reply_text(text, reply_markup=build_persistent_keyboard())
+        welcome = await update.message.reply_text(
+            text, reply_markup=build_persistent_keyboard()
+        )
+    set_chat_anchor_message_id(chat_id, getattr(welcome, "message_id", None))
     # תפריט כפתורים Inline (לא "מקלדת למטה").
     await update.message.reply_text("בחר/י פעולה:", reply_markup=keyboard)
 
@@ -374,8 +371,8 @@ def build_start_welcome_text() -> str:
     return (
         "היי, אני שמח שהגעת לכאן. בניתי את הבוט הזה כדי לעזור לנו לעבור את תרגילי "
         "הסטטיקה קצת יותר בקלות, בלי להיתקע שעות על אותה שאלה.\n\n"
-        "השימוש בבוט פשוט: אפשר להעלות תמונה של תרגיל שאתה עובד עליו, או לבחור תרגיל "
-        "מתוך המאגר המובנה שלי, שם הנתונים כבר מוגדרים. בכל מקרה, אתה יכול לבחור בין "
+        "השימוש בבוט פשוט: אפשר להעלות תמונה של תרגיל שאתה עובד עליו, או לבחור "
+        "«תרגול» ולקבל תרגיל מוכן, שם הנתונים כבר מוגדרים. בכל מקרה, אתה יכול לבחור בין "
         "פתרון מחברת מלא לבין ליווי צמוד של מדריך. המדריך הזה מלווה אותך "
         "צעד-צעד עם כפתורים נוחים ומסביר את הדרך, ובנוסף יש לך אופציה נגישה לשלוף "
         "נוסחאות ספציפיות בהתאם למה שאתה צריך באותו רגע.\n\n"
@@ -394,9 +391,6 @@ def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
     if COUPON_ACCESS_ENABLED:
         rows.append(
             [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")]
-        )
-        rows.append(
-            [InlineKeyboardButton("יש לי קוד", callback_data="buy:redeem")]
         )
     return InlineKeyboardMarkup(rows)
 
@@ -424,9 +418,6 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
     )
     if COUPON_ACCESS_ENABLED:
         rows.append(
-            [InlineKeyboardButton(_START_REDEEM_COUPON_LABEL, callback_data="buy:redeem")]
-        )
-        rows.append(
             [InlineKeyboardButton(_START_PURCHASE_LABEL, callback_data="menu:coupon")]
         )
     return InlineKeyboardMarkup(rows)
@@ -434,9 +425,8 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
 
 def build_persistent_keyboard() -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(_PERSISTENT_FORMULAS_LABEL), KeyboardButton(_PERSISTENT_QUOTA_LABEL)],
-        [KeyboardButton(_PERSISTENT_COUPON_LABEL), KeyboardButton(_PERSISTENT_ASSISTANT_LABEL)],
-        [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_MAIN_LABEL)],
+        [KeyboardButton(_PERSISTENT_MAIN_LABEL)],
+        [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_FORMULAS_LABEL)],
     ]
     return ReplyKeyboardMarkup(
         rows,
@@ -626,16 +616,8 @@ async def _send_formulas_menu(
     message=None,
     edit_message=None,
 ) -> None:
-    """מציג תפריט נוסחאות לקופון פעיל או בתוך 24ש' ראשונות; אחרת נעילה."""
-    uid = int(user_id) if user_id is not None else None
-    if COUPON_ACCESS_ENABLED and (uid is None or not has_formulas_access(uid)):
-        await _send_content_locked(
-            context,
-            chat_id,
-            message=message,
-            edit_message=edit_message,
-        )
-        return
+    """מציג תפריט נוסחאות — פתוח תמיד."""
+    _ = user_id
 
     if not has_formulas_chat_trail(chat_id):
         begin_formulas_chat_trail(chat_id)
@@ -785,6 +767,40 @@ async def cleanup_practice_chat(
             pass
         clear_assistant_prev_stack(chat_id)
         end_practice_session(chat_id)
+
+
+_CHAT_WIPE_MAX_MESSAGES = 400
+
+
+async def wipe_chat_after_anchor(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    through_message_id: int | None,
+) -> None:
+    """מוחק את כל ההודעות אחרי הודעת הבוט הראשונה (כולל through_message_id)."""
+    anchor = get_chat_anchor_message_id(chat_id)
+    if anchor is None or through_message_id is None:
+        await cleanup_practice_chat(context, chat_id)
+        await cleanup_formulas_chat(context, chat_id)
+        reset_user_session(chat_id)
+        return
+
+    start_id = int(anchor) + 1
+    end_id = int(through_message_id)
+    if end_id >= start_id:
+        if end_id - start_id + 1 > _CHAT_WIPE_MAX_MESSAGES:
+            start_id = end_id - _CHAT_WIPE_MAX_MESSAGES + 1
+        for mid in range(start_id, end_id + 1):
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except BadRequest:
+                pass
+
+    # מנקים מצב מקומי — ההודעות כבר נמחקו מהצ'אט
+    discard_practice_chat_trail(chat_id)
+    discard_formulas_chat_trail(chat_id)
+    reset_user_session(chat_id)
 
 
 def _track_sent_message(chat_id: int, sent: object | None) -> None:
@@ -992,102 +1008,55 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _send_intro_opening(context, chat_id)
         return
     if action == "give_exercise":
-        user_id = telegram_user_id(update)
-        if COUPON_ACCESS_ENABLED and not has_practice_access(user_id):
-            await query.answer()
-            await _delete_callback_message(query)
-            await cleanup_practice_chat(context, chat_id)
-            await _leave_formulas_chat_if_needed(context, chat_id)
-            await _send_content_locked(context, chat_id)
-            return
-        if count_exercises() <= 0:
-            await query.answer("אין עדיין תרגילים מוכנים במאגר.", show_alert=True)
-            return
-        cool = exercise_bank_cooldown_remaining_sec(user_id)
-        if cool is not None:
-            mins = max(1, int((cool + 59) // 60))
-            await query.answer(
-                f"אפשר לקבל תרגיל נוסף בעוד כ-{mins} דקות.",
-                show_alert=True,
-            )
-            return
         await query.answer()
         await _delete_callback_message(query)
-        await cleanup_practice_chat(context, chat_id)
-        begin_practice_chat_trail(chat_id)
-        picked = pick_next_exercise_for_user(user_id)
-        if picked is None:
-            await _send_text_safe(context, chat_id, "אין עדיין תרגילים מוכנים במאגר.")
-            return
-        exercise_id, extracted = picked
-        stored_image = get_exercise_image_path(exercise_id)
-        photo_sent = False
-        if stored_image is not None:
-            try:
-                with stored_image.open("rb") as photo:
-                    sent = await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=photo,
-                    )
-                _track_sent_message(chat_id, sent)
-                photo_sent = True
-            except Exception as exc:
-                log.warning(
-                    "Failed to send stored exercise photo chat=%s id=%s: %s",
-                    chat_id,
-                    exercise_id,
-                    exc,
-                )
-        if not photo_sent:
-            problem_path = render_exercise_problem_png_temp(extracted)
-            if problem_path is not None:
-                try:
-                    with problem_path.open("rb") as photo:
-                        sent = await context.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=photo,
-                        )
-                    _track_sent_message(chat_id, sent)
-                    photo_sent = True
-                except Exception as exc:
-                    log.warning(
-                        "Failed to send exercise photo chat=%s: %s", chat_id, exc
-                    )
-                finally:
-                    problem_path.unlink(missing_ok=True)
-        if not photo_sent:
-            from bot.draft_format import extracted_to_draft_text
-
-            draft_lines = extracted_to_draft_text(extracted).split("\n")
-            data_text = "\n".join(draft_lines[2 : draft_lines.index("---")]).strip()
-            sent = await _send_text_safe(context, chat_id, data_text)
-            _track_sent_message(chat_id, sent)
-        set_pending_bank_exercise(chat_id, exercise_id, extracted)
-        keyboard = build_bank_solve_mode_keyboard()
-        sent = await context.bot.send_message(
-            chat_id=chat_id,
-            text="איך תרצה/י לפתור את התרגיל?",
-            reply_markup=keyboard,
+        await _deliver_generated_exercise(
+            context,
+            chat_id,
+            user_id=telegram_user_id(update),
         )
-        _track_sent_message(chat_id, sent)
         return
     if action == "new":
+        if COUPON_ACCESS_ENABLED:
+            access = check_solve_access(telegram_user_id(update))
+            if access.status != ImageAccessStatus.OK:
+                await query.answer()
+                await _delete_callback_message(query)
+                reply_markup = None
+                if access.status == ImageAccessStatus.DAILY_LIMIT:
+                    reply_markup = build_upgrade_options_keyboard()
+                await _send_text_safe(
+                    context,
+                    chat_id,
+                    image_access_reply_hebrew(access),
+                    reply_markup=reply_markup,
+                )
+                return
         await query.answer()
         await _delete_callback_message(query)
-        text = solve_mode_picker_intro_hebrew()
-        keyboard = build_solve_mode_keyboard()
-        await _send_text_safe(context, chat_id, text)
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="בחר/י מצב:",
-            reply_markup=keyboard,
-        )
+        select_solve_mode(chat_id, SolveMode.NOTEBOOK)
+        await _send_text_safe(context, chat_id, "שלח את התרגיל שלך")
         return
     if action.startswith("mode:"):
         mode = parse_menu_mode_action(action)
         if mode is None:
             await query.answer()
             return
+        if COUPON_ACCESS_ENABLED:
+            access = check_solve_access(telegram_user_id(update))
+            if access.status != ImageAccessStatus.OK:
+                await query.answer()
+                await _delete_callback_message(query)
+                reply_markup = None
+                if access.status == ImageAccessStatus.DAILY_LIMIT:
+                    reply_markup = build_upgrade_options_keyboard()
+                await _send_text_safe(
+                    context,
+                    chat_id,
+                    image_access_reply_hebrew(access),
+                    reply_markup=reply_markup,
+                )
+                return
         await query.answer()
         await _delete_callback_message(query)
         prompt = select_solve_mode(chat_id, mode)
@@ -1214,12 +1183,6 @@ async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if topic is None:
             await query.answer("נושא לא נמצא.", show_alert=True)
             return
-        if COUPON_ACCESS_ENABLED and not has_formulas_access(user_id):
-            await query.answer("נוסחאות למנויי חבילה בלבד.", show_alert=True)
-            await _delete_callback_message(query)
-            await cleanup_formulas_chat(context, chat_id)
-            await _send_content_locked(context, chat_id)
-            return
         await query.answer()
         await _delete_callback_message(query)
         if not has_formulas_chat_trail(chat_id):
@@ -1301,9 +1264,9 @@ async def cmd_quota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=build_persistent_keyboard(),
         )
         return
-    result = check_image_access(telegram_user_id(update))
+    text = quota_status_for_user(telegram_user_id(update))
     await update.message.reply_text(
-        quota_status_reply_hebrew(result),
+        text,
         reply_markup=build_persistent_keyboard(),
     )
 
@@ -1557,6 +1520,19 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if cb.action == "approve":
         await query.answer()
+        if COUPON_ACCESS_ENABLED:
+            access = consume_solve_slot(telegram_user_id(update))
+            if access.status != ImageAccessStatus.OK:
+                reply_markup = None
+                if access.status == ImageAccessStatus.DAILY_LIMIT:
+                    reply_markup = build_upgrade_options_keyboard()
+                await _send_text_safe(
+                    context,
+                    chat_id,
+                    image_access_reply_hebrew(access),
+                    reply_markup=reply_markup,
+                )
+                return
         # אם נשלחה הודעת שגיאה קודמת אחרי "חשב" — מוחקים אותה לפני ניסיון חישוב נוסף.
         prev_err_mid = get_draft_error_message_id(chat_id)
         if prev_err_mid is not None:
@@ -1733,15 +1709,21 @@ async def _deliver_generated_exercise(
     user_id: int | None = None,
 ) -> None:
     """מייצר תרגיל חדש מהמחולל, שולח PNG, ומציע מצב פתרון כמו מאגר."""
-    if (
-        COUPON_ACCESS_ENABLED
-        and user_id is not None
-        and not has_practice_access(int(user_id))
-    ):
-        await cleanup_practice_chat(context, chat_id)
-        await _leave_formulas_chat_if_needed(context, chat_id)
-        await _send_content_locked(context, chat_id)
-        return
+    if COUPON_ACCESS_ENABLED and user_id is not None:
+        access = check_practice_feature_access(int(user_id))
+        if access.status != ImageAccessStatus.OK:
+            await cleanup_practice_chat(context, chat_id)
+            await _leave_formulas_chat_if_needed(context, chat_id)
+            reply_markup = None
+            if access.status == ImageAccessStatus.DAILY_LIMIT:
+                reply_markup = build_upgrade_options_keyboard()
+            await _send_text_safe(
+                context,
+                chat_id,
+                image_access_reply_hebrew(access),
+                reply_markup=reply_markup,
+            )
+            return
     try:
         from exercise_generator.pipeline import generate_exercise
     except ImportError as exc:
@@ -1777,6 +1759,9 @@ async def _deliver_generated_exercise(
         )
         return
 
+    if COUPON_ACCESS_ENABLED and user_id is not None:
+        consume_practice_slot(int(user_id))
+
     set_pending_bank_exercise(chat_id, _GENERATED_EXERCISE_ID, extracted)
     sent = await context.bot.send_message(
         chat_id=chat_id,
@@ -1807,27 +1792,30 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ):
             await cleanup_practice_chat(context, chat_id)
         await _leave_formulas_chat_if_needed(context, chat_id)
+        if COUPON_ACCESS_ENABLED:
+            access = check_solve_access(telegram_user_id(update))
+            if access.status != ImageAccessStatus.OK:
+                reply_markup = None
+                if access.status == ImageAccessStatus.DAILY_LIMIT:
+                    reply_markup = build_upgrade_options_keyboard()
+                await _reply_text_safe(
+                    update.message,
+                    image_access_reply_hebrew(access),
+                    reply_markup=reply_markup,
+                )
+                return
         prompt = select_solve_mode(chat_id, SolveMode.ASSISTANT)
         await _reply_text_safe(update.message, prompt)
         return
 
     if text == _PERSISTENT_MAIN_LABEL:
-        leave_session = get_solution_session(chat_id)
-        if has_practice_chat_trail(chat_id) or (
-            leave_session is not None and leave_session.from_practice
-        ):
-            await cleanup_practice_chat(context, chat_id)
-        await _leave_formulas_chat_if_needed(context, chat_id)
-        await _send_main_action_menu(
+        through_mid = getattr(update.message, "message_id", None)
+        await wipe_chat_after_anchor(
             context,
             chat_id,
-            message=update.message,
+            through_message_id=int(through_mid) if through_mid is not None else None,
         )
-        return
-
-    if text == _BANK_ADD_SECRET:
-        prompt = select_solve_mode(chat_id, SolveMode.ADD_TO_BANK)
-        await _reply_text_safe(update.message, prompt)
+        await _send_main_action_menu(context, chat_id)
         return
 
     if has_active_assistant_progress(chat_id):
@@ -1947,6 +1935,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if draft_result.handled:
         ref = get_draft_message_ref(chat_id)
         if draft_result.approved:
+            if COUPON_ACCESS_ENABLED:
+                access = consume_solve_slot(telegram_user_id(update))
+                if access.status != ImageAccessStatus.OK:
+                    reply_markup = None
+                    if access.status == ImageAccessStatus.DAILY_LIMIT:
+                        reply_markup = build_upgrade_options_keyboard()
+                    await _reply_text_safe(
+                        update.message,
+                        image_access_reply_hebrew(access),
+                        reply_markup=reply_markup,
+                    )
+                    return
             msg_id = ref[1] if ref else None
             extracted = draft_result.extracted or get_stored_vision_extracted(chat_id) or {}
             await deliver_after_draft_approve(
@@ -2076,7 +2076,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if COUPON_ACCESS_ENABLED and not is_bank_submission:
         user_id = telegram_user_id(update)
-        access = consume_image_slot(user_id)
+        access = check_solve_access(user_id)
         if access.status != ImageAccessStatus.OK:
             log.info(
                 "Image blocked user=%s status=%s",
@@ -2084,10 +2084,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 access.status.value,
             )
             reply_markup = None
-            if access.status in (
-                ImageAccessStatus.TRIAL_EXHAUSTED,
-                ImageAccessStatus.ACCESS_EXPIRED,
-            ):
+            if access.status == ImageAccessStatus.DAILY_LIMIT:
                 reply_markup = build_upgrade_options_keyboard()
             await _reply_text_safe(
                 update.message,
@@ -2101,11 +2098,10 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
             return
         log.info(
-            "Image allowed user=%s used=%s/%s remaining=%s",
+            "Image allowed user=%s phase=%s feature=%s",
             user_id,
-            access.images_used,
-            access.tier_limit,
-            access.images_remaining,
+            getattr(access.phase, "value", None),
+            access.feature,
         )
 
     begin_image_session(chat_id, solve_mode=solve_mode)

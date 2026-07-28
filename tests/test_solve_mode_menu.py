@@ -36,7 +36,7 @@ def test_parse_menu_mode_action():
 
 
 @pytest.mark.anyio
-async def test_menu_new_shows_mode_picker():
+async def test_menu_new_prompts_to_send_exercise():
     update = MagicMock(spec=Update)
     query = MagicMock(spec=CallbackQuery)
     query.data = "menu:new"
@@ -45,25 +45,23 @@ async def test_menu_new_shows_mode_picker():
     query.message.chat_id = 88000
     query.message.delete = AsyncMock()
     update.callback_query = query
+    update.effective_user = User(id=88000, is_bot=False, first_name="T")
 
     context = MagicMock()
     context.bot.send_message = AsyncMock()
-    await handlers.on_menu_callback(update, context)
+    solution_session._pending_solve_mode.pop(88000, None)
+
+    with patch.object(handlers, "COUPON_ACCESS_ENABLED", False):
+        await handlers.on_menu_callback(update, context)
 
     query.answer.assert_awaited_once()
     query.message.delete.assert_awaited_once()
-    assert context.bot.send_message.await_count >= 2
-    intro_text = context.bot.send_message.await_args_list[0].kwargs.get("text")
-    if intro_text is None:
-        intro_text = context.bot.send_message.await_args_list[0].args[1]
-    assert "בוא/י נבחר" in intro_text
-    picker_kwargs = context.bot.send_message.await_args_list[1].kwargs
-    assert picker_kwargs.get("text") == "בחר/י מצב:"
-    kb = picker_kwargs.get("reply_markup")
-    assert isinstance(kb, InlineKeyboardMarkup)
-    callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-    assert "menu:mode:notebook" in callbacks
-    assert "menu:mode:assistant" in callbacks
+    context.bot.send_message.assert_awaited()
+    sent = context.bot.send_message.await_args.kwargs.get("text")
+    if sent is None:
+        sent = context.bot.send_message.await_args.args[1]
+    assert sent == "שלח את התרגיל שלך"
+    assert solution_session._pending_solve_mode.get(88000) == SolveMode.NOTEBOOK
 
 
 @pytest.mark.anyio

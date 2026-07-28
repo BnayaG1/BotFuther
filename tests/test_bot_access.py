@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""בדיקות מכסת תמונות וגישת אורח / קופון."""
+"""בדיקות מצבי גישה: מועדף / מוגבל, פתרון ותרגול."""
 from __future__ import annotations
 
 import pytest
@@ -9,16 +9,12 @@ import bot.config as config
 
 
 @pytest.fixture()
-def trial_db(tmp_path, monkeypatch):
+def access_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_coupons.db"
     monkeypatch.setattr(config, "COUPON_DB_PATH", db_path)
-    monkeypatch.setattr(config, "FREE_TRIAL_IMAGES", 2)
     monkeypatch.setattr(config, "IMAGE_COOLDOWN_SEC", 0.0)
-    monkeypatch.setattr(config, "IMAGE_GUEST_COOLDOWN_SEC", 0.0)
     monkeypatch.setattr(access, "COUPON_DB_PATH", db_path)
-    monkeypatch.setattr(access, "FREE_TRIAL_IMAGES", 2)
-    monkeypatch.setattr(access, "IMAGE_COOLDOWN_SEC", 0.0)
-    monkeypatch.setattr(access, "IMAGE_GUEST_COOLDOWN_SEC", 0.0)
+    monkeypatch.setattr(access, "FEATURE_COOLDOWN_SEC", 0.0)
     access.close_access_db()
     access.init_access_db()
     yield
@@ -29,149 +25,115 @@ def trial_db(tmp_path, monkeypatch):
 def cooldown_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_cooldown.db"
     monkeypatch.setattr(config, "COUPON_DB_PATH", db_path)
-    monkeypatch.setattr(config, "FREE_TRIAL_IMAGES", 2)
     monkeypatch.setattr(config, "IMAGE_COOLDOWN_SEC", 600.0)
-    monkeypatch.setattr(config, "IMAGE_GUEST_COOLDOWN_SEC", 1200.0)
     monkeypatch.setattr(access, "COUPON_DB_PATH", db_path)
-    monkeypatch.setattr(access, "FREE_TRIAL_IMAGES", 2)
-    monkeypatch.setattr(access, "IMAGE_COOLDOWN_SEC", 600.0)
-    monkeypatch.setattr(access, "IMAGE_GUEST_COOLDOWN_SEC", 1200.0)
+    monkeypatch.setattr(access, "FEATURE_COOLDOWN_SEC", 600.0)
+    monkeypatch.setattr(access, "FEATURE_DAILY_LIMIT_SEC", 24 * 3600.0)
     access.close_access_db()
     access.init_access_db()
     yield
     access.close_access_db()
 
 
-def test_guest_can_send_unlimited_images_without_coupon(trial_db):
+def test_free_window_is_privileged(access_db, monkeypatch):
     user_id = 1001
-    first = access.consume_image_slot(user_id)
-    assert first.status == access.ImageAccessStatus.OK
-    assert first.access_source == access.AccessSource.GUEST
-    assert first.images_used == 1
-
-    second = access.consume_image_slot(user_id)
-    assert second.status == access.ImageAccessStatus.OK
-    assert second.images_used == 2
-
-    third = access.consume_image_slot(user_id)
-    assert third.status == access.ImageAccessStatus.OK
-    assert third.images_used == 3
-    assert third.access_source == access.AccessSource.GUEST
-
-
-def test_check_guest_without_consuming(trial_db):
-    user_id = 2002
-    check = access.check_image_access(user_id)
-    assert check.status == access.ImageAccessStatus.OK
-    assert check.access_source == access.AccessSource.GUEST
-
-    access.consume_image_slot(user_id)
-    check2 = access.check_image_access(user_id)
-    assert check2.status == access.ImageAccessStatus.OK
-    assert check2.images_used == 1
-
-
-def test_coupon_overrides_guest(trial_db):
-    user_id = 3003
-    access.insert_coupon_codes(
-        ["TESTCODE12"],
-        daily_quota=6,
-        period_days=105,
-    )
-    result = access.redeem_coupon("TESTCODE12", user_id)
-    assert result.status == access.RedeemStatus.OK
-    assert result.period_days == 105
-    assert result.period_expires_at is not None
-
-    access.consume_image_slot(user_id)
-    access.consume_image_slot(user_id)
-
-    check = access.check_image_access(user_id)
-    assert check.access_source == access.AccessSource.COUPON
-    assert check.images_remaining == 4
-    assert check.period_expires_sec is not None
-    assert check.period_expires_sec > 0
-
-
-def test_expired_coupon_access_falls_back_to_guest(trial_db, monkeypatch):
-    user_id = 4004
-    access.insert_coupon_codes(
-        ["EXPIRECODE1"],
-        daily_quota=6,
-        period_days=105,
-    )
-    redeem = access.redeem_coupon("EXPIRECODE1", user_id)
-    assert redeem.period_expires_at is not None
-
-    monkeypatch.setattr(access.time, "time", lambda: redeem.period_expires_at + 1)
-
-    check = access.check_image_access(user_id)
-    assert check.access_source == access.AccessSource.GUEST
-    assert check.status == access.ImageAccessStatus.OK
-
-    quota_msg = access.quota_status_reply_hebrew(check)
-    assert "חופשית" in quota_msg or "המתנה" in quota_msg
-
-
-def test_trial_exhausted_reply_mentions_options(trial_db):
-    msg = access.image_access_reply_hebrew(
-        access.ImageAccessResult(access.ImageAccessStatus.TRIAL_EXHAUSTED)
-    )
-    assert "2" in msg
-    assert "אפשרויות" in msg
-
-
-def test_guest_cooldown_is_20_minutes(cooldown_db, monkeypatch):
-    user_id = 5005
     t0 = 1_700_000_000.0
     monkeypatch.setattr(access.time, "time", lambda: t0)
-    first = access.consume_image_slot(user_id)
-    assert first.status == access.ImageAccessStatus.OK
-    assert first.access_source == access.AccessSource.GUEST
-
-    monkeypatch.setattr(access.time, "time", lambda: t0 + 600)
-    blocked = access.consume_image_slot(user_id)
-    assert blocked.status == access.ImageAccessStatus.COOLDOWN
-    assert blocked.cooldown_remaining_sec is not None
-    assert blocked.cooldown_remaining_sec > 500
-
-    msg = access.image_access_reply_hebrew(blocked)
-    assert "20 דקות" in msg
-
-    monkeypatch.setattr(access.time, "time", lambda: t0 + 1201)
-    allowed = access.consume_image_slot(user_id)
-    assert allowed.status == access.ImageAccessStatus.OK
-    assert allowed.images_used == 2
+    access.ensure_user_first_seen(user_id)
+    assert access.get_user_access_phase(user_id) == access.UserAccessPhase.PRIVILEGED
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
+    assert access.consume_practice_slot(user_id).status == access.ImageAccessStatus.OK
 
 
-def test_coupon_cooldown_is_10_minutes(cooldown_db, monkeypatch):
-    user_id = 6006
-    access.insert_coupon_codes(
-        ["COOLCODE01"],
-        daily_quota=6,
-        period_days=105,
-    )
-    assert access.redeem_coupon("COOLCODE01", user_id).status == access.RedeemStatus.OK
-
+def test_restricted_after_free_window_without_coupon(access_db, monkeypatch):
+    user_id = 1002
     t0 = 1_700_000_000.0
     monkeypatch.setattr(access.time, "time", lambda: t0)
-    first = access.consume_image_slot(user_id)
-    assert first.status == access.ImageAccessStatus.OK
+    access.ensure_user_first_seen(user_id)
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    )
+    assert access.get_user_access_phase(user_id) == access.UserAccessPhase.RESTRICTED
+
+
+def test_coupon_is_privileged_after_free_window(access_db, monkeypatch):
+    user_id = 1003
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    )
+    access.insert_coupon_codes(["TESTCODE12"], daily_quota=6, period_days=105)
+    assert access.redeem_coupon("TESTCODE12", user_id).status == access.RedeemStatus.OK
+    assert access.get_user_access_phase(user_id) == access.UserAccessPhase.PRIVILEGED
+
+
+def test_privileged_solve_cooldown_10_minutes(cooldown_db, monkeypatch):
+    user_id = 2001
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
 
     monkeypatch.setattr(access.time, "time", lambda: t0 + 60)
-    blocked = access.consume_image_slot(user_id)
+    blocked = access.consume_solve_slot(user_id)
     assert blocked.status == access.ImageAccessStatus.COOLDOWN
     msg = access.image_access_reply_hebrew(blocked)
     assert "10 דקות" in msg
 
     monkeypatch.setattr(access.time, "time", lambda: t0 + 601)
-    allowed = access.consume_image_slot(user_id)
-    assert allowed.status == access.ImageAccessStatus.OK
-    assert allowed.images_used == 2
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
 
 
-def test_vip_coupon_unlocks_bank_and_skips_cooldown(cooldown_db):
-    user_id = 7007
+def test_restricted_solve_once_per_day(cooldown_db, monkeypatch):
+    user_id = 2002
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    )
+    t1 = t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
+
+    monkeypatch.setattr(access.time, "time", lambda: t1 + 700)
+    blocked = access.consume_solve_slot(user_id)
+    assert blocked.status == access.ImageAccessStatus.DAILY_LIMIT
+
+    monkeypatch.setattr(access.time, "time", lambda: t1 + access.FEATURE_DAILY_LIMIT_SEC + 1)
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
+
+
+def test_solve_and_practice_counters_are_independent(access_db, monkeypatch):
+    user_id = 3001
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    )
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
+    # תרגול עדיין מותר — מונים נפרדים
+    assert access.consume_practice_slot(user_id).status == access.ImageAccessStatus.OK
+    assert access.consume_practice_slot(user_id).status == access.ImageAccessStatus.DAILY_LIMIT
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.DAILY_LIMIT
+
+
+def test_formulas_always_open(access_db, monkeypatch):
+    user_id = 4001
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+    assert access.has_formulas_access(user_id) is True
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    )
+    assert access.has_formulas_access(user_id) is True
+
+
+def test_vip_coupon_still_unlocks_bank(cooldown_db):
+    user_id = 5001
     access.insert_coupon_codes(
         ["VIPCODE1001"],
         daily_quota=access.VIP_UNLIMITED_DAILY_QUOTA,
@@ -179,56 +141,34 @@ def test_vip_coupon_unlocks_bank_and_skips_cooldown(cooldown_db):
     )
     result = access.redeem_coupon("VIPCODE1001", user_id)
     assert result.status == access.RedeemStatus.OK
-    assert result.period_days == 100
     assert access.user_has_bank_unlock(user_id)
-
-    first = access.consume_image_slot(user_id)
+    # VIP לא פוטר מ־cooldown של פתרון
+    first = access.consume_solve_slot(user_id)
     assert first.status == access.ImageAccessStatus.OK
-    second = access.consume_image_slot(user_id)
-    assert second.status == access.ImageAccessStatus.OK
-    reply = access.redeem_reply_hebrew(result)
-    assert "מאגר" in reply
-    assert "חופשית" in reply or "חופשי" in reply
+    second = access.consume_solve_slot(user_id)
+    assert second.status == access.ImageAccessStatus.COOLDOWN
 
 
-def test_formulas_free_window_first_24h(trial_db, monkeypatch):
-    """חלון נוסחאות: first_seen_at קבוע; פתוח 24ש', נעול אחרי כן בלי קופון."""
-    user_id = 8008
-    t0 = 1_700_000_000.0
-    monkeypatch.setattr(access.time, "time", lambda: t0)
-
-    first = access.ensure_user_first_seen(user_id)
-    assert first == t0
-    # קריאה חוזרת לא מזיזה את השעון
-    monkeypatch.setattr(access.time, "time", lambda: t0 + 3600)
-    assert access.ensure_user_first_seen(user_id) == t0
-
-    assert access.has_formulas_free_window(user_id, now=t0 + 100) is True
-    assert access.has_formulas_access(user_id) is True
-
-    monkeypatch.setattr(
-        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 1
-    )
-    assert access.has_formulas_free_window(user_id) is False
-    assert access.has_active_coupon_access(user_id) is False
-    assert access.has_formulas_access(user_id) is False
-
-
-def test_formulas_access_via_coupon_after_free_window(trial_db, monkeypatch):
-    user_id = 9009
+def test_expired_coupon_falls_back_to_restricted(access_db, monkeypatch):
+    user_id = 6001
     t0 = 1_700_000_000.0
     monkeypatch.setattr(access.time, "time", lambda: t0)
     access.ensure_user_first_seen(user_id)
-
     monkeypatch.setattr(
         access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
     )
-    assert access.has_formulas_access(user_id) is False
+    access.insert_coupon_codes(["EXPIRECODE1"], daily_quota=6, period_days=105)
+    redeem = access.redeem_coupon("EXPIRECODE1", user_id)
+    assert redeem.period_expires_at is not None
+    monkeypatch.setattr(access.time, "time", lambda: redeem.period_expires_at + 1)
+    assert access.get_user_access_phase(user_id) == access.UserAccessPhase.RESTRICTED
 
-    access.insert_coupon_codes(
-        ["FORMCODE01"],
-        daily_quota=6,
-        period_days=105,
-    )
-    assert access.redeem_coupon("FORMCODE01", user_id).status == access.RedeemStatus.OK
-    assert access.has_formulas_access(user_id) is True
+
+def test_quota_status_for_user_mentions_both_features(access_db, monkeypatch):
+    user_id = 7001
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+    msg = access.quota_status_for_user(user_id)
+    assert "פתרון" in msg
+    assert "תרגול" in msg

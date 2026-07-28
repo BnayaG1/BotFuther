@@ -212,9 +212,7 @@ def _term_rotation_about_tip_hebrew(
     term: _MTipTerm, tip_pos: float
 ) -> tuple[str, str]:
     if term.kind in ("moment", "ma_reaction"):
-        # מומנט טהור / מומנט הריתום הם "זוג כוחות" - התרומה שלהם למשוואת שיווי משקל
-        # לא תלויה בנקודה שסביבה סוכמים. לכן היא נכנסת בכיוון ההפוך לכיוון שהוגדר לה
-        # (כך שהתוצאה תואמת את פתרון המחברת הרגיל / core.statics_calculator).
+        # מומנט טהור / Ma: סימן הפוך לכיוון בשרטוט — תואם statics_calculator
         clockwise = bool(term.is_cw_moment)
         rot_he = "עם" if clockwise else "נגד"
         sign = "-" if clockwise else "+"

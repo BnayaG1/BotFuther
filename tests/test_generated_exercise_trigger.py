@@ -10,6 +10,15 @@ from telegram import Chat, Message, Update, User
 
 import bot.handlers as handlers
 import bot.solution_session as solution_session
+from bot.access import AccessSource, ImageAccessResult, ImageAccessStatus
+
+
+def _practice_ok():
+    return ImageAccessResult(
+        status=ImageAccessStatus.OK,
+        access_source=AccessSource.FREE_WINDOW,
+        feature="practice",
+    )
 
 
 @pytest.mark.anyio
@@ -41,9 +50,12 @@ async def test_letter_b_sends_generated_exercise_and_mode_picker(tmp_path: Path)
 
     solution_session._pending_bank_exercise.pop(chat_id, None)
 
-    with patch(
-        "exercise_generator.pipeline.generate_exercise", return_value=fake_art
-    ) as mock_gen:
+    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
+        patch.object(handlers, "check_practice_feature_access", return_value=_practice_ok()), \
+        patch.object(handlers, "consume_practice_slot", return_value=_practice_ok()), \
+        patch(
+            "exercise_generator.pipeline.generate_exercise", return_value=fake_art
+        ) as mock_gen:
         await handlers.on_text(update, context)
 
     mock_gen.assert_called_once()
@@ -176,7 +188,10 @@ async def test_letter_b_lowercase_also_works(tmp_path: Path):
     fake_art.png_path = png
     fake_art.extracted = {"beam": {"L": 5.0}}
 
-    with patch("exercise_generator.pipeline.generate_exercise", return_value=fake_art):
+    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
+        patch.object(handlers, "check_practice_feature_access", return_value=_practice_ok()), \
+        patch.object(handlers, "consume_practice_slot", return_value=_practice_ok()), \
+        patch("exercise_generator.pipeline.generate_exercise", return_value=fake_art):
         await handlers.on_text(update, context)
 
     context.bot.send_photo.assert_awaited_once()

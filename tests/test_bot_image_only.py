@@ -15,7 +15,7 @@ def test_welcome_text_is_image_only():
     text = build_start_welcome_text()
     assert "היי, אני שמח שהגעת לכאן" in text
     assert "תמונה" in text
-    assert "מאגר" in text
+    assert "תרגול" in text
     assert "פתרון מחברת" in text
     assert "מדריך" in text
     assert "נוסחאות" in text
@@ -33,8 +33,10 @@ def test_start_keyboard_has_no_concept_button():
     keyboard = build_start_keyboard()
     labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
     callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
-    assert any("פתרון מלא" in label for label in labels)
-    assert any("קופון" in label for label in labels)
+    assert any("פתרון לתרגיל" in label for label in labels)
+    assert any("רכישת חבילה" in label for label in labels)
+    assert not any("הזנת קוד" in label for label in labels)
+    assert "buy:redeem" not in callbacks
     assert not any("מושג" in label for label in labels)
     assert not any("דיווח" in label for label in labels)
     if INTRO_AVAILABLE:

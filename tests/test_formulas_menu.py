@@ -8,6 +8,7 @@ from telegram import Chat, InlineKeyboardMarkup, Message, Update, User
 
 import bot.formulas as formulas
 import bot.handlers as handlers
+from bot.access import AccessSource, ImageAccessResult, ImageAccessStatus
 
 
 def test_formulas_catalog_and_parse():
@@ -47,7 +48,8 @@ def test_persistent_keyboard_includes_formulas():
     kb = handlers.build_persistent_keyboard()
     texts = [btn.text for row in kb.keyboard for btn in row]
     assert handlers._PERSISTENT_FORMULAS_LABEL in texts
-    assert handlers._PERSISTENT_ASSISTANT_LABEL in texts
+    assert handlers._PERSISTENT_ASSISTANT_LABEL not in texts
+    assert handlers._PERSISTENT_QUOTA_LABEL not in texts
     assert "🔄 איפוס תרגיל" not in texts
 
 
@@ -64,9 +66,8 @@ async def test_on_text_formulas_button_opens_menu():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999010):
         with patch.object(handlers, "telegram_user_id", return_value=1010):
-            with patch.object(handlers, "has_formulas_access", return_value=True):
-                with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                    await handlers.on_text(update, context)
+            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
+                await handlers.on_text(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
@@ -76,7 +77,8 @@ async def test_on_text_formulas_button_opens_menu():
 
 
 @pytest.mark.anyio
-async def test_formulas_locked_without_access():
+async def test_formulas_open_without_coupon_access():
+    """נוסחאות פתוחות תמיד — גם בלי גישת קופון."""
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
     update.message.text = handlers._PERSISTENT_FORMULAS_LABEL
@@ -88,19 +90,17 @@ async def test_formulas_locked_without_access():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999012):
         with patch.object(handlers, "telegram_user_id", return_value=1012):
-            with patch.object(handlers, "has_formulas_access", return_value=False):
-                with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                    await handlers.on_text(update, context)
+            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
+                await handlers.on_text(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
-    assert "מנויי חבילה" in args[0]
-    assert "24" in args[0]
+    assert "נוסחאות" in args[0]
+    assert "מנויי חבילה" not in args[0]
     kb = kwargs.get("reply_markup")
     assert isinstance(kb, InlineKeyboardMarkup)
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
-    assert "buy:menu" in callbacks
-    assert "buy:redeem" in callbacks
+    assert any(cb.startswith("formula:") for cb in callbacks)
 
 
 @pytest.mark.anyio
@@ -116,9 +116,8 @@ async def test_formulas_open_during_free_window():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999013):
         with patch.object(handlers, "telegram_user_id", return_value=1013):
-            with patch.object(handlers, "has_formulas_access", return_value=True):
-                with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                    await handlers.on_text(update, context)
+            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
+                await handlers.on_text(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
@@ -137,9 +136,8 @@ async def test_cmd_formulas_opens_menu():
     context = MagicMock()
     with patch.object(handlers, "telegram_chat_id", return_value=999011):
         with patch.object(handlers, "telegram_user_id", return_value=1011):
-            with patch.object(handlers, "has_formulas_access", return_value=True):
-                with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                    await handlers.cmd_formulas(update, context)
+            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
+                await handlers.cmd_formulas(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
@@ -164,7 +162,7 @@ def test_formulas_locked_message_and_keyboard():
     kb = formulas.build_formulas_locked_keyboard()
     callbacks = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "buy:menu" in callbacks
-    assert "buy:redeem" in callbacks
+    assert "buy:redeem" not in callbacks
 
 
 @pytest.mark.anyio
@@ -285,18 +283,25 @@ async def test_leaving_formulas_to_give_exercise_deletes_chat_messages():
     context.bot.send_photo = AsyncMock(return_value=MagicMock(message_id=601))
     context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=602))
 
-    extracted = {"beam": {"L": 6.0, "supports": [], "loads": []}}
-    fake_path = MagicMock()
+    png = MagicMock()
+    png.open = MagicMock()
+    png.open.return_value.__enter__ = MagicMock(return_value=MagicMock())
+    png.open.return_value.__exit__ = MagicMock(return_value=False)
+    fake_art = MagicMock()
+    fake_art.png_path = png
+    fake_art.extracted = {"beam": {"L": 6.0, "supports": [], "loads": []}}
 
+    ok = ImageAccessResult(
+        status=ImageAccessStatus.OK,
+        access_source=AccessSource.FREE_WINDOW,
+        feature="practice",
+    )
     with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "has_practice_access", return_value=True), \
-        patch.object(handlers, "count_exercises", return_value=3), \
-        patch.object(handlers, "exercise_bank_cooldown_remaining_sec", return_value=None), \
-        patch.object(
-            handlers, "pick_next_exercise_for_user", return_value=(42, extracted)
-        ), \
-        patch.object(handlers, "get_exercise_image_path", return_value=None), \
-        patch.object(handlers, "render_exercise_problem_png_temp", return_value=fake_path):
+        patch.object(handlers, "check_practice_feature_access", return_value=ok), \
+        patch.object(handlers, "consume_practice_slot", return_value=ok), \
+        patch(
+            "exercise_generator.pipeline.generate_exercise", return_value=fake_art
+        ):
         await handlers.on_menu_callback(update, context)
 
     deleted = {

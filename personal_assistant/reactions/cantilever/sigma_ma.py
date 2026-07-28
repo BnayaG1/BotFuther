@@ -32,7 +32,8 @@ def _inclined_fy_ton(ld: dict) -> float:
     return abs(mag * math.sin(math.radians(angle)))
 
 
-_MA_CLOCKWISE_POSITIVE = True
+# במשוואה Ma+Σ=0: כוח שמסתובב עם השעון נכנס במינוס (כדי ש-Ma ייצא נכון).
+_MA_CLOCKWISE_POSITIVE = False
 
 
 def _vertical_force_rotates_clockwise_about(
@@ -106,6 +107,16 @@ def _collect_ma_fixed_terms(
                 m_val = float(ld.get("M", ld.get("m", 0.0)) or 0.0)
                 if abs(m_val) < 1e-12:
                     continue
+                # #region agent log
+                try:
+                    import json as _json, time as _time
+                    from pathlib import Path as _Path
+                    _p = _Path(__file__).resolve().parents[3] / "debug-1522a6.log"
+                    with _p.open("a", encoding="utf-8") as _f:
+                        _f.write(_json.dumps({"sessionId":"1522a6","hypothesisId":"C","location":"sigma_ma.py:_collect_ma_fixed_terms","message":"JSON moment value","data":{"M":m_val,"is_cw_from_sign":m_val>=0,"x":float(ld.get("x",0.0))},"timestamp":int(_time.time()*1000)})+"\n")
+                except Exception:
+                    pass
+                # #endregion
                 terms.append(
                     _MaFixedTerm(
                         kind="moment",
@@ -184,12 +195,21 @@ def _term_rotation_about_wall_hebrew(
     term: _MaFixedTerm, wall_pos: float
 ) -> tuple[str, str]:
     if term.kind == "moment":
-        # מומנט טהור הוא "זוג כוחות" - התרומה שלו למשוואת שיווי משקל לא תלויה
-        # בנקודה שסביבה סוכמים. לכן הוא נכנס בכיוון ההפוך לכיוון שהוגדר לו (כך
-        # שהתוצאה תואמת את פתרון המחברת הרגיל / core.statics_calculator).
+        # מומנט טהור: סימן כמו בשרטוט (עם שעון → + ; נגד שעון → −).
+        # תואם statics_calculator כי המשוואה נכתבת Ma+Σ=0 (לא −Ma+Σ=0).
         clockwise = bool(term.is_cw_moment)
         rot_he = "עם" if clockwise else "נגד"
-        sign = "-" if clockwise else "+"
+        sign = "+" if clockwise else "-"
+        # #region agent log
+        try:
+            import json as _json, time as _time
+            from pathlib import Path as _Path
+            _p = _Path(__file__).resolve().parents[3] / "debug-1522a6.log"
+            with _p.open("a", encoding="utf-8") as _f:
+                _f.write(_json.dumps({"sessionId":"1522a6","runId":"post-fix","hypothesisId":"B","location":"sigma_ma.py:_term_rotation_about_wall","message":"PA moment equation sign","data":{"is_cw_moment":bool(term.is_cw_moment),"rot_he":rot_he,"equation_sign":sign,"force_txt":term.force_txt,"x":term.x},"timestamp":int(_time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
         return rot_he, sign
     return _moment_rotation_about_wall_hebrew(
         wall_pos, term.x, vertical_down=term.vertical_down
@@ -205,7 +225,8 @@ def _describe_ma_fixed_term_hebrew(
     if term.kind == "moment":
         prod = f"{term.force_txt}{sign}"
         body = (
-            f"מומנט טהור בגודל {term.force_txt}, נכנס למשוואה כ {prod}."
+            f"מומנט טהור בגודל {term.force_txt} שמסתובב {rot} כיוון השעון, "
+            f"ולכן הוא נכנס למשוואה כ {prod}."
         )
         if first:
             return f"נתחיל בכח הראשון משמאל, {body}"
@@ -288,14 +309,15 @@ def compute_Ma_from_extracted(extracted: dict) -> float:
             except (TypeError, ValueError):
                 force = 0.0
             known += s * float(term.dist) * force
-    return known
+    # Ma + Σ = 0  ⇒  Ma = −Σ
+    return -known
 
 
 def build_ma_assembled_equation_hebrew(extracted: dict) -> str:
     """הודעה 2: הפירוק — המשוואה המורכבת, פתוחה למספרים, והתוצאה."""
     terms, wall_pos = _collect_ma_fixed_terms(extracted)
-    parts: list[str] = ["-Ma"]
-    opened_parts: list[str] = ["-Ma"]
+    parts: list[str] = ["Ma"]
+    opened_parts: list[str] = ["Ma"]
     known = 0.0
     for term in terms:
         _rot, sign = _term_rotation_about_wall_hebrew(term, wall_pos)
@@ -320,7 +342,7 @@ def build_ma_assembled_equation_hebrew(extracted: dict) -> str:
             known += s * float(term.dist) * force
     equation = "".join(parts) + "=0"
     opened = "".join(opened_parts) + "=0"
-    ma = known
+    ma = -known
     ma_txt = _fmt_num(ma)
     return (
         "ככה נראית המשוואה שלנו:\n"

@@ -163,7 +163,6 @@ _BUG_REPORT_FORCE_REPLY = ForceReply(
 
 _BUG_REPORT_CANCEL = "ביטול דיווח"
 _PERSISTENT_ASSISTANT_LABEL = "מדריך לפתרון"
-_BANK_ADD_SECRET = "BnayaG"
 _PERSISTENT_FORMULAS_LABEL = "נוסחאות"
 _PERSISTENT_QUOTA_LABEL = "מכסה"
 _PERSISTENT_COUPON_LABEL = "קופון"
@@ -1497,11 +1496,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id,
             message=update.message,
         )
-        return
-
-    if text == _BANK_ADD_SECRET:
-        prompt = select_solve_mode(chat_id, SolveMode.ADD_TO_BANK)
-        await _reply_text_safe(update.message, prompt)
         return
 
     if has_active_assistant_progress(chat_id):

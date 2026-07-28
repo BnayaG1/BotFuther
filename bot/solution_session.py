@@ -55,6 +55,8 @@ _pending_bank_submission_image: dict[int, Path] = {}
 _practice_chat_message_ids: dict[int, list[int]] = {}
 # הודעות צ'אט של נוסחאות (תפריט / דפי נוסחאות) — למחיקה ביציאה.
 _formulas_chat_message_ids: dict[int, list[int]] = {}
+# הודעת הבוט הראשונה בצ'אט (welcome מ־/start) — עוגן למחיקה בלחיצת «ראשי».
+_chat_anchor_message_id: dict[int, int] = {}
 
 
 def _next_session_id() -> int:
@@ -151,6 +153,25 @@ def has_formulas_chat_trail(chat_id: int) -> bool:
 
 def discard_formulas_chat_trail(chat_id: int) -> None:
     _formulas_chat_message_ids.pop(int(chat_id), None)
+
+
+def set_chat_anchor_message_id(chat_id: int, message_id: int | None) -> None:
+    """שומר את הודעת הבוט הראשונה (welcome) כעוגן למחיקת צ'אט."""
+    if message_id is None:
+        return
+    mid = int(message_id)
+    if mid <= 0:
+        return
+    _chat_anchor_message_id[int(chat_id)] = mid
+
+
+def get_chat_anchor_message_id(chat_id: int) -> int | None:
+    mid = _chat_anchor_message_id.get(int(chat_id))
+    return int(mid) if mid is not None else None
+
+
+def clear_chat_anchor_message_id(chat_id: int) -> None:
+    _chat_anchor_message_id.pop(int(chat_id), None)
 
 
 def set_pending_bank_submission_image(chat_id: int, image_path: Path) -> None:

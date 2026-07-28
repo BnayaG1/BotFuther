@@ -149,7 +149,6 @@ def build_formulas_locked_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")],
-            [InlineKeyboardButton("יש לי קוד", callback_data="buy:redeem")],
             [InlineKeyboardButton("חזרה לתפריט", callback_data="formula:back")],
         ]
     )
