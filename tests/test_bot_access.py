@@ -172,3 +172,14 @@ def test_quota_status_for_user_mentions_both_features(access_db, monkeypatch):
     msg = access.quota_status_for_user(user_id)
     assert "פתרון" in msg
     assert "תרגול" in msg
+
+
+def test_list_users_first_seen_ordered(access_db, monkeypatch):
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(101)
+    monkeypatch.setattr(access.time, "time", lambda: t0 + 60)
+    access.ensure_user_first_seen(202)
+    access.ensure_user_first_seen(101)  # לא משנה את הזמן הראשון
+    rows = access.list_users_first_seen()
+    assert rows == [(101, t0), (202, t0 + 60)]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
+from io import BytesIO
 
 from telegram import (
     ForceReply,
@@ -23,7 +25,7 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-from bot.access import init_access_db
+from bot.access import init_access_db, list_users_first_seen
 from bot.config import ADMIN_BOT_TOKEN, ADMIN_USER_IDS
 from bot.generate_coupons import generate_coupon_codes
 from bot.purchase import PACKAGE_CATALOG, PackageOption, get_package, _period_label
@@ -139,6 +141,52 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         _welcome_text(),
         reply_markup=build_admin_menu_keyboard(),
+    )
+
+
+def _format_users_list(users: list[tuple[int, float]]) -> str:
+    lines = [f"סה״כ משתמשים: {len(users)}", ""]
+    for user_id, first_seen_at in users:
+        dt = datetime.fromtimestamp(first_seen_at, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        lines.append(f"{user_id}  |  {dt} UTC")
+    return "\n".join(lines)
+
+
+def _users_csv_bytes(users: list[tuple[int, float]]) -> BytesIO:
+    rows = ["user_id,first_seen_at_utc"]
+    for user_id, first_seen_at in users:
+        dt = datetime.fromtimestamp(first_seen_at, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        rows.append(f"{user_id},{dt}")
+    buf = BytesIO("\n".join(rows).encode("utf-8"))
+    buf.name = "users.csv"
+    return buf
+
+
+async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """רשימת כל מי שלחץ /start בבוט הראשי."""
+    if not update.message:
+        return
+    if not _is_admin(update):
+        await update.message.reply_text(_UNAUTHORIZED_TEXT)
+        return
+
+    users = list_users_first_seen()
+    if not users:
+        await update.message.reply_text("אין משתמשים עדיין.")
+        return
+
+    text = _format_users_list(users)
+    if len(text) <= 3500:
+        await update.message.reply_text(text)
+        return
+
+    await update.message.reply_document(
+        document=_users_csv_bytes(users),
+        caption=f"סה״כ משתמשים: {len(users)}",
     )
 
 
@@ -305,6 +353,7 @@ def build_admin_application() -> Application:
     )
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
+    app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CallbackQueryHandler(on_admin_callback, pattern=r"^admin:"))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_text)

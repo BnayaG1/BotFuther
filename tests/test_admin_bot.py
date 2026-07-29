@@ -12,6 +12,7 @@ from bot.admin_bot import (
     _admin_menu_button_label,
     _is_admin,
     build_admin_menu_keyboard,
+    cmd_users,
     on_admin_callback,
 )
 from bot.purchase import PACKAGE_CATALOG
@@ -80,3 +81,39 @@ async def test_admin_gen_callback_creates_codes(monkeypatch):
         or context.bot.send_message.await_args[0][1]
     )
     assert sent_text.strip() == "CODEONE123\nCODEONE123"
+
+
+@pytest.mark.anyio
+async def test_cmd_users_lists_first_seen(monkeypatch):
+    monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))
+    monkeypatch.setattr(
+        "bot.admin_bot.list_users_first_seen",
+        lambda: [(111, 1_700_000_000.0), (222, 1_700_000_060.0)],
+    )
+
+    update = MagicMock()
+    update.effective_user = User(id=99, is_bot=False, first_name="Admin")
+    update.message = MagicMock()
+    update.message.reply_text = AsyncMock()
+
+    await cmd_users(update, MagicMock())
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0]
+    assert "סה״כ משתמשים: 2" in text
+    assert "111" in text
+    assert "222" in text
+
+
+@pytest.mark.anyio
+async def test_cmd_users_rejects_non_admin(monkeypatch):
+    monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))
+
+    update = MagicMock()
+    update.effective_user = User(id=1, is_bot=False, first_name="Nope")
+    update.message = MagicMock()
+    update.message.reply_text = AsyncMock()
+
+    await cmd_users(update, MagicMock())
+
+    update.message.reply_text.assert_awaited_once_with("גישה נדחתה.")

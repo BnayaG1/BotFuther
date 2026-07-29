@@ -997,6 +997,17 @@ def ensure_user_first_seen(user_id: int, *, now: float | None = None) -> float:
         return _ensure_user_first_seen_unlocked(conn, int(user_id), ts)
 
 
+def list_users_first_seen() -> list[tuple[int, float]]:
+    """כל משתמשי /start: (user_id, first_seen_at) לפי סדר הופעה."""
+    conn = _connect()
+    with _db_lock:
+        rows = conn.execute(
+            "SELECT user_id, first_seen_at FROM user_first_seen "
+            "ORDER BY first_seen_at ASC, user_id ASC"
+        ).fetchall()
+        return [(int(r["user_id"]), float(r["first_seen_at"])) for r in rows]
+
+
 def has_formulas_free_window(user_id: int, *, now: float | None = None) -> bool:
     """True בתוך 24 השעות הראשונות מ־first_seen_at."""
     ts = time.time() if now is None else float(now)
