@@ -7,7 +7,15 @@ import threading
 import os
 from flask import Flask
 from telegram import BotCommand, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    TypeHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
 from bot.config import (
@@ -37,6 +45,7 @@ from bot.handlers import (
     on_intro_callback,
     on_menu_callback,
     on_text,
+    sync_chat_ui_to_current_version,
 )
 from bot.instance_lock import acquire_bot_instance_lock
 
@@ -105,6 +114,8 @@ def main() -> None:
         .build()
     )
     
+    # לפני כל טיפול — מרענן מקלדת/תפריט אם המשתמש עדיין על גרסת ממשק ישנה.
+    app_bot.add_handler(TypeHandler(Update, sync_chat_ui_to_current_version), group=-1)
     app_bot.add_handler(CommandHandler("start", cmd_start))
     app_bot.add_handler(CommandHandler("help", cmd_start))
     app_bot.add_handler(CommandHandler("reset", cmd_reset))

@@ -21,12 +21,13 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 from telegram.request import HTTPXRequest
 
 from bot.access import init_access_db, list_users_first_seen
-from bot.config import ADMIN_BOT_TOKEN, ADMIN_USER_IDS
+from bot.config import ADMIN_BOT_TOKEN, ADMIN_USER_IDS, BOT_UI_VERSION
 from bot.generate_coupons import generate_coupon_codes
 from bot.purchase import PACKAGE_CATALOG, PackageOption, get_package, _period_label
 
@@ -35,6 +36,7 @@ log = logging.getLogger("beam_admin_bot")
 _PENDING_CUSTOM_QTY: dict[int, str] = {}
 _QUICK_COUNTS = (3, 5, 10, 20)
 _MAX_BATCH = 100
+_CHAT_UI_VERSION_KEY = "admin_ui_version"
 
 _UNAUTHORIZED_TEXT = "גישה נדחתה."
 
@@ -135,12 +137,35 @@ def _format_codes_message(codes: list[str]) -> str:
     return "\n".join(codes)
 
 
+async def sync_admin_ui_to_current_version(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """מרענן מקלדת אדמין אחרי דיפלוי (למשל מחירים חדשים) בהודעה הראשונה."""
+    message = update.message
+    if message is None or not _is_admin(update):
+        return
+    current = str(BOT_UI_VERSION or "").strip() or "default"
+    if context.chat_data.get(_CHAT_UI_VERSION_KEY) == current:
+        return
+    context.chat_data[_CHAT_UI_VERSION_KEY] = current
+    text = (message.text or "").strip()
+    if text.startswith("/start") or text.startswith("/help"):
+        return
+    await message.reply_text(
+        "בוט האדמין עודכן — המקלדת למטה מעודכנת.",
+        reply_markup=build_admin_menu_keyboard(),
+    )
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
     if not _is_admin(update):
         await update.message.reply_text(_UNAUTHORIZED_TEXT)
         return
+    context.chat_data[_CHAT_UI_VERSION_KEY] = (
+        str(BOT_UI_VERSION or "").strip() or "default"
+    )
     _PENDING_CUSTOM_QTY.pop(update.effective_chat.id, None)
     await update.message.reply_text(
         _welcome_text(),
@@ -355,6 +380,7 @@ def build_admin_application() -> Application:
         .get_updates_request(request)
         .build()
     )
+    app.add_handler(TypeHandler(Update, sync_admin_ui_to_current_version), group=-1)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("users", cmd_users))

@@ -26,6 +26,7 @@ from bot.config import (
     ADMIN_CHAT_ID,
     ADMIN_USER_IDS,
     BOT_DISPLAY_NAME,
+    BOT_UI_VERSION,
     COUPON_ACCESS_ENABLED,
     DRAFT_APPROVAL_MODE,
     IMAGE_ONLY_TEXT_REPLY,
@@ -342,6 +343,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is not None:
         ensure_user_first_seen(int(user.id))
+    context.chat_data[_CHAT_UI_VERSION_KEY] = str(BOT_UI_VERSION or "").strip() or "default"
     chat_id = telegram_chat_id(update)
     leave_session = get_solution_session(chat_id)
     if has_practice_chat_trail(chat_id) or (
@@ -443,6 +445,35 @@ def build_persistent_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         one_time_keyboard=False,
     )
+
+
+_CHAT_UI_VERSION_KEY = "bot_ui_version"
+
+
+async def sync_chat_ui_to_current_version(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """אחרי דיפלוי — בהודעה הראשונה מרענן מקלדת/תפריט כדי לא להישאר על גרסה ישנה."""
+    message = update.message
+    if message is None:
+        return
+    current = str(BOT_UI_VERSION or "").strip() or "default"
+    if context.chat_data.get(_CHAT_UI_VERSION_KEY) == current:
+        return
+    context.chat_data[_CHAT_UI_VERSION_KEY] = current
+
+    # /start כבר שולח את המקלדת העדכנית — רק מסמנים גרסה.
+    text = (message.text or "").strip()
+    if text.startswith("/start") or text.startswith("/help"):
+        return
+
+    try:
+        await message.reply_text(
+            "הבוט עודכן אצלך לגרסה העדכנית.",
+            reply_markup=build_persistent_keyboard(),
+        )
+    except BadRequest as exc:
+        log.warning("UI sync reply failed chat=%s: %s", telegram_chat_id(update), exc)
 
 
 def build_bug_report_cancel_keyboard() -> ReplyKeyboardMarkup:

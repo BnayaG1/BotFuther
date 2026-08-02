@@ -288,6 +288,10 @@ COUPON_DB_PATH = Path(
 ).resolve()
 COUPON_ACCESS_ENABLED = _env_bool("COUPON_ACCESS_ENABLED", True)
 
+# גרסת ממשק ללקוח טלגרם — להעלות בכל שינוי מקלדת/תפריט/חבילות.
+# אחרי דיפלוי, בהודעה הראשונה של כל משתמש המקלדת מתרעננת לגרסה הזו.
+BOT_UI_VERSION = os.getenv("BOT_UI_VERSION", "2026-08-02-packages-30-90").strip()
+
 
 def _default_exercise_bank_db_path() -> Path:
     raw = os.getenv("EXERCISE_BANK_DB_PATH", "").strip()
