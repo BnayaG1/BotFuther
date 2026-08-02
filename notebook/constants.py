@@ -22,7 +22,8 @@ _REACTION_SIGMA_GAP_SQUARES = 7
 _REACTION_SIGMA_GAP_MM = round(_REACTION_SIGMA_GAP_SQUARES * _GRID_CELL_MM, 3)
 
 # מרווח בין תמונת הקורה לשורות חישוב הריאקציות (עמוד 1)
-_BEAM_TO_CALC_GAP_SQUARES = 2
+# מוגדל כדי לפנות מקום לעבוד על ציור התרגיל מעל שורת Ax
+_BEAM_TO_CALC_GAP_SQUARES = 12
 _BEAM_TO_CALC_GAP_MM = round(_BEAM_TO_CALC_GAP_SQUARES * _GRID_CELL_MM, 3)
 
 _REACTION_CALC_INDENT = "3ch"  # הזחת שורות ריאקציות ימינה — שלושה רווחים
@@ -52,14 +53,14 @@ _BRIGHT_GREEN = "#16a34a"
 _NOTEBOOK_GRID_Y = 0.11
 _N_DIAGRAM_SHIFT_SQUARES = 0
 _N_DIAGRAM_SHIFT_Y = _N_DIAGRAM_SHIFT_SQUARES * _NOTEBOOK_GRID_Y
-_Q_DIAGRAM_SHIFT_SQUARES = 6
+_Q_DIAGRAM_SHIFT_SQUARES = 10
 _Q_DIAGRAM_SHIFT_Y = _Q_DIAGRAM_SHIFT_SQUARES * _NOTEBOOK_GRID_Y
-_M_DIAGRAM_SHIFT_SQUARES = 6
+_M_DIAGRAM_SHIFT_SQUARES = 10
 _M_DIAGRAM_SHIFT_Y = _M_DIAGRAM_SHIFT_SQUARES * _NOTEBOOK_GRID_Y
 
 # מכפיל טווח אנכי של דיאגרמות N/Q/M סביב ציר הקורה (y=0).
 # <1 = גרף נמתח יותר; >1 = גרף דחוס יותר. 1.0 = ברירת מחדל.
-_DIAGRAM_Y_RANGE_MULT = 0.5
+_DIAGRAM_Y_RANGE_MULT = 0.35
 # מרווח נוסף בקצוות הציר — מונע חיתוך קווים (קטן יותר כש-mult נמוך)
 _DIAGRAM_Y_EDGE_PAD_RATIO = 0.06
 
@@ -96,8 +97,10 @@ _FS_BODY = 9.5
 _FS_LABEL = 10.0
 _FS_SIGN = 11.0
 _FS_TITLE = 10.5
-_FS_DIAG_MATH = _FS_LABEL * 1.4
-_FS_DIAG_UNIT = _FS_TINY * 1.8
+_FS_DIAG_MATH = _FS_LABEL * 1.4 * 2.0
+_FS_DIAG_UNIT = _FS_TINY * 1.8 * 2.0
+_DIAG_TITLE_PAD_LEFT = _NOTEBOOK_GRID_Y * 1.25
+_DIAG_TITLE_PAD_RIGHT = _NOTEBOOK_GRID_Y * 1.75
 _POINT_CALC_FONT_MULT = 1.8
 # הקטנה ממוקדת ל"חישובי נקודות" (עמוד 2) בלבד: -15% כולל כותרות ושורות
 _FS_POINT_CALC_PT = round(8.5 * _POINT_CALC_FONT_MULT * 0.85, 1)  # שורות חישובי נקודות (בוט PDF)

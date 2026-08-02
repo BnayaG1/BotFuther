@@ -23,14 +23,15 @@ class PackageOption:
 
     def label_hebrew(self) -> str:
         period = _period_label(self.period_days)
-        return f"{self.daily_quota} תמונות ליום · {period} · ₪{self.price_ils}"
+        return f"{period} · ₪{self.price_ils}"
 
     def summary_hebrew(self) -> str:
         period = _period_label(self.period_days)
         return (
-            f"• מכסה: *{self.daily_quota} תמונות ליום*\n"
             f"• תקופה: *{period}*\n"
-            f"• מחיר: *₪{self.price_ils}*"
+            f"• מחיר: *₪{self.price_ils}*\n"
+            f"• גישה מועדפת לפתרון ותרגול "
+            f"(המתנה של 10 דקות בין שימושים)"
         )
 
 
@@ -43,11 +44,14 @@ def _period_label(days: int) -> str:
         return "100 ימים"
     if days == 105:
         return "3.5 חודשים"
+    if days == 120:
+        return "4 חודשים"
     return f"{days} ימים"
 
 
 PACKAGE_CATALOG: tuple[PackageOption, ...] = (
-    PackageOption("6_105", 6, 105, 150),
+    PackageOption("6_30", 6, 30, 30),
+    PackageOption("6_120", 6, 120, 90),
 )
 
 _PACKAGES_BY_ID: dict[str, PackageOption] = {p.package_id: p for p in PACKAGE_CATALOG}

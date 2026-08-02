@@ -123,18 +123,9 @@ def test_reactions_unchanged_with_split_display():
 
 
 def test_notebook_distributed_terms_use_shared_split():
-    from notebook.facade import _distributed_moment_terms_about, _udl_split_note_html_for_pivot
+    from notebook.facade import _distributed_moment_terms_about
 
     terms = _distributed_moment_terms_about(3.0, 0.0, 10.0, 2.0)
     assert len(terms) == 2
-    note = _udl_split_note_html_for_pivot(
-        [{"type": "distributed", "x1": 0.0, "x2": 10.0, "w": 3.0}],
-        2.0,
-    )
-    assert note
-    assert "נחלק אותו ל2" in note
-    empty = _udl_split_note_html_for_pivot(
-        [{"type": "distributed", "x1": 3.0, "x2": 5.0, "w": 3.0}],
-        2.0,
-    )
-    assert empty == ""
+    terms_no_cross = _distributed_moment_terms_about(3.0, 3.0, 5.0, 2.0)
+    assert len(terms_no_cross) == 1

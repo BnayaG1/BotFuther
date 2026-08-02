@@ -56,6 +56,8 @@ from notebook.constants import (
     _FORCES_FIG_BASE_H,
     _FORCES_PANEL_H_IN,
     _FS_BODY,
+    _DIAG_TITLE_PAD_LEFT,
+    _DIAG_TITLE_PAD_RIGHT,
     _FS_DIAG_MATH,
     _FS_DIAG_UNIT,
     _FS_LABEL,
@@ -202,12 +204,17 @@ html, body, .nb-outer, .nb-page {{
   background: transparent;
 }}
 .nb-forces-zone {{
+  /* לא לשבור באמצע בלוק הגרפים — השבירה לפניהם ב־PAGE_BREAK_HTML */
   page-break-inside: avoid;
   break-inside: avoid;
 }}
 .nb-forces-zone img {{
   page-break-inside: avoid;
   break-inside: avoid;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  min-height: 20mm;
 }}
 {PAGE_BREAK_CSS}
 .nb-force-wrap {{
@@ -951,9 +958,8 @@ def _diagram_titles_on_axis(
 ) -> None:
     del color
     Lf = float(L)
-    half_grid = 0.5 * _NOTEBOOK_GRID_Y
     ax.text(
-        -half_grid,
+        -_DIAG_TITLE_PAD_LEFT,
         y_axis,
         math_label,
         ha="right",
@@ -965,7 +971,7 @@ def _diagram_titles_on_axis(
         clip_on=False,
     )
     ax.text(
-        Lf + _NOTEBOOK_GRID_Y,
+        Lf + _DIAG_TITLE_PAD_RIGHT,
         y_axis,
         unit,
         ha="left",
@@ -1736,12 +1742,11 @@ def _diagram_titles(
     *,
     Lf: Optional[float] = None,
 ) -> None:
-    """שם מתמטי משמאל, יחידה מימין (חצי משבצת מקצה הקורה) — שחור."""
+    """שם מתמטי משמאל, יחידה מימין — שחור."""
     del color
-    half_grid = 0.5 * _NOTEBOOK_GRID_Y
     if Lf is not None:
         ax.text(
-            -half_grid,
+            -_DIAG_TITLE_PAD_LEFT,
             0.0,
             math_label,
             ha="right",
@@ -1753,7 +1758,7 @@ def _diagram_titles(
             clip_on=False,
         )
         ax.text(
-            float(Lf) + _NOTEBOOK_GRID_Y,
+            float(Lf) + _DIAG_TITLE_PAD_RIGHT,
             0.0,
             unit,
             ha="left",
@@ -1767,7 +1772,7 @@ def _diagram_titles(
         return
     bb = ax.get_position()
     fig.text(
-        bb.x0 - 0.018,
+        bb.x0 - 0.036,
         bb.y0 + bb.height / 2,
         math_label,
         ha="right",
@@ -1777,7 +1782,7 @@ def _diagram_titles(
         color=_INK,
     )
     fig.text(
-        bb.x1 + 0.006,
+        bb.x1 + 0.014,
         bb.y0 + bb.height / 2,
         unit,
         ha="left",
@@ -2111,18 +2116,17 @@ def build_beam_schematic_figure(
     *,
     wide: bool = False,
 ) -> Any:
-    """קורה + מידות בלבד (ללא דיאגרמות N/Q/M) — לתצוגה זמנית במחברת."""
-    _notebook_mpl_rc()
-    fig_w = _notebook_fig_width(wide=wide)
-    sub_l, sub_r = _subplot_lr(wide=wide)
-    fig, ax = plt.subplots(1, 1, figsize=(fig_w, 2.15), facecolor="none")
-    _prep_figure_transparent(fig)
-    _prep_axis_on_paper(ax, grid=False)
-    _draw_beam_schematic(ax, L, loads, ra_pos, rb_pos, ra_x, ra_y, rb_y)
-    # חשוב: לא לדרוס set_ylim / set_xlim של _draw_beam_schematic,
-    # אחרת קו המידה בין הסמכים והמספר נחתכים.
-    fig.subplots_adjust(left=sub_l, right=sub_r, top=0.98, bottom=0.06)
-    return fig
+    """שרטוט תרגיל עליון חדש (סגנון בחינה) — בלי דיאגרמות N/Q/M וריאקציות."""
+    del ra_x, ra_y, rb_x, rb_y, wide  # נשמרים בחתימה לתאימות קוראים ישנים
+    from notebook.mpl.schematic.problem_draw import build_problem_figure
+
+    return build_problem_figure(
+        L,
+        loads,
+        mode="simply_supported",
+        ra_pos=ra_pos,
+        rb_pos=rb_pos,
+    )
 
 
 def build_cantilever_schematic_figure(
@@ -2132,16 +2136,11 @@ def build_cantilever_schematic_figure(
     ra_y: float = 0.0,
     wide: bool = False,
 ) -> Any:
-    """קורת זיז + מידות בלבד (ללא דיאגרמות N/Q/M) — לתצוגה זמנית במחברת."""
-    _notebook_mpl_rc()
-    fig_w = _notebook_fig_width(wide=wide)
-    sub_l, sub_r = _subplot_lr(wide=wide)
-    fig, ax = plt.subplots(1, 1, figsize=(fig_w, 2.15), facecolor="none")
-    _prep_figure_transparent(fig)
-    _prep_axis_on_paper(ax, grid=False)
-    _draw_cantilever_beam_schematic(ax, L, loads, ra_y=ra_y)
-    fig.subplots_adjust(left=sub_l, right=sub_r, top=0.98, bottom=0.06)
-    return fig
+    """שרטוט זיז עליון חדש (סגנון בחינה) — בלי דיאגרמות N/Q/M וריאקציות."""
+    del ra_y, wide
+    from notebook.mpl.schematic.problem_draw import build_problem_figure
+
+    return build_problem_figure(L, loads, mode="cantilever")
 
 
 def _notebook_graphics_assets(
@@ -2226,16 +2225,10 @@ def _notebook_graphics_assets(
         png_download = _fig_to_png_bytes(fig_download, style="export", pad_inches=0.06)
         plt.close(fig_download)
 
-        # display: beam only (axis top) without diagrams
-        fig_display = plt.figure(figsize=(fig_w, 2.15), facecolor="none")
-        _prep_figure_transparent(fig_display)
-        ax_d = fig_display.add_subplot(1, 1, 1)
-        _prep_axis_on_paper(ax_d, grid=False)
-        _draw_cantilever_beam_schematic(
-            ax_d, L, loads, ra_y=float(result.get("R_Ay", 0.0))
+        # display: שרטוט תרגיל חדש (בלי דיאגרמות)
+        fig_display = build_cantilever_schematic_figure(
+            L, loads, ra_y=float(result.get("R_Ay", 0.0)), wide=wide
         )
-        fig_display.subplots_adjust(left=sub_l, right=sub_r, top=0.98, bottom=0.06)
-
         png_display = _fig_to_png_bytes(fig_display, style="embed", pad_inches=0.04)
         plt.close(fig_display)
         return png_display, png_download
@@ -2295,28 +2288,6 @@ def _distributed_moment_terms_about(
     return out
 
 
-def _udl_split_note_html_for_pivot(loads: List[dict], x_ref: float) -> str:
-    """משפט קצר לפני ΣM כשמפורס חוצה את נקודת הסימון."""
-    from core.distributed_moments import (
-        UDL_SPLIT_ABOUT_PIVOT_HE,
-        distributed_crosses_pivot,
-    )
-
-    for ld in loads:
-        if not isinstance(ld, dict) or ld.get("type") != "distributed":
-            continue
-        try:
-            x1 = float(ld.get("x1", 0.0) or 0.0)
-            x2 = float(ld.get("x2", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-        if distributed_crosses_pivot(x1, x2, x_ref):
-            note = html_lib.escape(UDL_SPLIT_ABOUT_PIVOT_HE)
-            return (
-                f'<div style="direction:rtl;text-align:right;font-size:12px;'
-                f'line-height:1.35;margin:0 0 4px 0;color:#222;">{note}</div>'
-            )
-    return ""
 
 
 def _notebook_calc_stub_under_beam(
@@ -2516,9 +2487,6 @@ def _notebook_calc_stub_under_beam(
     ]
     if support_mode == "cantilever" and cantilever_result is not None:
         if mg_calc:
-            note_wall = _udl_split_note_html_for_pivot(loads, 0.0)
-            if note_wall:
-                calc_rows.append(note_wall)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     mg_line,
@@ -2529,9 +2497,6 @@ def _notebook_calc_stub_under_beam(
                 )
             )
         if ay_calc:
-            note_tip = _udl_split_note_html_for_pivot(loads, float(L))
-            if note_tip:
-                calc_rows.append(note_tip)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     ay_header_line,
@@ -2543,9 +2508,6 @@ def _notebook_calc_stub_under_beam(
             )
     else:
         if ma_calc:
-            note_a = _udl_split_note_html_for_pivot(loads, float(ra_pos))
-            if note_a:
-                calc_rows.append(note_a)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     ma_line,
@@ -2556,9 +2518,6 @@ def _notebook_calc_stub_under_beam(
                 )
             )
         if support_mode == "supports" and mb_calc:
-            note_b = _udl_split_note_html_for_pivot(loads, float(rb_pos))
-            if note_b:
-                calc_rows.append(note_b)
             calc_rows.append(
                 _reaction_sigma_group_html(
                     mb_line,
@@ -2667,10 +2626,11 @@ def _expand_force_panel_limits(ax: Any, Lf: float, x_pad: float) -> None:
 
 
 def _force_panel_subplot_margins(*, wide: bool) -> tuple[float, float, float, float]:
-    """שולי figure לפאנל N/Q/M."""
+    """שולי figure לפאנל N/Q/M — מקום לשם/יחידה מוגדלים מחוץ לקורה."""
     sub_l, sub_r = _subplot_lr(wide=wide)
-    left = max(sub_l, 0.075)
-    return left, sub_r, 0.93, 0.09
+    left = max(sub_l, 0.11)
+    right = min(sub_r, 0.955)
+    return left, right, 0.93, 0.09
 
 
 def _build_force_panel_figure(

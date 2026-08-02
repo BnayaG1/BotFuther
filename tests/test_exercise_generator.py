@@ -260,6 +260,26 @@ def test_two_distributed_loads_have_different_w():
     assert saw_two
 
 
+def test_two_distributed_loads_do_not_overlap():
+    from exercise_generator.randomize import udl_spans_overlap
+    from exercise_generator.schema import DistributedLoad
+
+    saw_two = False
+    for seed in range(200):
+        ex = build_family("overhang_stepped_udl", seed=seed)
+        require_valid(ex)
+        udls = [ld for ld in ex.loads if isinstance(ld, DistributedLoad)]
+        if len(udls) < 2:
+            continue
+        saw_two = True
+        for i in range(len(udls)):
+            for j in range(i + 1, len(udls)):
+                assert not udl_spans_overlap(
+                    udls[i].x1, udls[i].x2, udls[j].x1, udls[j].x2
+                )
+    assert saw_two
+
+
 def test_axial_load_in_extracted_and_png(tmp_path: Path):
     """עומס צירי מופיע ב־JSON עם Fx ומייצא PNG תקין."""
     from exercise_generator.schema import PointLoad
@@ -376,8 +396,51 @@ def test_simply_supported_keeps_pin_roller_and_skip_f():
         labels = [s.label for s in ex.supports] + [p.label for p in ex.labeled_points]
         assert "F" not in labels
         assert "A" in labels and "B" in labels
+        xa = float(ex.supports[0].x)
+        xb = float(ex.supports[1].x)
+        assert xa < xb
         require_valid(ex)
     assert saw_ss
+
+
+def test_simply_supported_support_end_vs_interior_fifty_fifty():
+    """A: ~50% בקצה שמאל; B: ~50% בקצה ימין; מרווח סביר בין הסמכים."""
+    from exercise_generator.randomize import (
+        SUPPORT_AT_END_PROB,
+        make_rng,
+        pick_simply_supported_positions,
+    )
+
+    stations = [0.0, 1.5, 3.0, 4.5, 6.0, 7.5, 9.0]
+    L = stations[-1]
+    rng = make_rng(42)
+    n = 4000
+    a_at_left = 0
+    b_at_right = 0
+    saw_both_ends = False
+    saw_both_interior = False
+    saw_left_overhang = False  # A פנימי, B בקצה
+    saw_right_overhang = False  # A בקצה, B פנימי
+    for _ in range(n):
+        xa, xb = pick_simply_supported_positions(rng, stations)
+        assert xa < xb
+        assert (xb - xa) >= 0.35 * L - 1e-6
+        if abs(xa) < 1e-9:
+            a_at_left += 1
+        if abs(xb - L) < 1e-9:
+            b_at_right += 1
+        if abs(xa) < 1e-9 and abs(xb - L) < 1e-9:
+            saw_both_ends = True
+        if abs(xa) > 1e-9 and abs(xb - L) > 1e-9:
+            saw_both_interior = True
+        if abs(xa) > 1e-9 and abs(xb - L) < 1e-9:
+            saw_left_overhang = True
+        if abs(xa) < 1e-9 and abs(xb - L) > 1e-9:
+            saw_right_overhang = True
+    assert abs(a_at_left / n - SUPPORT_AT_END_PROB) < 0.05
+    assert abs(b_at_right / n - SUPPORT_AT_END_PROB) < 0.05
+    assert saw_both_ends and saw_both_interior
+    assert saw_left_overhang and saw_right_overhang
 
 
 def test_cantilever_structure_and_png(tmp_path: Path):
@@ -424,6 +487,44 @@ def test_udl_weights_integer_1_to_7_distinct():
         ws = [float(ld.w) for ld in udls]
         assert all(w == int(w) and UDL_W_MIN <= w <= UDL_W_MAX for w in ws)
         assert len(ws) == len(set(ws))
+
+
+def test_udl_span_length_in_range_and_peaks_near_half_L():
+    """אורך מפורס ב־[1, L]; התפלגות עם שיא ליד L/2."""
+    from collections import Counter
+
+    from exercise_generator.randomize import make_rng, random_udl_span_length
+    from exercise_generator.schema import DistributedLoad
+
+    for seed in range(120):
+        ex = build_family("overhang_stepped_udl", seed=seed)
+        for ld in ex.loads:
+            if isinstance(ld, DistributedLoad):
+                span = round(float(ld.x2) - float(ld.x1), 1)
+                assert 1.0 - 1e-9 <= span <= float(ex.L) + 1e-9
+
+    L = 10.0
+    rng = make_rng(42)
+    counts = Counter(
+        round(random_udl_span_length(rng, L), 1) for _ in range(8000)
+    )
+    peak = max(counts, key=counts.get)
+    assert abs(peak - 5.0) <= 0.5
+    assert counts[5.0] > counts[4.0] > counts[3.0]
+    assert counts[5.0] > counts[6.0] > counts[7.0]
+
+
+def test_min_gap_between_stations_is_one_meter():
+    """כל שתי נקודות מידה סמוכות — לפחות מטר אחד."""
+    from exercise_generator.randomize import SEG_MIN
+
+    for seed in range(150):
+        ex = build_family("overhang_stepped_udl", seed=seed)
+        xs = [0.0]
+        for seg in ex.dim_row_top.segments:
+            xs.append(float(seg.x2))
+        for a, b in zip(xs, xs[1:]):
+            assert (b - a) >= SEG_MIN - 1e-6
 
 
 def test_inclined_no_dl_near_right_end():

@@ -66,12 +66,8 @@ def get_vision_engineering_scan_protocol() -> str:
 
 
 def get_vision_handwriting_hint() -> str:
-    template = _cached_prompt("vision/03_handwriting.txt")
-    return template.format(
-        scan_protocol=get_vision_engineering_scan_protocol(),
-        load_position_projection=get_vision_load_position_projection(),
-        distributed_loads_protocol=get_vision_distributed_loads_protocol(),
-    )
+    """תוספות קצרות לכתב יד — בלי לשכפל את כל מפרט החילוץ."""
+    return _cached_prompt("vision/03_handwriting.txt")
 
 
 def get_vision_stage_geometry_prompt() -> str:
@@ -117,8 +113,14 @@ def format_vision_stage_prompt(template: str, *, context: dict | None = None, ex
     )
 
 
+def get_vision_extract_spec() -> str:
+    return _cached_prompt("vision/extract_spec.txt")
+
+
 def get_vision_extract_prompt() -> str:
-    return _cached_prompt("vision/04_extract_monolithic.txt")
+    """מפרט Image/Find/Encode + סכמת JSON הקיימת."""
+    template = _cached_prompt("vision/04_extract_monolithic.txt")
+    return template.format(extract_spec=get_vision_extract_spec())
 
 
 def get_vision_focus_mode_en() -> str:

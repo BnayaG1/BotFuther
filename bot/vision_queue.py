@@ -18,7 +18,8 @@ from bot.config import (
     VISION_JOB_RETRY_ATTEMPTS,
     VISION_JOB_RETRY_BASE_SEC,
 )
-from bot.draft_keyboard import build_draft_keyboard, draft_display_text
+from bot.draft_keyboard import DRAFT_INSTRUCTION_TEXT
+from bot.draft_preview import send_draft_preview
 from bot.env import resolve_vision_model
 from bot.gemini_chat import friendly_gemini_error, gemini_runtime
 from bot.prompt_loader import build_vision_extra_instruction
@@ -186,7 +187,7 @@ async def _run_vision_extract_inner(
     use_draft = DRAFT_APPROVAL_MODE and not VISION_EXTRACT_ONLY_MODE
     if use_draft:
         store_extracted_exercise(chat_id, extracted)
-        set_draft_pending(chat_id, extracted, draft_display_text(extracted))
+        set_draft_pending(chat_id, extracted, DRAFT_INSTRUCTION_TEXT)
         return VisionJobResult(use_draft=True, extracted=extracted)
 
     if VISION_EXTRACT_ONLY_MODE:
@@ -211,21 +212,19 @@ async def send_draft_to_chat(
     chat_id: int,
     extracted: dict,
 ) -> None:
-    text = draft_display_text(extracted)
-    keyboard = build_draft_keyboard(extracted)
-    try:
-        sent = await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="Markdown",
-        )
-    except Exception:
-        sent = await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=keyboard,
-        )
+    ok = await send_draft_preview(context, chat_id, extracted)
+    if ok:
+        return
+    # Fallback: טקסט הסבר בלי שרטוט אם הרינדור נכשל
+    from bot.draft_keyboard import DRAFT_INSTRUCTION_TEXT, build_draft_approve_keyboard
+
+    text = DRAFT_INSTRUCTION_TEXT
+    keyboard = build_draft_approve_keyboard()
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=keyboard,
+    )
     set_draft_pending(
         chat_id,
         extracted,
@@ -233,6 +232,9 @@ async def send_draft_to_chat(
         message_id=sent.message_id,
         clear_edit=True,
     )
+    from bot.draft_session import register_draft_cleanup_id
+
+    register_draft_cleanup_id(chat_id, sent.message_id)
 
 
 async def _deliver_result(

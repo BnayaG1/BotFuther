@@ -8,15 +8,20 @@ import string
 from exercise_generator.geometry import row_from_breaks
 from exercise_generator.randomize import (
     INCLINED_NO_DL_RIGHT_M,
+    MAX_LOADS_PER_POINT,
     MOMENT_M,
+    UDL_SPAN_MIN,
     make_rng,
     pick_load_composition,
+    pick_simply_supported_positions,
     pick_support_configuration,
     random_force_magnitude,
     random_inclined_angle_deg,
     random_point_spacings,
+    random_udl_span_length,
     random_udl_weights,
     shuffled_load_kinds,
+    udl_spans_overlap,
 )
 from exercise_generator.schema import (
     DistributedLoad,
@@ -76,6 +81,23 @@ def _cantilever_point_letters() -> list[str]:
     return [c for c in string.ascii_uppercase[1:] if c != "F"]
 
 
+def _free_udl_gaps(
+    L: float,
+    placed: list[tuple[float, float]],
+    *,
+    min_len: float = UDL_SPAN_MIN,
+) -> list[tuple[float, float]]:
+    gaps: list[tuple[float, float]] = []
+    free_lo = 0.0
+    for a, b in sorted(placed):
+        if float(a) - free_lo >= min_len - 1e-9:
+            gaps.append((free_lo, float(a)))
+        free_lo = max(free_lo, float(b))
+    if float(L) - free_lo >= min_len - 1e-9:
+        gaps.append((free_lo, float(L)))
+    return gaps
+
+
 def _assemble_loads(
     r: random.Random,
     kinds: list[str],
@@ -83,16 +105,116 @@ def _assemble_loads(
     udl_weights: list[float],
     L: float,
 ) -> list[LoadItem]:
+    from collections import defaultdict
+
     loads: list[LoadItem] = []
+    touches: dict[float, int] = defaultdict(int)
+    placed_udls: list[tuple[float, float]] = []
+    pending_udl: list[float] = []
     udl_i = 0
-    for i, kind in enumerate(kinds):
-        if kind == "distributed":
-            w = udl_weights[udl_i]
+    for kind in kinds:
+        if kind == 'distributed':
+            pending_udl.append(udl_weights[udl_i])
             udl_i += 1
-            loads.append(_build_load(kind, xs[i], xs[i + 1], r, udl_w=w, beam_L=L))
-        else:
-            loads.append(_build_load(kind, xs[i], xs[i + 1], r, beam_L=L))
+
+    pts = sorted({round(float(x), 1) for x in xs} | {0.0, round(float(L), 1)})
+
+    def _overlaps_existing(x1: float, x2: float) -> bool:
+        return any(udl_spans_overlap(x1, x2, a, b) for a, b in placed_udls)
+
+    def _commit_udl(x1: float, x2: float, w: float) -> None:
+        loads.append(DistributedLoad(x1=x1, x2=x2, w=w))
+        touches[round(x1, 6)] += 1
+        touches[round(x2, 6)] += 1
+        placed_udls.append((float(x1), float(x2)))
+
+    def _candidate_spans(*, others_left: int) -> list[tuple[float, float]]:
+        reserve = float(UDL_SPAN_MIN) * others_left
+        out: list[tuple[float, float]] = []
+        for i in range(len(pts)):
+            for j in range(i + 1, len(pts)):
+                a, b = pts[i], pts[j]
+                if b - a < UDL_SPAN_MIN - 1e-9:
+                    continue
+                if _overlaps_existing(a, b):
+                    continue
+                k1, k2 = round(a, 6), round(b, 6)
+                if touches[k1] >= MAX_LOADS_PER_POINT or touches[k2] >= MAX_LOADS_PER_POINT:
+                    continue
+                trial = placed_udls + [(float(a), float(b))]
+                left_free = sum(g2 - g1 for g1, g2 in _free_udl_gaps(L, trial))
+                if left_free + 1e-9 < reserve:
+                    continue
+                out.append((float(a), float(b)))
+        return out
+
+    def _place_one_udl(w: float, *, others_left: int) -> None:
+        cands = _candidate_spans(others_left=others_left)
+        if not cands:
+            raise ValueError('could not place non-overlapping distributed load')
+        peak = 0.5 * float(L)
+        weights = [peak - abs((b - a) - peak) + 1.0 for a, b in cands]
+        a, b = r.choices(cands, weights=weights, k=1)[0]
+        _commit_udl(a, b, w)
+
+    n_udl = len(pending_udl)
+    for ui, w in enumerate(pending_udl):
+        _place_one_udl(w, others_left=n_udl - ui - 1)
+
+    for i, kind in enumerate(kinds):
+        if kind == 'distributed':
+            continue
+        x_at = float(xs[i])
+        ck = round(x_at, 6)
+        if touches[ck] >= MAX_LOADS_PER_POINT:
+            for cand in xs:
+                ckk = round(float(cand), 6)
+                if touches[ckk] < MAX_LOADS_PER_POINT:
+                    x_at = float(cand)
+                    break
+        ld = _build_load(kind, x_at, x_at, r, beam_L=L)
+        loads.append(ld)
+        touches[round(float(getattr(ld, 'x', 0.0)), 6)] += 1
     return loads
+
+
+def _merge_stations(
+    L: float,
+    base_xs: list[float],
+    supports: list[Support],
+    loads: list[LoadItem],
+) -> list[float]:
+    """מאחד נקודות מידה: קצוות, סמכים, בסיס, וקצות/מיקומי עומסים."""
+    pts: set[float] = {0.0, round(float(L), 1)}
+    for x in base_xs:
+        pts.add(round(float(x), 1))
+    for s in supports:
+        pts.add(round(float(s.x), 1))
+    for ld in loads:
+        if isinstance(ld, DistributedLoad):
+            pts.add(round(float(ld.x1), 1))
+            pts.add(round(float(ld.x2), 1))
+        else:
+            pts.add(round(float(getattr(ld, "x", 0.0)), 1))
+    return sorted(pts)
+
+
+def _labeled_non_support_points(
+    stations: list[float],
+    supports: list[Support],
+    letters: list[str],
+) -> list[LabeledPoint]:
+    support_xs = {round(float(s.x), 6) for s in supports}
+    labeled: list[LabeledPoint] = []
+    letter_i = 0
+    for x in stations:
+        if round(float(x), 6) in support_xs:
+            continue
+        if letter_i >= len(letters):
+            break
+        labeled.append(LabeledPoint(letters[letter_i], float(x)))
+        letter_i += 1
+    return labeled
 
 
 def _build_simply_supported(
@@ -103,40 +225,30 @@ def _build_simply_supported(
     kinds: list[str],
     udl_weights: list[float],
 ) -> Exercise:
-    """ענף סמכים — pin@A + roller@B + זיזים (התנהגות היום)."""
-    # n_total אזורי עומס + זיז ימין; A אחרי האזור הראשון, B לפני הזיז הימני
+    """ענף סמכים — pin@A + roller@B; לכל סמך 50% בקצה / 50% בנקודה אחרת."""
     segs, L = random_point_spacings(r, n_segments=n_total + 1)
     xs = [0.0]
     for seg in segs:
         xs.append(round(xs[-1] + seg, 1))
-    # xs: [0, x1, ..., x_n, L] — A=x1, B=x_n
-    xa = xs[1]
-    xb = xs[n_total]
+    xa, xb = pick_simply_supported_positions(r, xs)
+    supports = [
+        Support("A", "pin", xa),
+        Support("B", "roller", xb),
+    ]
 
     loads = _assemble_loads(r, kinds, xs, udl_weights, L)
-
-    labeled: list[LabeledPoint] = []
-    # כל תחנה שאינה סמך — כולל קצוות הקורה — משמאל לימין: C, D, E, G… (בלי F)
-    letters = _point_letters()
-    letter_i = 0
-    for x in xs:
-        if abs(x - xa) < 1e-9 or abs(x - xb) < 1e-9:
-            continue
-        label = letters[letter_i]
-        labeled.append(LabeledPoint(label, x))
-        letter_i += 1
+    stations = _merge_stations(L, xs, supports, loads)
+    labeled = _labeled_non_support_points(stations, supports, _point_letters())
+    bottom_breaks = sorted({0.0, float(xa), float(xb), float(L)})
 
     return Exercise(
         L=L,
         support_mode="simply_supported",
-        supports=[
-            Support("A", "pin", xa),
-            Support("B", "roller", xb),
-        ],
+        supports=supports,
         loads=loads,
         labeled_points=labeled,
-        dim_row_top=row_from_breaks(xs),
-        dim_row_bottom=row_from_breaks([0.0, xa, xb, L]),
+        dim_row_top=row_from_breaks(stations),
+        dim_row_bottom=row_from_breaks(bottom_breaks),
         family=FAMILY_ID,
         seed=seed,
     )
@@ -158,24 +270,20 @@ def _build_cantilever(
         xs.append(round(xs[-1] + seg, 1))
 
     wall_x = 0.0 if fixed_side == "left" else float(L)
+    supports = [Support("A", "fixed", wall_x)]
     loads = _assemble_loads(r, kinds, xs, udl_weights, L)
-
-    labeled: list[LabeledPoint] = []
-    letters = _cantilever_point_letters()
-    letter_i = 0
-    for x in xs:
-        if abs(x - wall_x) < 1e-9:
-            continue
-        labeled.append(LabeledPoint(letters[letter_i], x))
-        letter_i += 1
+    stations = _merge_stations(L, xs, supports, loads)
+    labeled = _labeled_non_support_points(
+        stations, supports, _cantilever_point_letters()
+    )
 
     return Exercise(
         L=L,
         support_mode="cantilever",
-        supports=[Support("A", "fixed", wall_x)],
+        supports=supports,
         loads=loads,
         labeled_points=labeled,
-        dim_row_top=row_from_breaks(xs),
+        dim_row_top=row_from_breaks(stations),
         dim_row_bottom=row_from_breaks([0.0, L]),
         family=FAMILY_ID,
         seed=seed,

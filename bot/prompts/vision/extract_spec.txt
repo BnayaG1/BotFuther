@@ -1,0 +1,49 @@
+# Beam exercise extraction spec
+
+Output JSON only (no markdown). Units in JSON: meters, ton, ton/m, ton·m. Convert kN→ton (÷10). Positive Fy = downward; positive Fx = to the right.
+
+## A. What the image is
+- A civil-engineering statics exercise photo, often handwritten Hebrew/Latin digits.
+- SOURCE OF TRUTH = the exercise diagram: beam line, supports, load arrows, dimension ticks/labels.
+- IGNORE student scratch: ΣFx/ΣFy, Ax=…, boxed answers, equilibrium checks — never treat those as applied loads.
+- If the photo is rotated, mentally rotate so the beam is horizontal left→right.
+
+## B. What to find (in this order)
+1) Dimension chain (numbers between tick marks along the beam)
+   → segments, labeled_points (A,B,C… cumulative x from leftmost tick), L = sum of all segment lengths.
+   Distances come ONLY from this chain (vertical projection from contact point to the chain) — never from where the force text floats.
+2) Supports (classify EACH by its own symbol — not by left/right habit)
+   → pin = triangle with multiple short diagonal hatch ticks (////)
+   → roller = wheels/circles, or a single plain bar, or nothing under the triangle
+   → fixed = wall embedment ONLY for cantilever
+   → fill supports[], ra_pos = pin x, rb_pos = roller x, support_mode
+3) Concentrated loads on the beam → loads[]
+   Include EVERY arrow on the axis: vertical, inclined, moment, AND horizontal/axial ←/→.
+   Axial arrows often sit at an interior point (C/D/E midspan), not only at ends — never skip them.
+4) Distributed load bands along a span → distributed_loads[] ONLY (never type "distributed" inside loads[])
+
+## C. How to encode each load (visual → JSON)
+- Straight ↓ or ↑ on the beam → vertical point:
+  {"type":"point","x":m,"Fy":ton,"Fx":0,"direction":"down"|"up","label_at":"D"}
+  NEVER type "inclined". Do not invent Fx or angle for a vertical arrow (slight sketch tilt still counts as vertical).
+- Straight ← or → along the beam (end OR interior x) → axial point:
+  {"type":"point","x":m,"Fy":0,"Fx":ton,"direction":"left"|"right","label_at":"C"}
+  x = where the arrow meets the beam (project to dimension chain). Do not drop because it is not at A/B.
+- Clear diagonal ↘/↙ (usually with 30/45/60 written) → inclined:
+  {"type":"inclined","x":m,"magnitude_ton":F,"angle_deg":α,"incl_dir":"dr"|"dl","Fx":F*cosα,"Fy":F*sinα,"label_at":"C"}
+  angle_deg = acute angle from horizontal as written (do not swap 30↔60). dr=↘ (Fx>0), dl=↙ (Fx<0). Fy component positive downward.
+- Curved / circular arrow → moment: {"type":"moment","x":m,"M":ton_m,"label_at":"F"}
+- Band / bracket of arrows along a span → distributed_loads entry:
+  {"start_x":m,"end_x":m,"magnitude":ton_per_m,"shape":"rectangular"|"triangular"}
+  A single vertical arrow touching the beam at one point is NOT distributed.
+  UDL may CROSS a support and continue onto an overhang — if arrows/bracket run D→E past B, end_x is E (not B). Do not stop a continuous band at pin/roller.
+
+Stacked arrows at the same x = SEPARATE loads[] entries — do not drop one; do not merge into inclined unless a single slanted arrow is drawn.
+
+COMMON PATTERN (do not miss): at an interior tick (C or D) there is often BOTH a vertical ↓ (e.g. 200kn/20t) AND a horizontal → drawn ON the beam line (e.g. 150kn/15t or 100kn/10t). That is TWO point loads at the same x:
+  {"type":"point","x":2,"Fy":20,"Fx":0,"direction":"down","label_at":"C"}
+  {"type":"point","x":2,"Fy":0,"Fx":15,"direction":"right","label_at":"C"}
+
+AXIAL CHECK (mandatory before finish): scan the beam axis once more for any ← or → arrow at interior points. If present, it MUST appear in loads[] as point with Fy=0, Fx≠0. Never omit midspan axial because a vertical already exists at that station.
+
+Dual labels like "100kn (10t)" → use the ton in parentheses.

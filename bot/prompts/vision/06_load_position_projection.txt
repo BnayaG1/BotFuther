@@ -4,9 +4,9 @@ Before assigning x [m] to any load, locate its action point ON THE BEAM AXIS, th
 
 ## Step A — Find the load center on the beam
 - **Point load (vertical ↓/↑):** the center is where the arrow meets the beam (middle of application on the beam axis).
+- **Axial / horizontal ←/→:** the center is where the horizontal arrow meets the beam axis — often at an INTERIOR tick (C/D/E), not only at ends. Encode as point with Fy=0 and Fx≠0. Do NOT skip midspan horizontal arrows.
 - **Inclined load:** the center is EXACTLY where the arrow tip touches / points to the beam — NOT where the magnitude label is written.
-- **Moment:** the center is the middle of the curved arrow on the beam axis (where the moment acts).
-- **Moment vs roller B:** the curved arrow center is NEVER at the roller symbol — project to the nearest dimension tick (often F, one segment before B). Do NOT set label_at=B for a moment 2m before the beam end.
+- **Moment:** the center is the middle of the curved arrow on the beam axis (where the moment acts). A moment drawn at end B / on the roller stays at B (x=L) — do not move it inward to D/F.
 - **Distributed load:** start_x and end_x = vertical projection of span start/end on beam to dimension line (see distributed_loads_protocol).
 
 ## Step B — Vertical drop to dimension line
@@ -20,4 +20,4 @@ The x [m] of the load = the x on the dimension line where this vertical meets it
 - NEVER place a load at mid-span by visual guess — always use the vertical projection rule.
 
 ## Stacked loads at similar x
-Each load gets its OWN projection — moment, inclined, and point at the same station share the same x only if their beam contact points align vertically.
+Each load gets its OWN projection — moment, inclined, vertical point, and axial ←/→ at the same station share the same x only if their beam contact points align vertically. Do not drop the axial when a vertical/inclined already exists nearby.

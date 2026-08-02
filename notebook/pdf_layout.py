@@ -3,8 +3,9 @@
 פריסת PDF למחברת הבוט (PyMuPDF Story).
 
 חוזה עמודים קבוע:
-  עמוד 1 — קורה + חישובי תגובות + דיאגרמות N/Q/M
-  עמוד 2 — חישובי נקודות
+  עמוד 1 — קורה + חישובי תגובות
+  עמוד 2 — דיאגרמות N/Q/M
+  עמוד 3 — חישובי נקודות
 
 כללי PyMuPDF (לא לשבור):
   - margin-top חיובי במ"מ בלבד (לא שלילי)
@@ -38,13 +39,13 @@ PAGE_BREAK_CSS = """
 class NotebookPdfLayout:
     """קונפיגורציית פריסה ל-PDF של הבוט בלבד (לא matplotlib / iframe)."""
 
-    gap_after_calc_squares: int = 7
-    gap_n_to_q_squares: int = 6
-    gap_q_to_m_squares: int = 6
-    gap_after_m_squares: int = 4
+    gap_after_calc_squares: int = 2
+    gap_n_to_q_squares: int = 10
+    gap_q_to_m_squares: int = 10
+    gap_after_m_squares: int = 2
     point_calc_base_mm: float = round(10 * 25.4 / 96, 3)
-    point_calc_gap_scale: float = 0.3  # 70% פחות מרווח מעל חישובי נקודות
-    panel_height_scale: float = 1.18  # >~1.20 overflows page 1 with 18pt reaction font
+    point_calc_gap_scale: float = 0.12
+    panel_height_scale: float = 2.56  # פי 2 מ־1.28 — מתיחה אנכית של פאנלי N/Q/M
     page_padding_top_mm: float = 7.0
     page_padding_x_mm: float = 6.0
     page_padding_bottom_mm: float = 8.0
@@ -54,8 +55,8 @@ class NotebookPdfLayout:
 
 DEFAULT_BOT_LAYOUT = NotebookPdfLayout()
 
-# זיז: 3 בלוקי חישוב (Fx, ΣMA, ΣFy) — panel_height_scale נמוך יותר כדי שלא יגלוש עמוד 1
-CANTILEVER_BOT_LAYOUT = NotebookPdfLayout(panel_height_scale=1.05)
+# זיז: 3 בלוקי חישוב — אותו יחס מתיחה כמו ברירת המחדל (פי 2 מ־1.15)
+CANTILEVER_BOT_LAYOUT = NotebookPdfLayout(panel_height_scale=2.30)
 
 
 def grid_gap_mm(squares: int) -> float:
@@ -119,10 +120,11 @@ def build_bot_notebook_extra_html(
     forces_html: str,
     point_calc_inner_html: str,
 ) -> str:
-    """עמוד 1 (calc + forces) | page-break | חישובי נקודות."""
+    """עמוד 1 (calc) | page-break | forces | page-break | חישובי נקודות."""
     pt_gap = point_calc_top_gap_mm(layout)
     pts_scroll = (
         f'<div class="nb-point-calc-scroll" style="margin-top:{pt_gap}mm">'
         f"{point_calc_inner_html}</div>"
     )
-    return calc_html + forces_html + PAGE_BREAK_HTML + pts_scroll
+    # שבירת עמוד לפני הגרפים — מונעת דחיסת תמונת N כשלא נשאר מקום בעמוד החישובים
+    return calc_html + PAGE_BREAK_HTML + forces_html + PAGE_BREAK_HTML + pts_scroll

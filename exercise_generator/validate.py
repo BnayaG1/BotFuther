@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from exercise_generator.randomize import MAX_LOADS_PER_POINT
+from exercise_generator.randomize import MAX_LOADS_PER_POINT, udl_spans_overlap
 from exercise_generator.schema import DistributedLoad, Exercise, InclinedLoad, MomentLoad, PointLoad
 
 
@@ -55,6 +55,16 @@ def validate_exercise(exercise: Exercise) -> list[str]:
     udl_ws = [round(float(ld.w), 6) for ld in exercise.loads if isinstance(ld, DistributedLoad)]
     if len(udl_ws) != len(set(udl_ws)):
         errors.append("distributed loads must have distinct t/m weights")
+
+    # מפורסים — בלי חפיפה (כולל אחד בתוך השני); מגע בקצה מותר
+    udls = [ld for ld in exercise.loads if isinstance(ld, DistributedLoad)]
+    for i in range(len(udls)):
+        for j in range(i + 1, len(udls)):
+            a, b = udls[i], udls[j]
+            if udl_spans_overlap(a.x1, a.x2, b.x1, b.x2):
+                errors.append(
+                    f"distributed loads overlap ({a.x1:g}-{a.x2:g} vs {b.x1:g}-{b.x2:g})"
+                )
 
     # תצורת סמכים מול ריתום
     types = [s.type for s in exercise.supports]

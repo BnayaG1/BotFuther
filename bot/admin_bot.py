@@ -45,9 +45,13 @@ def _welcome_text() -> str:
         period = _period_label(pkg.period_days)
         return (
             "ניהול קופונים\n"
-            f"חבילה יחידה: ₪{pkg.price_ils} · {pkg.daily_quota}/יום · {period}"
+            f"חבילה יחידה: ₪{pkg.price_ils} · {period}"
         )
-    return "ניהול קופונים"
+    lines = ["ניהול קופונים"]
+    for pkg in sorted(PACKAGE_CATALOG, key=lambda p: p.price_ils):
+        period = _period_label(pkg.period_days)
+        lines.append(f"₪{pkg.price_ils} · {period}")
+    return "\n".join(lines)
 
 
 def _admin_menu_button_label(pkg: PackageOption) -> str:
@@ -56,7 +60,7 @@ def _admin_menu_button_label(pkg: PackageOption) -> str:
 
 def _admin_package_label(pkg: PackageOption) -> str:
     period = _period_label(pkg.period_days)
-    return f"{pkg.daily_quota} תמונות/יום · {period}"
+    return f"{period} · ₪{pkg.price_ils}"
 
 
 _PRICE_TO_PACKAGE: dict[str, str] = {
@@ -124,7 +128,7 @@ def _confirm_keyboard(package_id: str) -> InlineKeyboardMarkup:
 
 def _package_summary(pkg: PackageOption) -> str:
     period = _period_label(pkg.period_days)
-    return f"*₪{pkg.price_ils}* · {pkg.daily_quota}/יום · {period}"
+    return f"*₪{pkg.price_ils}* · {period}"
 
 
 def _format_codes_message(codes: list[str]) -> str:
@@ -386,4 +390,7 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s — %(message)s",
         level=logging.INFO,
     )
+    # Avoid logging full Telegram API URLs (they embed the bot token).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     run_admin_bot()

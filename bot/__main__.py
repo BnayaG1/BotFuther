@@ -46,6 +46,9 @@ app = Flask(__name__)
 def home(): return "Bot is running!"
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
+# Avoid logging full Telegram API URLs (they embed the bot token).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("beam_telegram_bot")
 
 _POLLING_KW = {"drop_pending_updates": True, "allowed_updates": Update.ALL_TYPES}

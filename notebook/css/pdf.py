@@ -111,12 +111,17 @@ html, body, .nb-outer, .nb-page {{
   background: transparent;
 }}
 .nb-forces-zone {{
+  /* לא לשבור באמצע בלוק הגרפים — השבירה לפניהם ב־PAGE_BREAK_HTML */
   page-break-inside: avoid;
   break-inside: avoid;
 }}
 .nb-forces-zone img {{
   page-break-inside: avoid;
   break-inside: avoid;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  min-height: 20mm;
 }}
 {PAGE_BREAK_CSS}
 .nb-force-wrap {{

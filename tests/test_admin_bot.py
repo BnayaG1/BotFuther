@@ -18,8 +18,8 @@ from bot.admin_bot import (
 from bot.purchase import PACKAGE_CATALOG
 
 
-def test_price_buttons_map_to_single_package():
-    assert len({pkg.package_id for pkg in PACKAGE_CATALOG}) == 1
+def test_price_buttons_map_to_packages():
+    assert len({pkg.package_id for pkg in PACKAGE_CATALOG}) == 2
     for pkg in PACKAGE_CATALOG:
         label = _admin_menu_button_label(pkg)
         assert _PRICE_TO_PACKAGE[label] == pkg.package_id
@@ -27,8 +27,10 @@ def test_price_buttons_map_to_single_package():
 
 
 def test_price_button_mapping_examples():
-    assert _PRICE_TO_PACKAGE["₪150"] == "6_105"
-    assert _PRICE_TO_PACKAGE["150"] == "6_105"
+    assert _PRICE_TO_PACKAGE["₪30"] == "6_30"
+    assert _PRICE_TO_PACKAGE["30"] == "6_30"
+    assert _PRICE_TO_PACKAGE["₪90"] == "6_120"
+    assert _PRICE_TO_PACKAGE["90"] == "6_120"
 
 
 def test_is_admin_respects_configured_ids(monkeypatch):
@@ -45,10 +47,8 @@ def test_admin_menu_keyboard_shows_payment_amounts():
     labels = [btn.text for row in keyboard.keyboard for btn in row]
     for pkg in PACKAGE_CATALOG:
         assert _admin_menu_button_label(pkg) in labels
-    assert "₪150" in labels
-    # חבילה יחידה בלבד — בלי מחירים ישנים בתפריט
     price_labels = [lbl for lbl in labels if lbl.startswith("₪")]
-    assert price_labels == ["₪150"]
+    assert price_labels == ["₪30", "₪90"]
     assert "תפריט" in labels
 
 
@@ -63,7 +63,7 @@ async def test_admin_gen_callback_creates_codes(monkeypatch):
     update = MagicMock()
     update.effective_user = User(id=99, is_bot=False, first_name="Admin")
     update.callback_query = MagicMock()
-    update.callback_query.data = "admin:gen:6_105:2"
+    update.callback_query.data = "admin:gen:6_30:2"
     update.callback_query.message = MagicMock()
     update.callback_query.message.chat_id = 500
     update.callback_query.message.edit_text = AsyncMock()

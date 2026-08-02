@@ -54,6 +54,7 @@ from bot.prompt_loader import (
     get_vision_stage_point_loads_prompt,
     get_vision_stage_supports_prompt,
     get_vision_stage_validation_prompt,
+    invalidate_prompt_cache,
 )
 
 VISION_EXTRACT_PROMPT = get_vision_extract_prompt()
@@ -166,7 +167,11 @@ def extract_exercise_from_image(
     prompt_template: str | None = None,
 ) -> dict:
     """Gemini קורא תמונה ומחזיר JSON מובנה."""
-    base = prompt_template or f"{VISION_EXTRACT_PROMPT}\n\n{VISION_HANDWRITING_HINT}"
+    # רענון מהקבצים — כדי ששינויי הגדרות בפרומפט ייכנסו בלי קומפילציה מחדש של המודול
+    invalidate_prompt_cache()
+    base = prompt_template or (
+        f"{get_vision_extract_prompt()}\n\n{get_vision_handwriting_hint()}"
+    )
     prompt = base
     if extra_instruction and prompt_template is None:
         prompt = f"{prompt}\n\nAdditional instruction:\n{extra_instruction}"
@@ -988,6 +993,7 @@ def _extraction_completeness_issues(beam: dict) -> list[str]:
 
     labeled = _labeled_points_map(beam)
     e_x, g_x = labeled.get("E"), labeled.get("G")
+    b_x = labeled.get("B")
     if e_x is not None and g_x is not None:
         for ld in loads:
             if str(ld.get("type", "")).lower() != "distributed":
@@ -1000,6 +1006,20 @@ def _extraction_completeness_issues(beam: dict) -> list[str]:
             if abs(x1 - e_x) < 0.45 and 0.5 <= w <= 5.0 and x2 < g_x - 0.8:
                 issues.append(
                     f"UDL נגמר ב-x={x2:g} — אמור להימשך עד G (x={g_x:g})"
+                )
+    # מפורס שנעצר על B בעוד שיש זיז ל-E — כשל נפוץ (D→E נחתך בסמך)
+    if b_x is not None and e_x is not None and e_x > b_x + 0.8:
+        for ld in loads:
+            if str(ld.get("type", "")).lower() != "distributed":
+                continue
+            try:
+                x1 = float(ld.get("x1", ld.get("start_x", 0)))
+                x2 = float(ld.get("x2", ld.get("end_x", 0)))
+            except (TypeError, ValueError):
+                continue
+            if x1 < b_x - 0.3 and abs(x2 - b_x) < 0.45:
+                issues.append(
+                    f"UDL נגמר על B (x={b_x:g}) — בדוק אם הרצועה נמשכת עד E (x={e_x:g}) מעל הסמך/הזיז"
                 )
     seg_sum = _segment_length_sum(beam)
     if seg_sum > 0 and abs(seg_sum - L) > 0.25:
@@ -1027,7 +1047,7 @@ def _extraction_completeness_issues(beam: dict) -> list[str]:
         if not near_c and L >= 8:
             issues.append(f"אין עומס ליד נקודה C (x={cx:g})")
 
-    end_fx = 0.0
+    has_any_axial = False
     for ld in loads:
         if str(ld.get("type", "")).lower() != "point":
             continue
@@ -1035,17 +1055,25 @@ def _extraction_completeness_issues(beam: dict) -> list[str]:
             x = float(ld.get("x", 0))
         except (TypeError, ValueError):
             continue
-        if abs(x - L) > 0.35:
-            continue
         fx = float(ld.get("Fx", ld.get("fx", 0)) or 0)
         fy = float(ld.get("Fy", ld.get("fy", 0)) or 0)
-        end_fx = max(end_fx, abs(fx))
-        if abs(fx) < 1e-6 and 5.5 <= abs(fy) <= 7.5:
+        if abs(fx) >= 1e-6 and abs(fy) < 1e-6:
+            has_any_axial = True
+        if abs(x - L) <= 0.35 and abs(fx) < 1e-6 and 5.5 <= abs(fy) <= 7.5:
             issues.append(
                 f"בקצה B (x={L:g}) זוהה עומס אנכי {fy:g}t — בדוק אם זה כוח אופקי 64.2t שמאלה"
             )
-    if complex_diagram and L >= 10 and end_fx < 8.0:
-        issues.append(f"חסר כוח אופקי משמעותי בקצה הקורה (x≈{L:g})")
+    missing_interior = _stations_needing_interior_axial(beam)
+    if missing_interior:
+        xs = ", ".join(f"{x:g}" for x in missing_interior[:6])
+        issues.append(
+            f"ליד עומסים אנכיים פנימיים (x≈{xs}) חסר חץ צירי ←/→ על ציר הקורה "
+            f"— נפוץ: 150kn(15t)/100kn(10t) באותה נקודה כמו ↓20t"
+        )
+    elif complex_diagram and L >= 8 and not has_any_axial:
+        issues.append(
+            "חסר עומס צירי ←/→ — חפש חץ אופקי על ציר הקורה גם בנקודות פנימיות (C/D/E), לא רק בקצה"
+        )
 
     return issues
 
@@ -1118,6 +1146,138 @@ def _geometry_usable_for_refine(beam: dict) -> bool:
         return False
     supports = beam.get("supports") or []
     return isinstance(supports, list) and len(supports) >= 1
+
+
+_INTERIOR_AXIAL_PASS_PROMPT = """\
+Look at this statics beam diagram. Task: find ONLY straight horizontal arrows ←/→ drawn ON the beam axis (axial / Fx), especially at INTERIOR points (not only ends).
+
+Known vertical point-load stations that often also have a separate →/← on the beam: {stations}
+
+Ignore vertical ↓/↑ arrows, curved moments, and inclined ↘/↙. Do not invent loads.
+
+Return JSON only:
+{{"axial_loads":[
+  {{"x": <m>, "Fx": <ton>, "direction": "left"|"right", "label_at": "C"}}
+]}}
+
+Rules:
+- Dual label "150kn (15t)" → Fx=15 (ton in parentheses). Bare kN → ÷10.
+- direction right → Fx>0; left → Fx<0.
+- If none found: {{"axial_loads":[]}}
+"""
+
+
+def _merge_extracted_axial_loads(beam: dict, axial_loads: list) -> int:
+    """מוסיף ציריים שחסרים; מחזיר כמה נוספו."""
+    if not isinstance(beam, dict) or not isinstance(axial_loads, list):
+        return 0
+    loads = [dict(ld) for ld in (beam.get("loads") or []) if isinstance(ld, dict)]
+    added = 0
+    for raw in axial_loads:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            x = float(raw.get("x", 0.0))
+        except (TypeError, ValueError):
+            continue
+        fx = raw.get("Fx", raw.get("fx"))
+        mag = raw.get("magnitude_ton")
+        direction = _read_axial_direction(raw) or str(raw.get("direction", "")).lower()
+        try:
+            if fx is not None:
+                fx_v = float(fx)
+            elif mag is not None:
+                fx_v = float(mag)
+            else:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if abs(fx_v) < 1e-6:
+            continue
+        if direction == "left" or fx_v < 0:
+            fx_v = -abs(fx_v)
+            direction = "left"
+        else:
+            fx_v = abs(fx_v)
+            direction = "right"
+        # כבר יש צירי ליד אותו x
+        already = False
+        for ld in loads:
+            if not _is_pure_axial_point(ld):
+                continue
+            try:
+                if abs(float(ld.get("x", 0.0)) - x) <= 0.45:
+                    already = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        if already:
+            continue
+        entry = {
+            "type": "point",
+            "x": x,
+            "Fy": 0.0,
+            "Fx": fx_v,
+            "direction": direction,
+        }
+        label = raw.get("label_at")
+        if label:
+            entry["label_at"] = label
+        loads.append(entry)
+        added += 1
+    if added:
+        beam["loads"] = loads
+    return added
+
+
+def _maybe_enrich_interior_axials(
+    client: genai.Client,
+    model: str,
+    image_bytes: bytes,
+    mime_type: str,
+    parsed: dict,
+) -> dict:
+    """קריאה קצרה נוספת כשיש אנכיים פנימיים בלי צירי לידם — כשל נפוץ ב-C/D."""
+    beam = parsed.get("beam") if isinstance(parsed.get("beam"), dict) else {}
+    stations = _stations_needing_interior_axial(beam)
+    if not stations:
+        return parsed
+    stations_txt = ", ".join(f"{x:g}" for x in stations[:8])
+    prompt = _INTERIOR_AXIAL_PASS_PROMPT.format(stations=stations_txt)
+    try:
+        log.info(
+            "Interior axial pass: looking for ←/→ near verticals at x=[%s]",
+            stations_txt,
+        )
+        result = extract_exercise_from_image(
+            client,
+            model,
+            image_bytes,
+            mime_type,
+            prompt_template=prompt,
+            json_mode=True,
+        )
+    except Exception as exc:
+        log.warning("Interior axial pass failed: %s", exc)
+        return parsed
+    axial_loads = result.get("axial_loads")
+    if not isinstance(axial_loads, list):
+        # לפעמים המודל מחזיר loads[] במקום axial_loads
+        axial_loads = result.get("loads") if isinstance(result.get("loads"), list) else []
+    beam_out = dict(beam)
+    added = _merge_extracted_axial_loads(beam_out, axial_loads)
+    if not added:
+        log.info("Interior axial pass: no new axial loads merged")
+        return parsed
+    out = dict(parsed)
+    out["beam"] = normalize_beam_model(
+        beam_out, merge_nearby_point_loads=True
+    )
+    out["extraction_pipeline"] = (
+        str(out.get("extraction_pipeline") or "monolithic_fast") + "+interior_axial"
+    )
+    log.info("Interior axial pass: merged %s axial load(s)", added)
+    return out
 
 
 def _maybe_return_early_draft(
@@ -1306,8 +1466,19 @@ def extract_exercise_with_retries(
                     mime_type,
                     extra_instruction=call_extra,
                 )
+                if not _out_of_time() and _time_left_sec() > 4.0:
+                    parsed = _maybe_enrich_interior_axials(
+                        client,
+                        model,
+                        image_bytes,
+                        mime_type,
+                        parsed,
+                    )
+                    all_issues = _validation_issues_for(parsed)
                 if not all_issues:
-                    parsed["extraction_pipeline"] = "monolithic_fast"
+                    parsed["extraction_pipeline"] = parsed.get(
+                        "extraction_pipeline", "monolithic_fast"
+                    ) or "monolithic_fast"
                     return package_extraction_response(parsed)
                 best_fast = parsed
                 best_fast_issues = all_issues
@@ -1829,19 +2000,32 @@ def vision_loads_to_tool_loads(raw_loads: list) -> list[dict]:
                 }
             )
         elif t == "inclined":
-            fx = float(item.get("Fx", item.get("fx", 0.0)))
-            fy = float(item.get("Fy", item.get("fy", 0.0)))
-            mag = math.hypot(fx, fy)
-            angle = math.degrees(
-                math.atan2(abs(fy), abs(fx) if abs(fx) > 1e-12 else 1e-12)
-            )
+            # מחולל/extracted: magnitude_ton + angle_deg + incl_dir
+            # vision ישן: Fx/Fy — נגזר מהם אם אין magnitude
+            mag_raw = item.get("magnitude_ton", item.get("inclMag"))
+            ang_raw = item.get("angle_deg", item.get("inclAngle"))
+            dir_raw = item.get("incl_dir", item.get("inclDir"))
+            if mag_raw is not None and abs(float(mag_raw)) > 1e-12:
+                mag = abs(float(mag_raw))
+                angle = float(ang_raw) if ang_raw is not None else 0.0
+                incl_dir = str(dir_raw or "dr").lower().strip()
+                if incl_dir not in ("dl", "dr"):
+                    incl_dir = "dr"
+            else:
+                fx = float(item.get("Fx", item.get("fx", 0.0)) or 0.0)
+                fy = float(item.get("Fy", item.get("fy", 0.0)) or 0.0)
+                mag = math.hypot(fx, fy)
+                angle = math.degrees(
+                    math.atan2(abs(fy), abs(fx) if abs(fx) > 1e-12 else 1e-12)
+                )
+                incl_dir = "dl" if fx < 0 else "dr"
             tool_loads.append(
                 {
                     "kind": "inclined",
                     "x": float(item.get("x", 0.0)),
                     "magnitude_ton": mag,
                     "angle_deg": angle,
-                    "incl_dir": "dl" if fx < 0 else "dr",
+                    "incl_dir": incl_dir,
                 }
             )
     return tool_loads
@@ -2010,7 +2194,10 @@ def _resolve_inclined_angle(
 
 
 def _promote_diagonal_point_loads(loads: list[dict]) -> list[dict]:
-    """כוח נטוי שלפעמים נקלט כ-point עם Fx ו-Fy — מעלה ל-inclined."""
+    """כוח נטוי שלפעמים נקלט כ-point עם Fx ו-Fy — מעלה ל-inclined.
+
+    רק כששני הרכיבים משמעותיים. לא מקדמים אנכי כמעט טהור עם רעש Fx קטן.
+    """
     out: list[dict] = []
     for raw in loads:
         ld = dict(raw)
@@ -2019,8 +2206,10 @@ def _promote_diagonal_point_loads(loads: list[dict]) -> list[dict]:
             continue
         fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
         fy = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
-        peak = max(abs(fx), abs(fy), 1e-6)
-        if abs(fx) < 0.08 * peak or abs(fy) < 0.08 * peak:
+        afx, afy = abs(fx), abs(fy)
+        peak = max(afx, afy, 1e-6)
+        # צריך גם Fx וגם Fy מעל ~25% מהשיא — אחרת זה אנכי/צירי עם רעש
+        if afx < 0.25 * peak or afy < 0.25 * peak:
             out.append(ld)
             continue
         ld["type"] = "inclined"
@@ -2029,7 +2218,10 @@ def _promote_diagonal_point_loads(loads: list[dict]) -> list[dict]:
 
 
 def _fix_paired_cd_inclined_loads(beam: dict, loads: list[dict]) -> list[dict]:
-    """ב-D לעיתים נקלט אנכי (Fy בלבד) או ↘ — בשרטוט זה ↙ 30° ליד ↘ ב-C."""
+    """מתקן כיוון של אלכסוני קיים ב-D ליד אלכסוני ב-C — לא הופך אנכי לאלכסוני.
+
+    בעבר המיר point אנכי ב-D ל-inclined; זה פגע בתרגילים עם אנכי אמיתי ליד אלכסוני.
+    """
     labeled = _labeled_points_map(beam)
     c_x = labeled.get("C", 1.0)
     d_x = labeled.get("D", 2.0)
@@ -2063,6 +2255,9 @@ def _fix_paired_cd_inclined_loads(beam: dict, loads: list[dict]) -> list[dict]:
         if ld.get("_user_mag") or _load_position_user_locked(ld):
             continue
         t = str(ld.get("type", "")).lower()
+        # לא להמיר point אנכי → inclined
+        if t != "inclined":
+            continue
         lbl = str(ld.get("label_at", "")).strip().upper()
         try:
             x = float(ld.get("x", 0))
@@ -2072,49 +2267,86 @@ def _fix_paired_cd_inclined_loads(beam: dict, loads: list[dict]) -> list[dict]:
         if not at_d:
             continue
 
-        if t == "point":
-            fy = abs(float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0))
-            fx = abs(float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0))
-            if fy < 0.5 or fx > 0.2 * max(fy, 1e-6):
-                continue
-            if abs(fy - c_mag) > 2.5 and abs(fy - 5) > 2.5:
-                continue
-            mag = fy if fy >= 0.5 else c_mag
-            fx_c, fy_c = _recompute_inclined_components(mag, angle, incl_dir="dl")
-            loads[i] = {
-                "type": "inclined",
-                "x": d_x,
-                "Fx": fx_c,
-                "Fy": fy_c,
-                "angle_deg": angle,
-                "incl_dir": "dl",
-                "magnitude_ton": mag,
-                "label_at": "D",
-            }
-            log.info(
-                "Fixed D misread vertical Fy=%s → inclined dl %st @ %s°",
-                fy,
-                mag,
-                angle,
-            )
-        elif t == "inclined":
-            mag, incl_dir = _inclined_mag_and_dir(ld)
-            if incl_dir == "dl" and abs(mag - c_mag) < 2.5:
-                continue
-            if abs(mag - c_mag) > 2.5 and abs(mag - 5) > 2.5:
-                continue
-            fx_c, fy_c = _recompute_inclined_components(mag, angle, incl_dir="dl")
-            ld = dict(ld)
-            ld["x"] = d_x
-            ld["Fx"] = fx_c
-            ld["Fy"] = fy_c
-            ld["angle_deg"] = angle
-            ld["incl_dir"] = "dl"
-            ld["magnitude_ton"] = mag
-            ld["label_at"] = "D"
-            loads[i] = ld
-            log.info("Fixed D inclined %s → dl at x=%s", incl_dir or "?", d_x)
+        mag, incl_dir = _inclined_mag_and_dir(ld)
+        if incl_dir == "dl" and abs(mag - c_mag) < 2.5:
+            continue
+        if abs(mag - c_mag) > 2.5 and abs(mag - 5) > 2.5:
+            continue
+        fx_c, fy_c = _recompute_inclined_components(mag, angle, incl_dir="dl")
+        ld = dict(ld)
+        ld["x"] = d_x
+        ld["Fx"] = fx_c
+        ld["Fy"] = fy_c
+        ld["angle_deg"] = angle
+        ld["incl_dir"] = "dl"
+        ld["magnitude_ton"] = mag
+        ld["label_at"] = "D"
+        loads[i] = ld
+        log.info("Fixed D inclined %s → dl at x=%s", incl_dir or "?", d_x)
     return loads
+
+
+def _demote_near_vertical_inclined_loads(loads: list[dict]) -> list[dict]:
+    """אלכסוני שהוא למעשה אנכי → point עם Fy בלבד (לטיוטה/שרטוט).
+
+    קריטריונים: Fx זניח מול Fy, זווית גבוהה, או direction=down/up מהמודל.
+    """
+    out: list[dict] = []
+    for raw in loads:
+        if not isinstance(raw, dict):
+            out.append(raw)
+            continue
+        ld = dict(raw)
+        if str(ld.get("type", "")).lower() != "inclined":
+            out.append(ld)
+            continue
+        if ld.get("_user_mag") or _load_position_user_locked(ld):
+            out.append(ld)
+            continue
+        try:
+            fx = abs(float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0))
+            fy = abs(float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0))
+        except (TypeError, ValueError):
+            fx, fy = 0.0, 0.0
+        mag, _ = _inclined_mag_and_dir(ld)
+        angle: float | None
+        try:
+            angle = float(ld.get("angle_deg")) if ld.get("angle_deg") is not None else None
+        except (TypeError, ValueError):
+            angle = None
+        direction = str(ld.get("direction", "") or "").lower().strip()
+        near_vertical = (
+            (fy >= 1e-6 and fx <= 0.20 * fy)
+            or (angle is not None and angle >= 75.0)
+            or direction in ("down", "up")
+            or (angle is None and fy >= 1e-6 and fx <= 0.35 * max(fy, 1e-6))
+        )
+        if not near_vertical:
+            out.append(ld)
+            continue
+        fy_out = fy if fy >= 1e-6 else abs(mag)
+        if direction == "up":
+            fy_out = -abs(fy_out)
+        else:
+            fy_out = abs(fy_out)
+        point: dict = {
+            "type": "point",
+            "x": float(ld.get("x", 0.0) or 0.0),
+            "Fy": fy_out,
+            "Fx": 0.0,
+        }
+        label = str(ld.get("label_at", "") or "").strip()
+        if label:
+            point["label_at"] = label
+        if direction in ("down", "up"):
+            point["direction"] = direction
+        out.append(point)
+        log.info(
+            "Demoted near-vertical inclined → point at x=%s Fy=%s",
+            point["x"],
+            fy_out,
+        )
+    return out
 
 
 def _normalize_inclined_loads(loads: list[dict]) -> list[dict]:
@@ -3289,6 +3521,56 @@ def _snap_loads_to_dimension_chain(beam: dict, loads: list[dict]) -> list[dict]:
     return out
 
 
+def _is_axial_kind_label(ld: dict) -> bool:
+    kind = str(ld.get("load_kind", ld.get("force_type", ld.get("kind", "")))).lower()
+    return kind in ("axial", "horizontal", "fx", "צירי", "אופקי", "הוריזונטלי")
+
+
+def _reclassify_axial_mislabeled_as_fy(ld: dict) -> dict:
+    """point עם direction left/right (או סוג צירי) ו-Fy≠0 / magnitude — הופך ל-Fx.
+
+    נפוץ כש-Gemini מזהה חץ אופקי באמצע הקורה אבל ממלא Fy במקום Fx.
+    """
+    if str(ld.get("type", "")).lower() != "point":
+        return ld
+    direction = _read_axial_direction(ld)
+    axial_kind = _is_axial_kind_label(ld)
+    if direction is None and not axial_kind:
+        return ld
+    fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+    if abs(fx) > 1e-6:
+        return ld
+    fy = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
+    mag = ld.get("magnitude_ton")
+    if abs(fy) < 1e-6 and mag is not None:
+        try:
+            fy = float(mag)
+        except (TypeError, ValueError):
+            fy = 0.0
+    if abs(fy) < 1e-6:
+        return ld
+    ton = abs(fy)
+    out = dict(ld)
+    out["Fy"] = 0.0
+    out.pop("fy", None)
+    if direction == "left":
+        out["Fx"] = -ton
+        out["direction"] = "left"
+    else:
+        # right, או axial_kind בלי direction — חיובי (→)
+        out["Fx"] = ton
+        if direction == "right" or out.get("direction") in (None, ""):
+            out["direction"] = "right"
+    out.pop("magnitude_ton", None)
+    log.info(
+        "Reclassified axial mislabeled as Fy=%s → Fx=%s (x=%s)",
+        fy,
+        out["Fx"],
+        out.get("x"),
+    )
+    return out
+
+
 def _fix_horizontal_mislabeled_as_fy(ld: dict) -> dict:
     """עומס צירי (200kn→20t) שנקלט בטעות כ-Fy אנכי."""
     fy_raw = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
@@ -3317,6 +3599,7 @@ def _normalize_load_magnitudes_ton(loads: list[dict]) -> list[dict]:
         t = str(ld.get("type", "")).lower()
         note = str(ld.get("note", ""))
         if t == "point":
+            ld = _reclassify_axial_mislabeled_as_fy(ld)
             ld = _fix_horizontal_mislabeled_as_fy(ld)
             if not ld.get("_user_mag"):
                 note_ton = _parse_ton_from_note(note, per_meter=False)
@@ -3371,11 +3654,71 @@ def _normalize_load_magnitudes_ton(loads: list[dict]) -> list[dict]:
     return out
 
 
-def _merge_point_loads_at_same_x(loads: list[dict], *, tol: float = 0.35) -> list[dict]:
-    """מאחד עומסים נקודתיים באותו x — Fy ו-Fx נפרדים באותה נקודה.
+def _point_fx_fy(ld: dict) -> tuple[float, float]:
+    fx = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+    fy = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
+    return fx, fy
 
-    עומסים עם ``_draft_new`` (שורת טיוטה חדשה שעדיין נערכת) לא ממוזגים —
-    אחרת «הוסף עומס → נקודתי» נעלם כשיש כבר עומס ליד x=0.
+
+def _is_pure_axial_point(ld: dict) -> bool:
+    if str(ld.get("type", "")).lower() != "point":
+        return False
+    fx, fy = _point_fx_fy(ld)
+    return abs(fx) >= 1e-6 and abs(fy) < 1e-6
+
+
+def _is_pure_vertical_point(ld: dict) -> bool:
+    if str(ld.get("type", "")).lower() != "point":
+        return False
+    fx, fy = _point_fx_fy(ld)
+    return abs(fy) >= 1e-6 and abs(fx) < 1e-6
+
+
+def _stations_needing_interior_axial(beam: dict, *, margin: float = 0.3) -> list[float]:
+    """x של עומסים אנכיים פנימיים שאין לידם צירי נפרד (כשל נפוץ ב-C/D)."""
+    if not isinstance(beam, dict):
+        return []
+    try:
+        L = float(beam.get("L", 0.0))
+    except (TypeError, ValueError):
+        return []
+    if L < 3.0:
+        return []
+    loads = [ld for ld in (beam.get("loads") or []) if isinstance(ld, dict)]
+    vertical_xs: list[float] = []
+    axial_xs: list[float] = []
+    for ld in loads:
+        try:
+            x = float(ld.get("x", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if x <= margin or x >= L - margin:
+            continue
+        if _is_pure_vertical_point(ld):
+            vertical_xs.append(x)
+        elif _is_pure_axial_point(ld):
+            axial_xs.append(x)
+        else:
+            # point עם Fy ו-Fx ביחד — נחשב שיש רכיב צירי בתחנה
+            fx, fy = _point_fx_fy(ld)
+            if str(ld.get("type", "")).lower() == "point" and abs(fx) >= 1e-6 and abs(fy) >= 1e-6:
+                axial_xs.append(x)
+                vertical_xs.append(x)
+    missing: list[float] = []
+    for vx in vertical_xs:
+        if any(abs(vx - ax) <= 0.45 for ax in axial_xs):
+            continue
+        if any(abs(vx - mx) <= 0.45 for mx in missing):
+            continue
+        missing.append(vx)
+    return missing
+
+
+def _merge_point_loads_at_same_x(loads: list[dict], *, tol: float = 0.35) -> list[dict]:
+    """מאחד עומסים נקודתיים באותו x — אבל לא אנכי טהור עם צירי טהור.
+
+    איחוד Fy+Fx לנקודה אחת גורם לשרטוט אלכסוני במקום שני חיצים נפרדים.
+    עומסים עם ``_draft_new`` לא ממוזגים.
     """
     kept: list[dict] = []
     for ld in loads:
@@ -3396,6 +3739,11 @@ def _merge_point_loads_at_same_x(loads: list[dict], *, tol: float = 0.35) -> lis
                 continue
             ex = float(existing.get("x", 0.0))
             if abs(ex - x) > tol:
+                continue
+            # אנכי ↓ וצירי ←/→ באותה תחנה נשארים שתי רשומות נפרדות
+            if (_is_pure_axial_point(ld) and _is_pure_vertical_point(existing)) or (
+                _is_pure_vertical_point(ld) and _is_pure_axial_point(existing)
+            ):
                 continue
             combined = dict(existing)
             for key in ("Fy", "fy", "Fx", "fx"):
@@ -3442,10 +3790,26 @@ def _coerce_solver_load_schema(loads: list[dict]) -> list[dict]:
             ld["m"] = ld["M_ton_m"]
         t = str(ld.get("type", "")).lower()
         if t == "point":
-            if ld.get("Fy") is None and ld.get("magnitude_ton") is not None:
-                ld["Fy"] = ld["magnitude_ton"]
             if ld.get("Fx") is None and ld.get("Fx_ton") is not None:
                 ld["Fx"] = ld["Fx_ton"]
+            mag = ld.get("magnitude_ton")
+            axial_dir = _read_axial_direction(ld)
+            axial_kind = _is_axial_kind_label(ld)
+            fx0 = float(ld.get("Fx", ld.get("fx", 0.0)) or 0.0)
+            fy0 = float(ld.get("Fy", ld.get("fy", 0.0)) or 0.0)
+            if mag is not None and (axial_dir or axial_kind) and abs(fx0) < 1e-6:
+                # צירי עם magnitude_ton — אל תזרוק ל-Fy
+                signed = -abs(float(mag)) if axial_dir == "left" else abs(float(mag))
+                ld["Fx"] = signed
+                ld["Fy"] = 0.0
+                ld.pop("fy", None)
+                if axial_dir:
+                    ld["direction"] = axial_dir
+            elif ld.get("Fy") is None and mag is not None and abs(fx0) < 1e-6:
+                ld["Fy"] = mag
+            elif abs(fy0) < 1e-6 and abs(fx0) < 1e-6 and mag is not None:
+                ld["Fy"] = mag
+            ld = _reclassify_axial_mislabeled_as_fy(ld)
         if t == "distributed" and ld.get("w") is None:
             w = ld.get("intensity_ton_per_m")
             if w is not None:
@@ -4152,71 +4516,11 @@ def _fix_end_region_moments(beam: dict, loads: list[dict]) -> list[dict]:
             ld["x"] = c_x
             ld["label_at"] = "C"
 
-    loads = _fix_moment_misplaced_at_roller(beam, loads)
     return loads
 
 
 def _fix_moment_misplaced_at_roller(beam: dict, loads: list[dict]) -> list[dict]:
-    """מומנט על גליל B — בכתב יד לרוב מדובר בנקודה הפנימית (F) 2m לפני הסוף."""
-    labeled = _labeled_points_map(beam)
-    if not labeled:
-        return loads
-
-    roller_x: float | None = None
-    for sup in beam.get("supports") or []:
-        if not isinstance(sup, dict):
-            continue
-        if str(sup.get("type", "")).lower() != "roller":
-            continue
-        try:
-            roller_x = float(sup.get("x", 0))
-        except (TypeError, ValueError):
-            continue
-        break
-    if roller_x is None:
-        return loads
-
-    interior: tuple[str, float] | None = None
-    for lbl, lx in labeled.items():
-        if lx >= roller_x - 0.15:
-            continue
-        if interior is None or lx > interior[1]:
-            interior = (lbl, lx)
-    if interior is None:
-        return loads
-
-    prev_lbl, prev_x = interior
-    tail = roller_x - prev_x
-    if tail < 0.5 or tail > 5.0:
-        return loads
-
-    for ld in loads:
-        if str(ld.get("type", "")).lower() != "moment":
-            continue
-        if _load_position_user_locked(ld):
-            continue
-        try:
-            x = float(ld.get("x", 0))
-            m = float(ld.get("M", ld.get("m", 0)) or 0)
-        except (TypeError, ValueError):
-            continue
-        label_at = str(ld.get("label_at", "")).strip().upper()
-        if label_at in ("I", "H", "C") and abs(abs(m) - 18) < 4:
-            continue
-        if label_at in ("I", "H", "C") and abs(abs(m) - 30) < 4:
-            continue
-        at_roller = abs(x - roller_x) < 0.35 or label_at == "B"
-        if not at_roller:
-            continue
-        ld["x"] = prev_x
-        ld["label_at"] = prev_lbl
-        log.info(
-            "Moved moment from roller B (x=%s) to %s at x=%s (tail=%.1fm)",
-            roller_x,
-            prev_lbl,
-            prev_x,
-            tail,
-        )
+    """בוטל: הזזה אוטומטית מ-B לנקודה פנימית מקלקלת מומנטים שבאמת על הגליל."""
     return loads
 
 
@@ -4466,6 +4770,7 @@ def normalize_beam_model(
     loads = _promote_diagonal_point_loads(loads)
     loads = _fix_paired_cd_inclined_loads(out, loads)
     loads = _normalize_inclined_loads(loads)
+    loads = _demote_near_vertical_inclined_loads(loads)
     loads = _apply_explicit_load_positions(out, loads)
 
     for ld in loads:
@@ -4499,7 +4804,7 @@ def normalize_beam_model(
                 )
         elif t == "moment":
             x = float(ld.get("x", 0.0))
-            # אל תזיז מומנט מצמד לקצה ימין — זה גורם לבלבול F/B; תיקון גליל ב-_fix_moment_misplaced_at_roller
+            # אל תזיז מומנט מצמד לקצה ימין — זה גורם לבלבול F/B
             if (
                 not ld.get("_user_x")
                 and abs(x - ra_pos) < 0.35

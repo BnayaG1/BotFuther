@@ -26,8 +26,8 @@ _db_lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
 VALID_DAILY_QUOTAS = frozenset({6, 999})
-VALID_PERIOD_DAYS = frozenset({100, 105})
-# VIP — פותח מאגר תרגילים בלי cooldown של המאגר (לא פוטר מ־10 דק' על פתרון/תרגול).
+VALID_PERIOD_DAYS = frozenset({30, 120})
+# VIP — בלי cooldown על פתרון/תרגול + פותח מאגר תרגילים בלי cooldown של המאגר.
 VIP_UNLIMITED_DAILY_QUOTA = 999
 # תאימות לאחור (ערכי קופון ב־DB)
 VALID_TIERS = VALID_DAILY_QUOTAS
@@ -851,9 +851,11 @@ def _evaluate_feature_access(
     period_expires_sec: float | None,
     period_days: int | None,
     feature: str,
+    tier_limit: int = 0,
+    skip_feature_cooldown: bool = False,
 ) -> ImageAccessResult:
     base = dict(
-        tier_limit=0,
+        tier_limit=int(tier_limit),
         images_used=0,
         images_remaining=0,
         period_expires_sec=period_expires_sec,
@@ -873,16 +875,28 @@ def _evaluate_feature_access(
                 cooldown_remaining_sec=daily_left,
                 **base,
             )
-    cool = _cooldown_remaining_sec(
-        last_used_at, now, cooldown_sec=FEATURE_COOLDOWN_SEC
-    )
-    if cool is not None:
-        return ImageAccessResult(
-            status=ImageAccessStatus.COOLDOWN,
-            cooldown_remaining_sec=cool,
-            **base,
+    if not skip_feature_cooldown:
+        cool = _cooldown_remaining_sec(
+            last_used_at, now, cooldown_sec=FEATURE_COOLDOWN_SEC
         )
+        if cool is not None:
+            return ImageAccessResult(
+                status=ImageAccessStatus.COOLDOWN,
+                cooldown_remaining_sec=cool,
+                **base,
+            )
     return ImageAccessResult(status=ImageAccessStatus.OK, **base)
+
+
+def _feature_gate_inputs(
+    conn: sqlite3.Connection, user_id: int, now: float
+) -> tuple[UserAccessPhase, bool, float | None, int | None, int, bool]:
+    phase, has_coupon = _phase_unlocked(conn, int(user_id), now)
+    period_expires_sec, period_days = _period_left_for_user(conn, int(user_id), now)
+    access_row = _load_coupon_access_unlocked(conn, int(user_id), now)
+    tier_limit = int(access_row["tier_limit"]) if access_row is not None else 0
+    skip_cooldown = tier_limit == VIP_UNLIMITED_DAILY_QUOTA
+    return phase, has_coupon, period_expires_sec, period_days, tier_limit, skip_cooldown
 
 
 def check_feature_access(
@@ -896,8 +910,9 @@ def check_feature_access(
     ts = time.time() if now is None else float(now)
     conn = _connect()
     with _db_lock:
-        phase, has_coupon = _phase_unlocked(conn, int(user_id), ts)
-        period_expires_sec, period_days = _period_left_for_user(conn, int(user_id), ts)
+        phase, has_coupon, period_expires_sec, period_days, tier_limit, skip_cd = (
+            _feature_gate_inputs(conn, int(user_id), ts)
+        )
         last_used = _load_feature_last_used_unlocked(conn, int(user_id), key)
         return _evaluate_feature_access(
             phase=phase,
@@ -907,6 +922,8 @@ def check_feature_access(
             period_expires_sec=period_expires_sec,
             period_days=period_days,
             feature=key,
+            tier_limit=tier_limit,
+            skip_feature_cooldown=skip_cd,
         )
 
 
@@ -921,8 +938,9 @@ def consume_feature_slot(
     ts = time.time() if now is None else float(now)
     conn = _connect()
     with _db_lock:
-        phase, has_coupon = _phase_unlocked(conn, int(user_id), ts)
-        period_expires_sec, period_days = _period_left_for_user(conn, int(user_id), ts)
+        phase, has_coupon, period_expires_sec, period_days, tier_limit, skip_cd = (
+            _feature_gate_inputs(conn, int(user_id), ts)
+        )
         last_used = _load_feature_last_used_unlocked(conn, int(user_id), key)
         result = _evaluate_feature_access(
             phase=phase,
@@ -932,6 +950,8 @@ def consume_feature_slot(
             period_expires_sec=period_expires_sec,
             period_days=period_days,
             feature=key,
+            tier_limit=tier_limit,
+            skip_feature_cooldown=skip_cd,
         )
         if result.status != ImageAccessStatus.OK:
             return result
@@ -1045,15 +1065,23 @@ def redeem_reply_hebrew(result: RedeemResult) -> str:
             period_timer = (
                 f"\nהמנוי פעיל לעוד *{_format_duration_hebrew(left)}* ({period_label})."
             )
-        body = (
-            f"הקופון הופעל.\n"
-            f"גישה מועדפת לפתרון ותרגול למשך {period_label} "
-            f"(המתנה של 10 דקות בין שימושים)."
-            f"{period_timer}\n"
-        )
         if tier == VIP_UNLIMITED_DAILY_QUOTA:
-            body += "מאגר התרגילים פתוח לך בלי הגבלת זמן בין תרגילים.\n"
-        body += "שלח/י עכשיו תמונה של התרגיל."
+            body = (
+                f"הקופון הופעל.\n"
+                f"גישה חופשית לפתרון ותרגול למשך {period_label} "
+                f"(בלי המתנה בין שימושים)."
+                f"{period_timer}\n"
+                "מאגר התרגילים פתוח לך בלי הגבלת זמן בין תרגילים.\n"
+                "שלח/י עכשיו תמונה של התרגיל."
+            )
+        else:
+            body = (
+                f"הקופון הופעל.\n"
+                f"גישה מועדפת לפתרון ותרגול למשך {period_label} "
+                f"(המתנה של 10 דקות בין שימושים)."
+                f"{period_timer}\n"
+                "שלח/י עכשיו תמונה של התרגיל."
+            )
         return body
     if result.status == RedeemStatus.ALREADY_USED:
         if result.tier is None and result.period_days is None:
@@ -1095,32 +1123,13 @@ def image_access_reply_hebrew(result: ImageAccessResult) -> str:
     if result.status in (
         ImageAccessStatus.DAILY_LIMIT,
         ImageAccessStatus.QUOTA_EXCEEDED,
+        ImageAccessStatus.ACCESS_EXPIRED,
+        ImageAccessStatus.TRIAL_EXHAUSTED,
+        ImageAccessStatus.NO_ENTITLEMENT,
     ):
-        secs = result.cooldown_remaining_sec or result.window_reset_sec or 0.0
-        if secs > 3600:
-            hours = max(1, int((secs + 3599) // 3600))
-            wait = f"כ-{hours} שעות"
-        else:
-            mins = max(1, int((secs + 59) // 60))
-            wait = f"כ-{mins} דקות"
         return (
-            f"בלי קוד קופון אפשר להשתמש ב«{label}» פעם אחת ביממה.\n"
-            f"נסה/י שוב בעוד {wait}, או הפעיל/י קוד קופון — /coupon"
-        )
-    if result.status == ImageAccessStatus.ACCESS_EXPIRED:
-        return (
-            "תקופת המנוי שלך הסתיימה.\n"
-            "כדי להמשיך — הפעיל/י קוד קופון חדש או רכש/י חבילה (/coupon)."
-        )
-    if result.status == ImageAccessStatus.TRIAL_EXHAUSTED:
-        return (
-            "הגעת למגבלת השימוש.\n"
-            "כדי להמשיך, בחר/י אחת מהאפשרויות למטה:"
-        )
-    if result.status == ImageAccessStatus.NO_ENTITLEMENT:
-        return (
-            "כדי להמשיך צריך קוד קופון פעיל.\n"
-            "שלח/י את הקוד כהודעת טקסט לבוט, או רכש/י חבילה — /coupon."
+            "בשביל להמשיך אתה צריך לרכוש חבילה.\n"
+            "לרכישת חבילה:"
         )
     return ""
 
@@ -1173,7 +1182,10 @@ def quota_status_reply_hebrew(result: ImageAccessResult) -> str:
                 lines.append(period_line)
         else:
             lines.append("מצב: 24 השעות הראשונות (גישה מועדפת).")
-        lines.append("פתרון ותרגול: המתנה של 10 דקות בין שימושים.")
+        if result.tier_limit == VIP_UNLIMITED_DAILY_QUOTA:
+            lines.append("פתרון ותרגול: בלי המתנה בין שימושים.")
+        else:
+            lines.append("פתרון ותרגול: המתנה של 10 דקות בין שימושים.")
     else:
         lines.append("מצב: ללא קופון (אחרי 24 השעות הראשונות).")
         lines.append(

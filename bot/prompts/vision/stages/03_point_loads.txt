@@ -12,14 +12,14 @@ Types: point, moment, inclined — never type distributed here.
 
 CRITICAL rules:
 - LOAD x: load center on beam → vertical projection to dimension line → that x wins. Set label_at when tick hit.
-- INCLINED loads (angled arrow, NOT vertical):
-  • type MUST be "inclined" — never "point" with only Fy when the arrow is slanted.
-  • α = acute angle from horizontal (+x) in degrees — read the number on the diagram (30, 45, 60).
-    30° is NOT 60° — do not use the complementary angle.
-  • Decompose: Fx=F·cos(α), Fy=F·sin(α); Fy always positive (downward component).
-  • incl_dir: "dl" (↙ down-left, Fx negative) or "dr" (↘ down-right, Fx positive).
-  • Arrow TIP on beam = x.
-- Moment: center of curved arrow on beam — NOT at roller symbol B if arrow is at F (project to F).
+- VERTICAL ↓/↑: type=point, Fy only, Fx=0. NEVER inclined. Do not invent Fx/angle for vertical arrows.
+- AXIAL ←/→: type=point, Fx only, Fy=0. NEVER inclined.
+- INCLINED (clearly slanted ↘/↙ only, usually with 30/45/60 written):
+  • type MUST be "inclined" — never "point" with only Fy when truly slanted.
+  • REQUIRED: magnitude_ton, angle_deg, incl_dir, plus Fx, Fy.
+  • α from horizontal as written — do not swap 30°↔60°.
+  • Fx=F·cos(α), Fy=F·sin(α); dl⇒Fx<0; dr⇒Fx>0. Arrow TIP on beam = x.
+- Moment: center of curved arrow on beam. If the arc is at B / on the roller, keep x at B; if at F, keep F.
 - At one label (e.g. C): BOTH moment AND inclined allowed at same x.
 - Horizontal ← at end is Fx negative, Fy=0.
 - DUAL UNITS: "100kn (10t)" ↓ → Fy=10.
@@ -47,10 +47,11 @@ Output ONLY:
       {{
         "type": "inclined",
         "x": number,
-        "Fx": number,
-        "Fy": number,
+        "magnitude_ton": number,
         "angle_deg": number,
         "incl_dir": "dl" | "dr",
+        "Fx": number,
+        "Fy": number,
         "label_at": "C"
       }}
     ]

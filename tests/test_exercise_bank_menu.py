@@ -67,7 +67,12 @@ async def test_give_exercise_locked_without_access():
             else ""
         )
     text = kwargs.get("text", text)
-    assert "תרגול" in text or "יממה" in text
+    assert "בשביל להמשיך אתה צריך לרכוש חבילה" in text
+    assert "לרכישת חבילה:" in text
+    markup = kwargs.get("reply_markup")
+    assert markup is not None
+    labels = [btn.text for row in markup.inline_keyboard for btn in row]
+    assert "רכישת חבילה" in labels
 
 
 @pytest.mark.anyio

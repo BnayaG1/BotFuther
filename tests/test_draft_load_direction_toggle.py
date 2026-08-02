@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""לחיצה על «כיוון» בעומס קיים בטיוטה: הופכת כיוון בלי לפתוח תפריט בחירת סוג."""
+"""היפוך כיוון עומס (לוגיקה) + התעלמות מ-callback ישן בטיוטת אישור בלבד."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telegram import CallbackQuery, Message, Update
 
 import bot.handlers as handlers
 from bot.draft_editor import toggle_any_load_direction
-from bot.draft_keyboard import draft_display_text
+from bot.draft_keyboard import DRAFT_INSTRUCTION_TEXT, draft_display_text
 from bot.solution_session import reset_user_session
-from bot.draft_session import get_draft_type_picker_idx, set_draft_pending
+from bot.draft_session import get_draft_type_picker_idx, get_stored_vision_extracted, set_draft_pending
 
 EXTRACTED = {
     "beam": {
@@ -36,30 +36,46 @@ def _make_query(data: str, chat_id: int, msg_id: int) -> MagicMock:
     return query
 
 
+def _beam_with_load(load: dict) -> dict:
+    return {
+        # מסמן שהתמרת סימן המומנט (vision CCW+ → website CW+) כבר בוצעה — כמו
+        # בטיוטה אמיתית שכבר עברה finalize_beam_extraction פעם אחת. בלעדיו,
+        # ה-toggle כאן היה מתבצע על גבי היפוך המומנט החד-פעמי ומטשטש את הבדיקה.
+        "_moment_sign_aligned": True,
+        "beam": {
+            "L": 10.0,
+            "support_mode": "simply_supported",
+            "supports": [
+                {"label": "A", "type": "pin", "x": 0.0},
+                {"label": "B", "type": "roller", "x": 10.0},
+            ],
+            "loads": [load],
+        }
+    }
+
+
 @pytest.mark.anyio
-async def test_direction_click_on_existing_load_toggles_without_opening_type_picker():
+async def test_legacy_direction_callback_is_ignored_in_approve_only_draft():
+    """מקלדת הטיוטה החדשה היא אישור בלבד — d:td לא משנה את המודל."""
     chat_id = 77001
     reset_user_session(chat_id)
-    set_draft_pending(chat_id, EXTRACTED, draft_display_text(EXTRACTED), message_id=101)
+    set_draft_pending(chat_id, EXTRACTED, DRAFT_INSTRUCTION_TEXT, message_id=101)
 
     update = MagicMock(spec=Update)
     query = _make_query("d:td1", chat_id, 101)
     update.callback_query = query
-
     context = MagicMock()
 
-    with patch.object(handlers, "_edit_draft_message_safe", new=AsyncMock()) as mock_edit:
-        await handlers.on_draft_callback(update, context)
+    await handlers.on_draft_callback(update, context)
 
-    mock_edit.assert_awaited_once()
-    updated_extracted = mock_edit.await_args.args[3]
-    ld = updated_extracted["beam"]["loads"][0]
-    assert float(ld["Fy"]) == -3.0
+    query.answer.assert_awaited()
+    stored = get_stored_vision_extracted(chat_id)
+    assert float(stored["beam"]["loads"][0]["Fy"]) == 3.0
     assert get_draft_type_picker_idx(chat_id) is None
 
 
 @pytest.mark.anyio
-async def test_direction_click_on_new_empty_load_still_opens_type_picker():
+async def test_legacy_direction_on_new_load_does_not_open_type_picker():
     chat_id = 77002
     reset_user_session(chat_id)
     extracted_with_new_load = {
@@ -83,31 +99,11 @@ async def test_direction_click_on_new_empty_load_still_opens_type_picker():
     update = MagicMock(spec=Update)
     query = _make_query("d:td2", chat_id, 102)
     update.callback_query = query
-
     context = MagicMock()
 
-    with patch.object(handlers, "_edit_draft_message_safe", new=AsyncMock()):
-        await handlers.on_draft_callback(update, context)
+    await handlers.on_draft_callback(update, context)
 
-    assert get_draft_type_picker_idx(chat_id) == 2
-
-
-def _beam_with_load(load: dict) -> dict:
-    return {
-        # מסמן שהתמרת סימן המומנט (vision CCW+ → website CW+) כבר בוצעה — כמו
-        # בטיוטה אמיתית שכבר עברה finalize_beam_extraction פעם אחת. בלעדיו,
-        # ה-toggle כאן היה מתבצע על גבי היפוך המומנט החד-פעמי ומטשטש את הבדיקה.
-        "_moment_sign_aligned": True,
-        "beam": {
-            "L": 10.0,
-            "support_mode": "simply_supported",
-            "supports": [
-                {"label": "A", "type": "pin", "x": 0.0},
-                {"label": "B", "type": "roller", "x": 10.0},
-            ],
-            "loads": [load],
-        }
-    }
+    assert get_draft_type_picker_idx(chat_id) is None
 
 
 def test_toggle_direction_on_vertical_point_load_flips_fy():
@@ -149,36 +145,6 @@ def test_toggle_direction_on_distributed_load_flips_w():
     assert float(ld["w"]) == -2.5
 
 
-@pytest.mark.anyio
-async def test_direction_click_with_stale_draft_new_flag_toggles_without_picker():
-    """עומס עם ערך אבל _draft_new שלא נוקה — לחיצה על כיוון מחליפה, לא פותחת תפריט."""
-    chat_id = 77003
-    reset_user_session(chat_id)
-    extracted = {
-        "beam": {
-            "L": 10.0,
-            "support_mode": "simply_supported",
-            "supports": EXTRACTED["beam"]["supports"],
-            "loads": [{"type": "point", "x": 4.0, "Fy": 3.0, "_draft_new": True}],
-        }
-    }
-    set_draft_pending(chat_id, extracted, draft_display_text(extracted), message_id=103)
-
-    update = MagicMock(spec=Update)
-    query = _make_query("d:td1", chat_id, 103)
-    update.callback_query = query
-    context = MagicMock()
-
-    with patch.object(handlers, "_edit_draft_message_safe", new=AsyncMock()) as mock_edit:
-        await handlers.on_draft_callback(update, context)
-
-    mock_edit.assert_awaited_once()
-    updated_extracted = mock_edit.await_args.args[3]
-    ld = updated_extracted["beam"]["loads"][0]
-    assert float(ld["Fy"]) == -3.0
-    assert get_draft_type_picker_idx(chat_id) is None
-
-
 def test_toggle_direction_on_axial_with_direction_metadata_persists_after_finalize():
     """עומס צירי מחילוץ עם direction=right — היפוך כיוון לא נדרס ב-finalize."""
     extracted = _beam_with_load(
@@ -190,43 +156,6 @@ def test_toggle_direction_on_axial_with_direction_metadata_persists_after_finali
     assert float(ld.get("Fy", 0.0)) == 0.0
     assert ld.get("_user_mag") is True
     assert "direction" not in ld
-
-
-@pytest.mark.anyio
-async def test_direction_click_on_axial_load_toggles_without_opening_type_picker():
-    chat_id = 77004
-    reset_user_session(chat_id)
-    extracted = {
-        "beam": {
-            "L": 10.0,
-            "support_mode": "simply_supported",
-            "supports": EXTRACTED["beam"]["supports"],
-            "loads": [
-                {
-                    "type": "point",
-                    "x": 10.0,
-                    "Fy": 0.0,
-                    "Fx": 8.0,
-                    "direction": "right",
-                }
-            ],
-        }
-    }
-    set_draft_pending(chat_id, extracted, draft_display_text(extracted), message_id=104)
-
-    update = MagicMock(spec=Update)
-    query = _make_query("d:td1", chat_id, 104)
-    update.callback_query = query
-    context = MagicMock()
-
-    with patch.object(handlers, "_edit_draft_message_safe", new=AsyncMock()) as mock_edit:
-        await handlers.on_draft_callback(update, context)
-
-    mock_edit.assert_awaited_once()
-    updated_extracted = mock_edit.await_args.args[3]
-    ld = updated_extracted["beam"]["loads"][0]
-    assert float(ld["Fx"]) == -8.0
-    assert get_draft_type_picker_idx(chat_id) is None
 
 
 def test_toggle_direction_on_inclined_load_flips_fx_and_fy_via_incl_dir():
@@ -255,33 +184,6 @@ def test_empty_axial_direction_click_does_not_open_type_picker():
     extracted = add_load_of_type(EXTRACTED, "axial")
     ld = extracted["beam"]["loads"][-1]
     assert should_open_type_picker_on_direction_click(ld) is False
-
-
-@pytest.mark.anyio
-async def test_direction_click_on_empty_axial_load_toggles_without_picker():
-    from bot.draft_editor import add_load_of_type
-
-    chat_id = 77005
-    reset_user_session(chat_id)
-    extracted = add_load_of_type(EXTRACTED, "axial")
-    idx = len(extracted["beam"]["loads"])
-    set_draft_pending(chat_id, extracted, draft_display_text(extracted), message_id=105)
-
-    update = MagicMock(spec=Update)
-    query = _make_query(f"d:td{idx}", chat_id, 105)
-    update.callback_query = query
-    context = MagicMock()
-
-    with patch.object(handlers, "_edit_draft_message_safe", new=AsyncMock()) as mock_edit:
-        await handlers.on_draft_callback(update, context)
-
-    mock_edit.assert_awaited_once()
-    updated_extracted = mock_edit.await_args.args[3]
-    ld = updated_extracted["beam"]["loads"][-1]
-    assert ld.get("direction") == "left"
-    assert float(ld.get("Fy", 0.0)) == 0.0
-    assert float(ld.get("Fx", 0.0)) == 0.0
-    assert get_draft_type_picker_idx(chat_id) is None
 
 
 def test_toggle_empty_axial_flips_direction_metadata():

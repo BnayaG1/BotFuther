@@ -174,6 +174,24 @@ def _load_summary_he(beam: dict, idx: int, ld: dict) -> str:
     return _load_to_draft_line(idx, ld).replace("@", "x =")
 
 
+DRAFT_INSTRUCTION_TEXT = (
+    "זו הטיוטה שחילצתי.\n"
+    "אם משהו לא מדויק — כתוב פקודה כך:\n"
+    "פעולה + סוג עומס + זיהוי (אם צריך) + תוצאה\n"
+    "לדוגמה: שנה כיוון לעומס האלכסוני שבמשקל 15 טון \\ תעביר את המומנט הימני לקצה הימני של הקורה\n"
+    "אם הכל בסדר — לחץ אישור."
+)
+
+DRAFT_FIXED_TEXT = "תיקנתי את הטיוטה."
+
+
+def build_draft_approve_keyboard() -> InlineKeyboardMarkup:
+    """מקלדת טיוטה מינימלית — אישור בלבד."""
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("אישור", callback_data="d:a")]]
+    )
+
+
 def build_draft_keyboard(
     extracted: dict,
     *,

@@ -13,17 +13,23 @@ from bot.handlers import cmd_coupon, on_buy_callback
 from bot.purchase import PACKAGE_CATALOG, get_package, parse_buy_callback
 
 
-def test_package_catalog_has_single_option():
-    assert len(PACKAGE_CATALOG) == 1
-    pkg = get_package("6_105")
-    assert pkg is not None
-    assert pkg.price_ils == 150
-    assert pkg.daily_quota == 6
-    assert pkg.period_days == 105
+def test_package_catalog_has_two_options():
+    assert len(PACKAGE_CATALOG) == 2
+    pkg_month = get_package("6_30")
+    assert pkg_month is not None
+    assert pkg_month.price_ils == 30
+    assert pkg_month.daily_quota == 6
+    assert pkg_month.period_days == 30
+    pkg_long = get_package("6_120")
+    assert pkg_long is not None
+    assert pkg_long.price_ils == 90
+    assert pkg_long.daily_quota == 6
+    assert pkg_long.period_days == 120
 
 
 def test_parse_buy_callback():
-    assert parse_buy_callback("buy:confirm:6_105") == ("confirm", "6_105")
+    assert parse_buy_callback("buy:confirm:6_30") == ("confirm", "6_30")
+    assert parse_buy_callback("buy:confirm:6_120") == ("confirm", "6_120")
     assert parse_buy_callback("buy:menu") == ("menu", "")
     assert parse_buy_callback("menu:coupon") is None
 
@@ -49,7 +55,7 @@ async def test_cmd_coupon_shows_purchase_menu():
 async def test_buy_confirm_creates_request_and_shows_payment():
     update = MagicMock(spec=Update)
     update.callback_query = MagicMock()
-    update.callback_query.data = "buy:confirm:6_105"
+    update.callback_query.data = "buy:confirm:6_30"
     update.callback_query.message = MagicMock(spec=Message)
     update.callback_query.message.chat_id = 200
     update.callback_query.message.delete = AsyncMock()
@@ -66,8 +72,8 @@ async def test_buy_confirm_creates_request_and_shows_payment():
                     user_id=42,
                     chat_id=200,
                     daily_quota=6,
-                    period_days=105,
-                    price_ils=150,
+                    period_days=30,
+                    price_ils=30,
                     package_label="x",
                     status="pending",
                     created_at=1.0,
@@ -79,7 +85,7 @@ async def test_buy_confirm_creates_request_and_shows_payment():
     context.bot.send_message.assert_awaited()
     pay_kwargs = context.bot.send_message.await_args.kwargs
     pay_text = pay_kwargs["text"]
-    assert "150" in pay_text
+    assert "30" in pay_text
     assert config.BIT_PHONE in pay_text
     assert config.PAYMENT_CONFIRM_WHATSAPP_URL in pay_text
     assert pay_kwargs.get("reply_markup") is not None
@@ -101,9 +107,9 @@ def test_create_purchase_request_in_db(purchase_db):
         user_id=99,
         chat_id=100,
         daily_quota=6,
-        period_days=105,
-        price_ils=150,
-        package_label="6 תמונות ליום · 3.5 חודשים · ₪150",
+        period_days=30,
+        price_ils=30,
+        package_label="חודש · ₪30",
     )
     assert req.id >= 1
     assert req.daily_quota == 6

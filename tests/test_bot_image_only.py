@@ -22,7 +22,8 @@ def test_welcome_text_is_image_only():
     assert "דיווח" in text
     assert "סטטיקה" in text
     assert "24 שעות" in text
-    assert '150 ש"ח' in text
+    assert "₪30" in text
+    assert "₪90" in text
     assert "בראש שקט" in text
     assert "מהנדס הדיגיטלי" not in text
     assert "מושג" not in text

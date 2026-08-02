@@ -48,10 +48,15 @@ UDL_W = 4.0  # ברירת מחדל / תאימות
 UDL_W_ALT = 3.0  # ברירת מחדל / תאימות
 UDL_W_MIN = 1
 UDL_W_MAX = 7  # משקל מפורס: שלם ב־[1,7]; כמה מפורסים — ערכים שונים
+# אורך מפורס [מ']: מ־1 עד L; משקל משולש עם שיא ב־L/2
+UDL_SPAN_MIN = 1.0
+UDL_SPAN_STEP = 1.0  # צעדים של מטר — לא ליצור נקודות קרובות מ־SEG_MIN
 
 # תצורת סמכים / ריתום
 SUPPORT_CONFIG_SS_PROB = 0.50  # 50% סמכים; 50% ריתום
 FIXED_LEFT_PROB = 0.80  # בריתום: 80% שמאל; 20% ימין
+# בתרגיל סמכים: לכל סמך 50% בקצה הקורה, 50% בנקודה שאינה קצה
+SUPPORT_AT_END_PROB = 0.50
 SupportConfigMode = Literal["simply_supported", "cantilever"]
 FixedSide = Literal["left", "right"]
 
@@ -70,6 +75,70 @@ def pick_support_configuration(
     return "cantilever", side
 
 
+def _is_near(a: float, b: float, *, tol: float = 1e-9) -> bool:
+    return abs(float(a) - float(b)) < tol
+
+
+def pick_simply_supported_positions(
+    rng: random.Random,
+    stations: list[float],
+) -> tuple[float, float]:
+    """מיקומי pin@A / roller@B (xa < xb) בתרגיל סמכים.
+
+    לכל סמך בנפרד:
+      - A: 50% בקצה השמאלי (x=0), אחרת בנקודה פנימית
+      - B: 50% בקצה הימני (x=L), אחרת בנקודה פנימית מימין ל־A
+    נשמר מרווח מינימלי בין הסמכים כדי שלא יצטופפו בקצה אחד.
+    """
+    pts = sorted(float(x) for x in stations)
+    if len(pts) < 3:
+        raise ValueError("need at least 3 stations (0, interior, L)")
+    left_end = pts[0]
+    L = pts[-1]
+    interior = pts[1:-1]
+    if not interior:
+        raise ValueError("need at least one interior station")
+
+    min_span = max(float(SEG_MIN), 0.35 * float(L))
+
+    def _try_once() -> tuple[float, float] | None:
+        a_at_left = rng.random() < SUPPORT_AT_END_PROB
+        b_at_right = rng.random() < SUPPORT_AT_END_PROB
+
+        if a_at_left and b_at_right:
+            return float(left_end), float(L)
+
+        if a_at_left and not b_at_right:
+            cand_b = [x for x in interior if (x - left_end) >= min_span - 1e-9]
+            if not cand_b:
+                return None
+            return float(left_end), float(rng.choice(cand_b))
+
+        if (not a_at_left) and b_at_right:
+            cand_a = [x for x in interior if (L - x) >= min_span - 1e-9]
+            if not cand_a:
+                return None
+            return float(rng.choice(cand_a)), float(L)
+
+        pairs = [
+            (a, b)
+            for a in interior
+            for b in interior
+            if (b - a) >= min_span - 1e-9
+        ]
+        if not pairs:
+            return None
+        xa, xb = rng.choice(pairs)
+        return float(xa), float(xb)
+
+    for _ in range(120):
+        got = _try_once()
+        if got is not None:
+            return got
+
+    return float(left_end), float(L)
+
+
 def random_udl_weights(rng: random.Random, n: int) -> list[float]:
     """n משקלי מפורס שלמים ב־[UDL_W_MIN, UDL_W_MAX], כולם שונים."""
     if n < 1:
@@ -78,6 +147,103 @@ def random_udl_weights(rng: random.Random, n: int) -> list[float]:
     if n > len(pool):
         raise ValueError(f"cannot pick {n} distinct UDL weights from {UDL_W_MIN}..{UDL_W_MAX}")
     return [float(w) for w in rng.sample(pool, n)]
+
+
+def random_udl_span_length(rng: random.Random, beam_L: float) -> float:
+    """אורך מפורס ב־[1, L]: הסיכוי הגבוה ביותר ב־L/2, ויורד כשמתרחקים."""
+    L = float(beam_L)
+    if L <= UDL_SPAN_MIN + 1e-12:
+        return round(max(L, UDL_SPAN_MIN), 1)
+    step = float(UDL_SPAN_STEP)
+    i0 = int(round(UDL_SPAN_MIN / step))
+    i1 = int(math.floor(L / step + 1e-9))
+    candidates = [round(i * step, 1) for i in range(i0, i1 + 1)]
+    L_r = round(L, 1)
+    if not any(abs(c - L_r) < 1e-9 for c in candidates):
+        candidates.append(L_r)
+    candidates = [c for c in candidates if UDL_SPAN_MIN - 1e-9 <= c <= L + 1e-9]
+    if not candidates:
+        return L_r
+    peak = 0.5 * L
+    weights = [peak - abs(c - peak) + 1.0 for c in candidates]
+    return float(rng.choices(candidates, weights=weights, k=1)[0])
+
+
+def udl_spans_overlap(
+    a1: float,
+    a2: float,
+    b1: float,
+    b2: float,
+    *,
+    tol: float = 1e-9,
+) -> bool:
+    """True אם שני מרווחי מפורס חופפים בפנים (מגע בקצה בלבד מותר)."""
+    return float(a1) < float(b2) - tol and float(b1) < float(a2) - tol
+
+
+def _udl_endpoint_ok(
+    x: float,
+    stations: list[float] | None,
+    *,
+    min_gap: float = SEG_MIN,
+    tol: float = 1e-6,
+) -> bool:
+    """קצה מפורס חייב לחפוף נקודה קיימת או להיות לפחות min_gap ממנה."""
+    if not stations:
+        return True
+    for s in stations:
+        d = abs(float(x) - float(s))
+        if d <= tol:
+            return True
+        if d < float(min_gap) - tol:
+            return False
+    return True
+
+
+def place_udl_span(
+    rng: random.Random,
+    beam_L: float,
+    length: float,
+    *,
+    stations: list[float] | None = None,
+    min_gap: float = SEG_MIN,
+) -> tuple[float, float] | None:
+    """ממקם מפורס באורך length על הקורה — מחזיר (x1, x2) או None.
+
+    אם נתונות stations — הקצוות לא יוצרים מרווח קטן מ־min_gap מול נקודות קיימות.
+    """
+    L = float(beam_L)
+    ell = min(max(float(length), float(UDL_SPAN_MIN)), L)
+    ell = round(ell, 1)
+    max_start = round(L - ell, 1)
+    if max_start <= 1e-9:
+        return 0.0, round(L, 1)
+
+    step = float(UDL_SPAN_STEP)
+    starts: set[float] = set()
+    n = int(math.floor(max_start / step + 1e-9))
+    for i in range(n + 1):
+        starts.add(round(i * step, 1))
+    if stations:
+        for s in stations:
+            sr = round(float(s), 1)
+            if -1e-9 <= sr <= max_start + 1e-9:
+                starts.add(sr)
+
+    valid: list[tuple[float, float]] = []
+    for x1 in sorted(starts):
+        x2 = round(x1 + ell, 1)
+        if x2 > L + 1e-9:
+            continue
+        if not _udl_endpoint_ok(x1, stations, min_gap=min_gap):
+            continue
+        if not _udl_endpoint_ok(x2, stations, min_gap=min_gap):
+            continue
+        valid.append((float(x1), float(x2)))
+
+    if valid:
+        return rng.choice(valid)
+    return None
 
 
 def random_force_magnitude(rng: random.Random) -> float:

@@ -27,10 +27,12 @@ from bot.config import (
     ADMIN_USER_IDS,
     BOT_DISPLAY_NAME,
     COUPON_ACCESS_ENABLED,
+    DRAFT_APPROVAL_MODE,
     IMAGE_ONLY_TEXT_REPLY,
     VISION_ASYNC_ENABLED,
 )
 from bot.access import (
+    ImageAccessResult,
     ImageAccessStatus,
     check_practice_feature_access,
     check_solve_access,
@@ -86,24 +88,24 @@ except ImportError:
     opening_message_hebrew = None  # type: ignore[assignment]
     parse_intro_callback = None  # type: ignore[assignment]
 from bot.draft_editor import (
-    add_load_of_type,
     apply_field_edit,
     approve_and_solve,
-    delete_load,
     handle_draft_text,
-    looks_like_draft_patch,
+    is_approval_message,
     persist_draft,
-    set_load_type,
-    toggle_any_load_direction,
 )
 from bot.draft_keyboard import (
-    ADD_LOAD_TYPE_PICKER_IDX,
-    build_draft_keyboard,
+    DRAFT_INSTRUCTION_TEXT,
+    build_draft_approve_keyboard,
     build_load_dir_prompt_keyboard,
-    draft_display_text,
     edit_prompt,
     parse_draft_callback,
-    should_open_type_picker_on_direction_click,
+)
+from bot.draft_nl_edit import apply_nl_draft_edit
+from bot.draft_preview import (
+    refresh_draft_after_correction,
+    send_draft_preview,
+    wipe_draft_conversation,
 )
 from bot.notebook_render import render_notebook_png_temp
 from bot.gemini_chat import friendly_gemini_error
@@ -149,6 +151,7 @@ from bot.solution_session import (
 from bot.images import TempImageFile, prepare_image_for_vision, save_message_image_to_temp
 from bot.system_prompt import reload_system_instruction_if_changed
 from bot.draft_session import (
+    get_draft_cleanup_message_ids,
     get_draft_error_message_id,
     get_draft_edit,
     get_draft_edit_prompt_id,
@@ -156,11 +159,13 @@ from bot.draft_session import (
     get_draft_type_picker_idx,
     get_stored_vision_extracted,
     is_draft_pending,
+    register_draft_cleanup_id,
     set_draft_error_message_id,
     set_draft_edit,
     set_draft_edit_prompt_id,
-    set_draft_type_picker_idx,
     set_draft_pending,
+    set_draft_source_user_message_id,
+    set_draft_type_picker_idx,
 )
 from bot.vision import (
     finalize_beam_extraction,
@@ -177,7 +182,7 @@ from bot.vision_queue import (
 log = logging.getLogger("beam_telegram_bot")
 
 _TEXT_UNHANDLED = (
-    "שלח תמונה של תרגיל, או עדכן את הטיוטה הפעילה בכפתורים."
+    "שלח תמונה של תרגיל, או כתוב מה לתקן בטיוטה הפעילה."
 )
 
 _IMAGE_DEDUP_SEC = 120.0
@@ -241,17 +246,19 @@ async def _reply_text_safe(
     *,
     parse_mode: str = "Markdown",
     reply_markup: object | None = None,
-) -> None:
-    """שולח הודעה; אם Markdown נשבר — fallback לטקסט רגיל."""
+):
+    """שולח הודעה; אם Markdown נשבר — fallback לטקסט רגיל. מחזיר את ההודעה שנשלחה."""
     if reply_markup is None:
         reply_markup = build_persistent_keyboard()
     try:
-        await message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        return await message.reply_text(
+            text, parse_mode=parse_mode, reply_markup=reply_markup
+        )
     except BadRequest as exc:
         if "parse entities" not in str(exc).lower():
             raise
         log.warning("Telegram Markdown failed, sending plain text: %s", exc)
-        await message.reply_text(text, reply_markup=reply_markup)
+        return await message.reply_text(text, reply_markup=reply_markup)
 
 async def _send_text_safe(
     context: ContextTypes.DEFAULT_TYPE,
@@ -283,17 +290,24 @@ async def _deliver_approved_solve(
     solved: dict,
     draft_msg_id: int | None,
 ) -> None:
-    """אחרי אישור טיוטה: טקסט פתרון ואז תמונת מחברת מלאה."""
+    """שולח פתרון + מחברת. מחיקת הטיוטה נעשית לפני הקריאה (ב-approve)."""
     has_result = bool((solved or {}).get("result"))
     notebook_path = None
     session = get_solution_session(chat_id)
     track_practice = bool(session is not None and session.from_practice)
 
+    if not has_result and draft_msg_id is not None:
+        await _edit_draft_message_safe(
+            context,
+            chat_id,
+            draft_msg_id,
+            extracted,
+        )
+
     if reply:
         sent = await _send_text_safe(context, chat_id, reply)
         if track_practice:
             _track_sent_message(chat_id, sent)
-        # אם זה לא פתרון (למשל שגיאת validator) — נשמור message_id כדי למחוק בניסיון הבא.
         if not has_result:
             try:
                 set_draft_error_message_id(chat_id, int(getattr(sent, "message_id", 0)))
@@ -316,20 +330,6 @@ async def _deliver_approved_solve(
                     _track_sent_message(chat_id, sent)
             except Exception as exc:
                 log.warning("Failed to send notebook chat=%s: %s", chat_id, exc)
-
-    if draft_msg_id is not None:
-        if has_result:
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=draft_msg_id)
-            except BadRequest:
-                pass
-        else:
-            await _edit_draft_message_safe(
-                context,
-                chat_id,
-                draft_msg_id,
-                extracted,
-            )
 
     if notebook_path is not None:
         notebook_path.unlink(missing_ok=True)
@@ -379,20 +379,29 @@ def build_start_welcome_text() -> str:
         "אם יש בעיות או בקשות ספציפיות, יש אופציה לדיווח שדרכה תוכל לפנות אליי ישירות.\n\n"
         "הבוט זמין עבורך 24/7 עם כל החבילה המלאה. כדי שתוכל להתרשם ולראות איך זה "
         "עובד באמת, פתחתי לך גישה מלאה לכל האפשרויות ל-24 שעות הקרובות ללא התחייבות.\n\n"
-        "כרגע הבוט נמצא בתקופת פיתוח, ולכן מי שרוצה לקנות גישה מלאה לכל הסמסטר "
-        '(3.5 חודשים) יכול לעשות זאת במחיר מיוחד של 50 שקלים בלבד במקום 150 ש"ח.\n\n'
+        "אחרי 24 השעות אפשר להמשיך עם מנוי: חודש ב־₪30, או 4 חודשים ב־₪90 "
+        "(גישה מועדפת לפתרון ותרגול, עם המתנה של 10 דקות בין שימושים).\n\n"
         "מוזמן להתחיל להשתמש, מקווה שזה יעזור לך לעבור את הקורס בראש שקט."
     )
 
 
 def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
-    """אפשרויות המשך אחרי סיום ניסיון חינם."""
+    """כפתור רכישת חבילה — מוביל לאופציות החבילות."""
     rows: list[list[InlineKeyboardButton]] = []
     if COUPON_ACCESS_ENABLED:
         rows.append(
             [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")]
         )
     return InlineKeyboardMarkup(rows)
+
+
+def _purchase_cta_markup(access: ImageAccessResult) -> InlineKeyboardMarkup | None:
+    """מקלדת רכישה כשהחסימה היא בגלל חוסר קופון/מנוי (לא cooldown)."""
+    if access.status == ImageAccessStatus.COOLDOWN:
+        return None
+    if access.status == ImageAccessStatus.OK:
+        return None
+    return build_upgrade_options_keyboard()
 
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
@@ -1022,14 +1031,11 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if access.status != ImageAccessStatus.OK:
                 await query.answer()
                 await _delete_callback_message(query)
-                reply_markup = None
-                if access.status == ImageAccessStatus.DAILY_LIMIT:
-                    reply_markup = build_upgrade_options_keyboard()
                 await _send_text_safe(
                     context,
                     chat_id,
                     image_access_reply_hebrew(access),
-                    reply_markup=reply_markup,
+                    reply_markup=_purchase_cta_markup(access),
                 )
                 return
         await query.answer()
@@ -1047,14 +1053,11 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if access.status != ImageAccessStatus.OK:
                 await query.answer()
                 await _delete_callback_message(query)
-                reply_markup = None
-                if access.status == ImageAccessStatus.DAILY_LIMIT:
-                    reply_markup = build_upgrade_options_keyboard()
                 await _send_text_safe(
                     context,
                     chat_id,
                     image_access_reply_hebrew(access),
-                    reply_markup=reply_markup,
+                    reply_markup=_purchase_cta_markup(access),
                 )
                 return
         await query.answer()
@@ -1295,34 +1298,21 @@ async def _edit_draft_message_safe(
     edit: dict | None = None,
     errors: list[str] | None = None,
 ) -> None:
-    text = draft_display_text(
-        extracted,
-        edit=edit,
-        errors=errors,
-        type_picker_idx=get_draft_type_picker_idx(chat_id),
-    )
-    picker_idx = get_draft_type_picker_idx(chat_id)
-    keyboard = build_draft_keyboard(extracted, type_picker_idx=picker_idx)
+    del extracted, edit, errors  # הודעת הטיוטה היא הסבר קבוע + אישור
+    text = DRAFT_INSTRUCTION_TEXT
+    keyboard = build_draft_approve_keyboard()
     try:
         await context.bot.edit_message_text(
             text,
             chat_id=chat_id,
             message_id=message_id,
             reply_markup=keyboard,
-            parse_mode="Markdown",
         )
     except BadRequest as exc:
         err = str(exc).lower()
         if "message is not modified" in err:
             return
-        if "parse entities" not in err:
-            raise
-        await context.bot.edit_message_text(
-            text,
-            chat_id=chat_id,
-            message_id=message_id,
-            reply_markup=keyboard,
-        )
+        raise
 
 
 def _is_load_type_picker_open(chat_id: int) -> bool:
@@ -1425,21 +1415,23 @@ async def send_draft_with_keyboard(
     chat_id: int,
     extracted: dict,
 ) -> None:
-    text = draft_display_text(extracted)
-    keyboard = build_draft_keyboard(extracted)
-    try:
-        sent = await message.reply_text(
-            text, reply_markup=keyboard, parse_mode="Markdown"
-        )
-    except BadRequest:
-        sent = await message.reply_text(text, reply_markup=keyboard)
+    ok = await send_draft_preview(
+        context, chat_id, extracted, reply_to_message=message
+    )
+    if ok:
+        return
+    keyboard = build_draft_approve_keyboard()
+    sent = await message.reply_text(
+        DRAFT_INSTRUCTION_TEXT, reply_markup=keyboard
+    )
     set_draft_pending(
         chat_id,
         extracted,
-        text,
+        DRAFT_INSTRUCTION_TEXT,
         message_id=sent.message_id,
         clear_edit=True,
     )
+    register_draft_cleanup_id(chat_id, sent.message_id)
 
 
 _FORCE_REPLY = ForceReply(
@@ -1523,14 +1515,11 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if COUPON_ACCESS_ENABLED:
             access = consume_solve_slot(telegram_user_id(update))
             if access.status != ImageAccessStatus.OK:
-                reply_markup = None
-                if access.status == ImageAccessStatus.DAILY_LIMIT:
-                    reply_markup = build_upgrade_options_keyboard()
                 await _send_text_safe(
                     context,
                     chat_id,
                     image_access_reply_hebrew(access),
-                    reply_markup=reply_markup,
+                    reply_markup=_purchase_cta_markup(access),
                 )
                 return
         # אם נשלחה הודעת שגיאה קודמת אחרי "חשב" — מוחקים אותה לפני ניסיון חישוב נוסף.
@@ -1541,7 +1530,19 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             except BadRequest:
                 pass
             set_draft_error_message_id(chat_id, None)
+        # צילום message_ids לפני approve — תמונת המקור לא נכללת
+        cleanup_ids = get_draft_cleanup_message_ids(chat_id, keep_user_source=True)
+        if msg_id is not None:
+            cleanup_ids.append(int(msg_id))
+        if query.message is not None:
+            cleanup_ids.append(int(query.message.message_id))
+        cleanup_ids = list(dict.fromkeys(cleanup_ids))
         reply, solved, extracted = approve_and_solve(chat_id, extracted)
+        if (solved or {}).get("result"):
+            # קודם מחיקת כל שיחת הטיוטה (חוץ מתמונת המשתמש), אחר כך פתרונות
+            await wipe_draft_conversation(
+                context, chat_id, message_ids=cleanup_ids
+            )
         await deliver_after_draft_approve(
             context,
             chat_id,
@@ -1558,148 +1559,9 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         set_draft_type_picker_idx(chat_id, None)
         return
 
-    if cb.action == "cancel_edit":
-        await query.answer()
-        await _dismiss_edit_prompt(context, chat_id)
-        set_draft_edit(chat_id, None)
-        set_draft_type_picker_idx(chat_id, None)
-        if msg_id is not None:
-            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
-        return
-
-    if cb.action == "set_load_dir":
-        await query.answer()
-        edit = {"kind": "load_dir", "index": cb.index}
-        set_draft_edit(chat_id, edit)
-        await _apply_pending_edit(context, chat_id, cb.dir, pending_edit=edit)
-        return
-
-    if cb.action == "pick_load_type":
-        await query.answer()
-        loads = (extracted.get("beam") or {}).get("loads") or []
-        ld = (
-            loads[cb.index - 1]
-            if isinstance(loads, list) and 0 <= cb.index - 1 < len(loads)
-            else {}
-        )
-        if isinstance(ld, dict) and should_open_type_picker_on_direction_click(ld):
-            # עומס חדש/ריק — עדיין אין כיוון להפוך; פותחים את תפריט בחירת הסוג.
-            updated = extracted
-            set_draft_type_picker_idx(chat_id, cb.index)
-        else:
-            # עומס קיים עם ערך — לחיצה על «כיוון» פשוט הופכת כיוון, בלי תפריט נוסף.
-            updated = toggle_any_load_direction(extracted, cb.index)
-            set_draft_type_picker_idx(chat_id, None)
-        persist_draft(chat_id, updated)
-        if msg_id is not None:
-            await _edit_draft_message_safe(context, chat_id, msg_id, updated)
-        return
-
-    if cb.action == "set_load_type":
-        await query.answer()
-        if cb.index == ADD_LOAD_TYPE_PICKER_IDX:
-            updated = add_load_of_type(extracted, cb.dir)
-        else:
-            updated = set_load_type(extracted, cb.index, cb.dir)
-        persist_draft(chat_id, updated)
-        set_draft_type_picker_idx(chat_id, None)
-        if msg_id is not None:
-            await _edit_draft_message_safe(context, chat_id, msg_id, updated)
-        return
-
-    if cb.action == "toggle_dir":
-        if cb.index == ADD_LOAD_TYPE_PICKER_IDX:
-            await query.answer()
-            return
-        await query.answer()
-        updated = toggle_any_load_direction(extracted, cb.index)
-        persist_draft(chat_id, updated)
-        if msg_id is not None:
-            await _edit_draft_message_safe(context, chat_id, msg_id, updated)
-        return
-
-    if cb.action == "edit_L":
-        await _start_draft_edit(context, query, chat_id, {"kind": "L"}, extracted)
-        return
-
-    if cb.action == "edit_support":
-        await _start_draft_edit(
-            context,
-            query,
-            chat_id,
-            {"kind": "support", "index": cb.index},
-            extracted,
-        )
-        return
-
-    if cb.action == "edit_load":
-        await _start_draft_edit(
-            context,
-            query,
-            chat_id,
-            {"kind": "load", "index": cb.index},
-            extracted,
-        )
-        return
-
-    if cb.action == "edit_load_dir":
-        await _start_draft_edit(
-            context,
-            query,
-            chat_id,
-            {"kind": "load_dir", "index": cb.index},
-            extracted,
-        )
-        return
-
-    if cb.action == "edit_load_mag":
-        await _start_draft_edit(
-            context,
-            query,
-            chat_id,
-            {"kind": "load_mag", "index": cb.index},
-            extracted,
-        )
-        return
-
-    if cb.action == "edit_load_x":
-        await _start_draft_edit(
-            context,
-            query,
-            chat_id,
-            {"kind": "load_x", "index": cb.index},
-            extracted,
-        )
-        return
-
-    if cb.action == "edit_load_angle":
-        await _start_draft_edit(
-            context,
-            query,
-            chat_id,
-            {"kind": "load_angle", "index": cb.index},
-            extracted,
-        )
-        return
-
-    if cb.action == "delete_load":
-        await query.answer()
-        updated = delete_load(extracted, cb.index)
-        set_draft_edit(chat_id, None)
-        set_draft_type_picker_idx(chat_id, None)
-        persist_draft(chat_id, updated)
-        if msg_id is not None:
-            await _edit_draft_message_safe(context, chat_id, msg_id, updated)
-        return
-
-    if cb.action == "add_load":
-        await query.answer()
-        set_draft_edit(chat_id, None)
-        set_draft_type_picker_idx(chat_id, ADD_LOAD_TYPE_PICKER_IDX)
-        if msg_id is not None:
-            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
-        return
-
+    # מקלדת הטיוטה החדשה היא אישור בלבד — מתעלמים משאר d:* ישנים.
+    await query.answer()
+    return
 
 
 async def _deliver_generated_exercise(
@@ -1714,14 +1576,11 @@ async def _deliver_generated_exercise(
         if access.status != ImageAccessStatus.OK:
             await cleanup_practice_chat(context, chat_id)
             await _leave_formulas_chat_if_needed(context, chat_id)
-            reply_markup = None
-            if access.status == ImageAccessStatus.DAILY_LIMIT:
-                reply_markup = build_upgrade_options_keyboard()
             await _send_text_safe(
                 context,
                 chat_id,
                 image_access_reply_hebrew(access),
-                reply_markup=reply_markup,
+                reply_markup=_purchase_cta_markup(access),
             )
             return
     try:
@@ -1795,13 +1654,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if COUPON_ACCESS_ENABLED:
             access = check_solve_access(telegram_user_id(update))
             if access.status != ImageAccessStatus.OK:
-                reply_markup = None
-                if access.status == ImageAccessStatus.DAILY_LIMIT:
-                    reply_markup = build_upgrade_options_keyboard()
                 await _reply_text_safe(
                     update.message,
                     image_access_reply_hebrew(access),
-                    reply_markup=reply_markup,
+                    reply_markup=_purchase_cta_markup(access),
                 )
                 return
         prompt = select_solve_mode(chat_id, SolveMode.ASSISTANT)
@@ -1899,19 +1755,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _prompt_bug_report(update.message)
         return
 
-    pending_edit = get_draft_edit(chat_id)
-    if pending_edit and pending_edit.get("kind") == "load_type_picker":
-        idx = int(pending_edit.get("index", 0) or 0)
-        set_draft_edit(chat_id, None)
-        if idx >= 1:
-            set_draft_type_picker_idx(chat_id, idx)
-        pending_edit = None
-    if pending_edit and is_draft_pending(chat_id):
-        await _apply_pending_edit(
-            context, chat_id, text, user_message_id=update.message.message_id
-        )
-        return
-
     if COUPON_ACCESS_ENABLED:
         in_coupon_prompt = chat_id in _coupon_prompt_chats
         if in_coupon_prompt or looks_like_coupon_code(text):
@@ -1924,55 +1767,76 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
 
-    if is_draft_pending(chat_id) and not looks_like_draft_patch(text):
-        await _reply_text_safe(
-            update.message,
-            _TEXT_UNHANDLED,
-        )
-        return
-
-    draft_result = handle_draft_text(chat_id, text)
-    if draft_result.handled:
-        ref = get_draft_message_ref(chat_id)
-        if draft_result.approved:
-            if COUPON_ACCESS_ENABLED:
-                access = consume_solve_slot(telegram_user_id(update))
-                if access.status != ImageAccessStatus.OK:
-                    reply_markup = None
-                    if access.status == ImageAccessStatus.DAILY_LIMIT:
-                        reply_markup = build_upgrade_options_keyboard()
-                    await _reply_text_safe(
-                        update.message,
-                        image_access_reply_hebrew(access),
-                        reply_markup=reply_markup,
-                    )
-                    return
+    if is_draft_pending(chat_id):
+        if is_approval_message(text):
+            # לפני approve — ids למחיקה (בלי תמונת מקור של המשתמש)
+            ref = get_draft_message_ref(chat_id)
             msg_id = ref[1] if ref else None
-            extracted = draft_result.extracted or get_stored_vision_extracted(chat_id) or {}
-            await deliver_after_draft_approve(
-                context,
-                chat_id,
-                extracted=extracted,
-                reply=draft_result.reply,
-                solved=draft_result.solved or {},
-                draft_msg_id=msg_id,
-                deliver_notebook=_deliver_approved_solve,
-                send_text=_send_text_safe,
-                edit_draft_message=_edit_draft_message_safe,
+            cleanup_ids = get_draft_cleanup_message_ids(
+                chat_id, keep_user_source=True
             )
-            set_draft_edit(chat_id, None)
-        elif draft_result.update_draft and ref and draft_result.extracted:
-            try:
-                await _edit_draft_message_safe(
+            if msg_id is not None:
+                cleanup_ids.append(int(msg_id))
+            if update.message is not None:
+                cleanup_ids.append(int(update.message.message_id))
+            cleanup_ids = list(dict.fromkeys(cleanup_ids))
+            draft_result = handle_draft_text(chat_id, text)
+            if draft_result.handled and draft_result.approved:
+                if COUPON_ACCESS_ENABLED:
+                    access = consume_solve_slot(telegram_user_id(update))
+                    if access.status != ImageAccessStatus.OK:
+                        await _reply_text_safe(
+                            update.message,
+                            image_access_reply_hebrew(access),
+                            reply_markup=_purchase_cta_markup(access),
+                        )
+                        return
+                extracted = draft_result.extracted or get_stored_vision_extracted(chat_id) or {}
+                if (draft_result.solved or {}).get("result"):
+                    await wipe_draft_conversation(
+                        context, chat_id, message_ids=cleanup_ids
+                    )
+                await deliver_after_draft_approve(
                     context,
-                    ref[0],
-                    ref[1],
-                    draft_result.extracted,
+                    chat_id,
+                    extracted=extracted,
+                    reply=draft_result.reply,
+                    solved=draft_result.solved or {},
+                    draft_msg_id=msg_id,
+                    deliver_notebook=_deliver_approved_solve,
+                    send_text=_send_text_safe,
+                    edit_draft_message=_edit_draft_message_safe,
                 )
-            except BadRequest as exc:
-                log.warning("Draft message edit failed: %s", exc)
-            if draft_result.errors:
-                await _send_text_safe(context, chat_id, f"{draft_result.errors[0]}")
+                set_draft_edit(chat_id, None)
+            return
+
+        extracted = get_stored_vision_extracted(chat_id) or {}
+        user_mid = int(update.message.message_id) if update.message else None
+        register_draft_cleanup_id(chat_id, user_mid)
+        updated, errors = apply_nl_draft_edit(extracted, text)
+        if errors or updated is None:
+            err_msg = await _reply_text_safe(
+                update.message,
+                (errors[0] if errors else "לא הצלחתי לעדכן את הטיוטה."),
+            )
+            if err_msg is not None:
+                register_draft_cleanup_id(chat_id, getattr(err_msg, "message_id", None))
+            return
+        persist_draft(chat_id, updated)
+        ok, render_err = await refresh_draft_after_correction(
+            context,
+            chat_id,
+            updated,
+            user_message_id=user_mid,
+        )
+        if not ok:
+            err_msg = await _reply_text_safe(
+                update.message,
+                render_err or "הטיוטה עודכנה, אבל שליחת השרטוט נכשלה.",
+            )
+            if err_msg is not None:
+                register_draft_cleanup_id(chat_id, getattr(err_msg, "message_id", None))
+            return
         return
 
     await _reply_text_safe(
@@ -2083,9 +1947,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 user_id,
                 access.status.value,
             )
-            reply_markup = None
-            if access.status == ImageAccessStatus.DAILY_LIMIT:
-                reply_markup = build_upgrade_options_keyboard()
+            reply_markup = _purchase_cta_markup(access)
             await _reply_text_safe(
                 update.message,
                 image_access_reply_hebrew(access),
@@ -2105,6 +1967,8 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     begin_image_session(chat_id, solve_mode=solve_mode)
+    if DRAFT_APPROVAL_MODE and not is_bank_submission:
+        set_draft_source_user_message_id(chat_id, msg_id)
 
     if VISION_ASYNC_ENABLED and update.message:
         await send_vision_ack(update.message)

@@ -64,7 +64,7 @@ def test_coupon_is_privileged_after_free_window(access_db, monkeypatch):
     monkeypatch.setattr(
         access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
     )
-    access.insert_coupon_codes(["TESTCODE12"], daily_quota=6, period_days=105)
+    access.insert_coupon_codes(["TESTCODE12"], daily_quota=6, period_days=30)
     assert access.redeem_coupon("TESTCODE12", user_id).status == access.RedeemStatus.OK
     assert access.get_user_access_phase(user_id) == access.UserAccessPhase.PRIVILEGED
 
@@ -81,6 +81,24 @@ def test_privileged_solve_cooldown_10_minutes(cooldown_db, monkeypatch):
     assert blocked.status == access.ImageAccessStatus.COOLDOWN
     msg = access.image_access_reply_hebrew(blocked)
     assert "10 דקות" in msg
+
+
+def test_daily_limit_reply_asks_to_purchase(access_db, monkeypatch):
+    user_id = 2003
+    t0 = 1_700_000_000.0
+    monkeypatch.setattr(access.time, "time", lambda: t0)
+    access.ensure_user_first_seen(user_id)
+    monkeypatch.setattr(
+        access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    )
+    assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
+    blocked = access.consume_solve_slot(user_id)
+    assert blocked.status == access.ImageAccessStatus.DAILY_LIMIT
+    msg = access.image_access_reply_hebrew(blocked)
+    assert msg == (
+        "בשביל להמשיך אתה צריך לרכוש חבילה.\n"
+        "לרכישת חבילה:"
+    )
 
     monkeypatch.setattr(access.time, "time", lambda: t0 + 601)
     assert access.consume_solve_slot(user_id).status == access.ImageAccessStatus.OK
@@ -132,21 +150,22 @@ def test_formulas_always_open(access_db, monkeypatch):
     assert access.has_formulas_access(user_id) is True
 
 
-def test_vip_coupon_still_unlocks_bank(cooldown_db):
+def test_vip_coupon_skips_feature_cooldown_and_unlocks_bank(cooldown_db):
     user_id = 5001
     access.insert_coupon_codes(
         ["VIPCODE1001"],
         daily_quota=access.VIP_UNLIMITED_DAILY_QUOTA,
-        period_days=100,
+        period_days=120,
     )
     result = access.redeem_coupon("VIPCODE1001", user_id)
     assert result.status == access.RedeemStatus.OK
     assert access.user_has_bank_unlock(user_id)
-    # VIP לא פוטר מ־cooldown של פתרון
     first = access.consume_solve_slot(user_id)
     assert first.status == access.ImageAccessStatus.OK
     second = access.consume_solve_slot(user_id)
-    assert second.status == access.ImageAccessStatus.COOLDOWN
+    assert second.status == access.ImageAccessStatus.OK
+    assert access.consume_practice_slot(user_id).status == access.ImageAccessStatus.OK
+    assert access.consume_practice_slot(user_id).status == access.ImageAccessStatus.OK
 
 
 def test_expired_coupon_falls_back_to_restricted(access_db, monkeypatch):
@@ -157,7 +176,7 @@ def test_expired_coupon_falls_back_to_restricted(access_db, monkeypatch):
     monkeypatch.setattr(
         access.time, "time", lambda: t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
     )
-    access.insert_coupon_codes(["EXPIRECODE1"], daily_quota=6, period_days=105)
+    access.insert_coupon_codes(["EXPIRECODE1"], daily_quota=6, period_days=120)
     redeem = access.redeem_coupon("EXPIRECODE1", user_id)
     assert redeem.period_expires_at is not None
     monkeypatch.setattr(access.time, "time", lambda: redeem.period_expires_at + 1)

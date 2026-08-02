@@ -14,6 +14,20 @@ from bot.vision import finalize_beam_extraction, resolve_beam_support_geometry, 
 log = logging.getLogger("notebook_render")
 
 
+def _prepare_extracted_for_render(extracted: dict) -> dict:
+    """מכין extracted לרינדור מחברת/שרטוט.
+
+    תרגילי מחולל מדויקים — ``finalize_beam_extraction`` משחית בהם סמכים.
+    מדלגים עליו כשמסומן במטא (כמו ``_bank_extracted_for_solve`` ב־router).
+    """
+    data = extracted if isinstance(extracted, dict) else {}
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    skip = bool(meta.get("skip_vision_normalize")) or meta.get("source") == "exercise_generator"
+    if skip:
+        return data
+    return finalize_beam_extraction(data)
+
+
 def _solver_loads_from_extracted(extracted: dict) -> list[dict]:
     """עומסים בקנה מידה טון — תואם reactions_ton ותווית t במחברת."""
     beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
@@ -45,7 +59,7 @@ def render_notebook_png_bytes(extracted: dict, solved: dict) -> bytes | None:
     """בונה PNG של דף מחברת מלא. None אם אין מספיק נתונים."""
     if not (solved or {}).get("result"):
         return None
-    extracted = finalize_beam_extraction(extracted)
+    extracted = _prepare_extracted_for_render(extracted)
     beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
     try:
         L = float(beam.get("L", 0))
@@ -120,7 +134,7 @@ def render_exercise_problem_png_bytes(extracted: dict) -> bytes | None:
 
     לשימוש לפני שהמשתמש בחר מצב פתרון (מציג את השאלה בלבד, לא את התשובה).
     """
-    extracted = finalize_beam_extraction(extracted)
+    extracted = _prepare_extracted_for_render(extracted)
     beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
     try:
         L = float(beam.get("L", 0))

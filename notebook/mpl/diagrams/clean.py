@@ -5,7 +5,41 @@ from typing import Any, List, Tuple
 
 import numpy as np
 
-from notebook.constants import _BLUE, _GREEN, _RED
+from notebook.constants import _BLUE, _GREEN, _INK, _RED
+
+_EMPTY_DIAGRAM_TOL = 1e-9
+
+
+def _diagram_is_empty(values: np.ndarray, *, tol: float = _EMPTY_DIAGRAM_TOL) -> bool:
+    """True כשאין דיאגרמה משמעותית — רק קו הקורה."""
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return True
+    return float(np.max(np.abs(arr))) < tol
+
+
+def _draw_empty_diagram_beam(
+    ax: Any,
+    Lf: float,
+    crit: List[Tuple[float, str]],
+    *,
+    draw_beam_reference: Any,
+    invert_y: bool,
+) -> None:
+    """פאנל ריק: רק קו הקורה (בלי מילוי דיאגרמה)."""
+    if invert_y:
+        ax.invert_yaxis()
+    ymin, ymax = ax.get_ylim()
+    draw_beam_reference(ax, Lf, crit, ymin, ymax)
+    (ln,) = ax.plot(
+        [0.0, float(Lf)],
+        [0.0, 0.0],
+        color=_INK,
+        linewidth=2.4,
+        zorder=6,
+        solid_capstyle="round",
+    )
+    ln.set_clip_on(False)
 
 
 def _plot_n_on_beam_clean(
@@ -30,6 +64,12 @@ def _plot_n_on_beam_clean(
         normals = np.concatenate(([float(normals[0])], normals))
 
     configure_beam_diagram_ax(ax, Lf, x_pad, normals, transparent=transparent, paper=False)
+    if _diagram_is_empty(normals):
+        _draw_empty_diagram_beam(
+            ax, Lf, crit, draw_beam_reference=draw_beam_reference, invert_y=True
+        )
+        return
+
     plot_zero_baseline_cartesian(ax, Lf)
     ax.fill_between(xs, normals, 0, step="post", color=_GREEN, alpha=fill_alpha, zorder=2)
     # להתחיל מהקורה (y=0) גם אם יש קפיצה בתחילת הגרף
@@ -63,6 +103,12 @@ def _plot_q_on_beam_clean(
         shears = np.concatenate(([float(shears[0])], shears))
 
     configure_beam_diagram_ax(ax, Lf, x_pad, shears, transparent=transparent, paper=False)
+    if _diagram_is_empty(shears):
+        _draw_empty_diagram_beam(
+            ax, Lf, crit, draw_beam_reference=draw_beam_reference, invert_y=False
+        )
+        return
+
     plot_zero_baseline_cartesian(ax, Lf)
     ax.fill_between(xs, shears, 0, step="post", color=_BLUE, alpha=fill_alpha, zorder=2)
     if len(xs):
@@ -97,6 +143,12 @@ def _plot_m_on_beam_clean(
     configure_beam_diagram_ax(ax, Lf, x_pad, moments, transparent=transparent, paper=False)
     ymin, ymax = beam_diagram_ylim_moment(moments)
     ax.set_ylim(ymin, ymax)
+    if _diagram_is_empty(moments):
+        _draw_empty_diagram_beam(
+            ax, Lf, crit, draw_beam_reference=draw_beam_reference, invert_y=True
+        )
+        return
+
     plot_zero_baseline_cartesian(ax, Lf)
     if len(xs):
         ax.plot([0.0, 0.0], [0.0, float(moments[0])], color=_RED, linewidth=diag_lw, zorder=3)
@@ -105,4 +157,3 @@ def _plot_m_on_beam_clean(
     ax.invert_yaxis()
     ymin2, ymax2 = ax.get_ylim()
     draw_beam_reference(ax, Lf, crit, ymin2, ymax2)
-

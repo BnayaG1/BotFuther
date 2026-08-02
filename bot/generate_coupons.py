@@ -2,9 +2,9 @@
 """יצירת קודי קופון חד-פעמיים ב-SQLite.
 
 דוגמה:
-    python -m bot.generate_coupons --package 6_105 --count 20
-    python -m bot.generate_coupons --quota 6 --days 105 --count 10
-    python -m bot.generate_coupons --package 6_105 --count 5 --out codes.txt
+    python -m bot.generate_coupons --package 6_30 --count 20
+    python -m bot.generate_coupons --quota 6 --days 120 --count 10
+    python -m bot.generate_coupons --package 6_120 --count 5 --out codes.txt
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument(
         "--package",
         choices=[p.package_id for p in PACKAGE_CATALOG],
-        help="Package id, e.g. 6_105",
+        help="Package id, e.g. 6_30 or 6_120",
     )
     group.add_argument(
         "--quota",
@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         "--days",
         type=int,
         choices=sorted(VALID_PERIOD_DAYS),
-        help="Subscription period in days: 105",
+        help="Subscription period in days: 30 or 120",
     )
     parser.add_argument("--count", type=int, required=True)
     parser.add_argument("--length", type=int, default=10)
