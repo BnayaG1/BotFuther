@@ -72,22 +72,13 @@ from bot.formulas import (
     topic_image_caption_hebrew,
     topic_pending_caption_hebrew,
 )
-try:
-    # תיקיית intro/ מקומית בפיתוח (gitignore) — בשרת בלי התיקייה המבוא פשוט לא מופיע.
-    from intro import (
-        build_opening_keyboard,
-        intro_topic_body_hebrew,
-        opening_message_hebrew,
-        parse_intro_callback,
-    )
+# תיקיית intro/ כבויה
+INTRO_AVAILABLE = False
+build_opening_keyboard = None  # type: ignore[assignment]
+intro_topic_body_hebrew = None  # type: ignore[assignment]
+opening_message_hebrew = None  # type: ignore[assignment]
+parse_intro_callback = None  # type: ignore[assignment]
 
-    INTRO_AVAILABLE = True
-except ImportError:
-    INTRO_AVAILABLE = False
-    build_opening_keyboard = None  # type: ignore[assignment]
-    intro_topic_body_hebrew = None  # type: ignore[assignment]
-    opening_message_hebrew = None  # type: ignore[assignment]
-    parse_intro_callback = None  # type: ignore[assignment]
 from bot.draft_editor import (
     apply_field_edit,
     approve_and_solve,
