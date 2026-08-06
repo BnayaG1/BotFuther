@@ -21,3 +21,5 @@ validator_images/failures/
 exercise_generator/output/**
 !exercise_generator/output/.gitkeep
 !exercise_generator/output/.gitignore
+intro/
+
