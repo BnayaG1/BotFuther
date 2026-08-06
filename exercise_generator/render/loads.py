@@ -75,20 +75,26 @@ def _fixed_wall_x(supports: list[Support] | None) -> float | None:
 
 
 def _udl_draw_heights(loads: list[LoadItem]) -> dict[int, float]:
-    """גובה ציור: מפורס יחיד = קבוע; שני מפורסים — הגבוה ב־t/m טיפה גבוה יותר."""
+    """גובה ציור לפי |w|: יחיד=קבוע; 2+ — מדרגות במרווח קבוע (הכבד גבוה יותר).
+
+    בשני מפורסים: הכבד טיפה מעל הבסיס. בשלושה (או יותר, מתרגילי משתמש):
+    הנמוך ב-|w| יורד מתחת לשני באותו מרווח כמו בין הכבד לשני.
+    """
     udls = [ld for ld in loads if isinstance(ld, DistributedLoad)]
     base = style.UDL_BASE_HEIGHT
-    taller = base * 1.22  # «קצת» יותר גבוה
+    taller = base * 1.22  # «קצת» יותר גבוה מהבסיס
+    delta = taller - base
     out: dict[int, float] = {}
     if len(udls) <= 1:
         for ld in udls:
             out[id(ld)] = base
         return out
-    # שני מפורסים (או יותר) — מי עם |w| גדול יותר גבוה בציור
+    # מיון עולה לפי |w|: האחרון = הכבד ביותר → taller
     by_w = sorted(udls, key=lambda ld: abs(float(ld.w)))
-    for ld in by_w[:-1]:
-        out[id(ld)] = base
-    out[id(by_w[-1])] = taller
+    n = len(by_w)
+    for rank, ld in enumerate(by_w):
+        steps_from_top = (n - 1) - rank
+        out[id(ld)] = taller - steps_from_top * delta
     return out
 
 

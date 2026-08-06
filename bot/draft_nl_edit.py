@@ -11,8 +11,11 @@ from google.genai import types
 
 from bot.draft_format import (
     _inclined_mag,
+    _sync_inclined_components,
+    set_beam_L_user,
     set_distributed_span_user,
     set_load_x_user,
+    set_support_x_user,
     sync_beam_distributed_loads,
 )
 from bot.gemini_chat import (
@@ -29,13 +32,30 @@ _NL_EDIT_PROMPT = """\
 עדכן רק את מה שהמשתמש ביקש; שמור על שאר השדות ללא שינוי מיותר.
 החזר JSON מלא בלבד (בלי markdown).
 
+פעולות נתמכות (בחר אחת לפי ההוראה):
+1) אורך קורה — שנה L (סמן _user_L).
+2) הזזת עומס — ל-x= / לקצה / מטר ימינה-שמאלה (רק אותו עומס).
+3) הגדלת/הקטנת מפורס — x1/x2 + _user_span.
+4) הזזת סמך נייד/קבוע — supports בלבד, לא loads; סמן _user_x.
+5) שינוי כיוון עומס — סימן Fx/Fy / incl_dir / M.
+6) שינוי זווית אלכסוני — angle_deg + עדכון Fx/Fy (למשל «שנה זווית ל-45»).
+7) המרת סוג עומס — למשל אלכסוני→אנכי, אנכי→מומנט.
+8) הוספת/מחיקת עומס לפי הצורך.
+
 מבנה פקודה מהמשתמש (פרש לפי הסדר הזה):
 1) פקודה — מה לעשות: תשנה / תעביר / תוסיף / תמחק / תהפוך / תזיז וכו'.
-2) שם עומס (סוג) — מומנט / אלכסוני / משופע / צירי / אופקי / אנכי / נקודתי / מפורס.
-3) זיהוי עומס (רק אם צריך להבדיל) — למשל: הימני / השמאלי / בנקודה C /
+2) יעד — סמך או עומס. אם כתוב «סמך» / «קבוע» / «נייד» / «נעץ» / «גליל» / «קיבוע»
+   זה סמך (supports), לא עומס. אל תזיז עומס כשמבקשים סמך.
+3) שם עומס (סוג) — מומנט / אלכסוני / משופע / צירי / אופקי / אנכי / נקודתי / מפורס.
+4) זיהוי (רק אם צריך להבדיל) — למשל: הימני / השמאלי / בנקודה C /
    ב-x=5 / במשקל 15 טון / העומס השני / כל האלכסוניים.
-4) תוצאה — המצב הרצוי אחרי השינוי: לאנכי / ל-8 טון / ל-x=3 / למעלה /
-   לכיוון ↙ / מחק / זווית 45 וכו'.
+5) תוצאה — המצב הרצוי אחרי השינוי: לאנכי / ל-8 טון / ל-x=3 / מטר ימינה /
+   למעלה / לכיוון ↙ / מחק / זווית 45 וכו'.
+
+סמכים (supports):
+- «סמך קבוע» / «נעץ» → type=pin. «סמך נייד» / «גליל» → type=roller. «קיבוע» → type=fixed.
+- «הזז את הסמך הקבוע מטר ימינה» → שנה רק x של הסמך pin (+1 מטר), סמן _user_x=true.
+  אסור לגעת ב-loads.
 
 זיהוי ימני/שמאלי — חובה לפי מיקום x על הקורה (לא לפי סדר במערך loads):
 - «ימני» / «הימני» = העומס מהסוג המבוקש עם x הגדול ביותר.
@@ -103,7 +123,10 @@ _NL_EDIT_PROMPT = """\
 
 _INCLINED_WORD_RE = re.compile(r"אלכסונ|משופע|אלכסון|inclined", re.IGNORECASE)
 _VERTICAL_WORD_RE = re.compile(r"אנכי|נקודת|ישר(?!ה)|vertical|לאנכי", re.IGNORECASE)
-_MOVE_VERB_RE = re.compile(r"תעביר|תזיז|העבר|הזז|תעבירי|תזיזי", re.IGNORECASE)
+_MOVE_VERB_RE = re.compile(
+    r"תעביר|תזיז|העבר|הזיז|הזז|תעבירי|תזיזי",
+    re.IGNORECASE,
+)
 _ADD_VERB_RE = re.compile(r"תוסיף|הוסף|תוסיפי|להוסיף", re.IGNORECASE)
 _SIDE_RIGHT_RE = re.compile(r"ימני|ימין", re.IGNORECASE)
 _SIDE_LEFT_RE = re.compile(r"שמאל", re.IGNORECASE)
@@ -124,10 +147,51 @@ _END_LEFT_RE = re.compile(
 _DIST_WORD_RE = re.compile(r"מפורס|מפולג|distributed|udl", re.IGNORECASE)
 _SPAN_INTENT_RE = re.compile(r"אורך|טווח|תקצר|תאריך|קצר|ארך", re.IGNORECASE)
 _EXTEND_RE = re.compile(
-    r"תאריך|שי?אריך|להאריך|האר[י]?ך|יאריך",
+    r"תאריך|שי?אריך|להאריך|האר[י]?ך|יאריך|הגדל|תגדיל|להגדיל|תגדילי",
     re.IGNORECASE,
 )
-_SHORTEN_RE = re.compile(r"תקצר|לקצר|תקצרי", re.IGNORECASE)
+_SHORTEN_RE = re.compile(
+    r"תקצר|לקצר|תקצרי|הקטן|תקטין|להקטין|תקטיני",
+    re.IGNORECASE,
+)
+_BEAM_L_EQ_RE = re.compile(r"\bL\s*=\s*(\d+(?:[.,]\d+)?)", re.IGNORECASE)
+_BEAM_LENGTH_WORD_RE = re.compile(
+    r"אורך\s*(?:של\s*)?ה?קורה|האורך|אורך\s*L|\bL\b",
+    re.IGNORECASE,
+)
+_DIR_INTENT_RE = re.compile(
+    r"כיוון|הפוך|תהפוך|החליף|↙|↘|←|→|↑|↓|למעלה|למטה",
+    re.IGNORECASE,
+)
+_CHANGE_TYPE_VERB_RE = re.compile(
+    r"שנה|תהפוך|הפוך|תעשה|המר|תחליף|להפוך|לשנות",
+    re.IGNORECASE,
+)
+_ANGLE_INTENT_RE = re.compile(r"זווית|מעלות|°|degrees?|\bangle\b", re.IGNORECASE)
+_ANGLE_WITH_UNIT_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:°|מעלות|deg(?:rees)?)",
+    re.IGNORECASE,
+)
+_ANGLE_AFTER_WORD_RE = re.compile(
+    r"זווית\s*(?:של\s*)?(?:ה?(?:עומס|אלכסונ\w*|משופע\w*)\s*)?"
+    r"(?:ל-?|=|:)?\s*(\d+(?:[.,]\d+)?)",
+    re.IGNORECASE,
+)
+# יעד המרה: «לאנכי», «למומנט»…
+_TARGET_LOAD_KIND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"ל\s*(?:עומס\s*)?מומנט", re.I), "moment"),
+    (re.compile(r"ל\s*(?:עומס\s*)?(?:אלכסונ|משופע)", re.I), "inclined"),
+    (re.compile(r"ל\s*(?:עומס\s*)?(?:צירי|אופקי)", re.I), "axial"),
+    (re.compile(r"ל\s*(?:עומס\s*)?(?:מפורס|מפולג)", re.I), "distributed"),
+    (re.compile(r"ל\s*(?:עומס\s*)?(?:אנכי|נקודת)", re.I), "vertical"),
+)
+_KIND_TO_SETTABLE = {
+    "vertical": "point",
+    "axial": "axial",
+    "moment": "moment",
+    "distributed": "distributed",
+    "inclined": "inclined",
+}
 _LENGTH_TO_RE = re.compile(
     r"(?:ל-?|לאורך\s*(?:של)?|באורך(?:\s*של)?)\s*"
     r"(\d+(?:[.,]\d+)?)\s*(?:מ(?:['׳]?|טר(?:ים)?)?|m\b)?",
@@ -148,6 +212,65 @@ _FROM_TO_X_RE = re.compile(
     re.IGNORECASE,
 )
 _DEFAULT_SPAN_DELTA_M = 1.0
+_SUPPORT_WORD_RE = re.compile(r"סמך|תמיכ|supports?", re.IGNORECASE)
+_DELTA_RIGHT_RE = re.compile(r"ימינה|לימין|לכיוון\s*ימין", re.IGNORECASE)
+_DELTA_LEFT_RE = re.compile(r"שמאלה|לשמאל|לכיוון\s*שמאל", re.IGNORECASE)
+_METER_AMOUNT_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:מטר(?:ים)?|מ['׳]|m\b)",
+    re.IGNORECASE,
+)
+_BARE_METER_RE = re.compile(r"מטר(?:ים)?|מ['׳]|m\b", re.IGNORECASE)
+# שברים בעברית / ספרות להזזה מדויקת (חצי מטר, מטר וחצי, 0.5 ימינה…)
+_THREE_QUARTERS_M_RE = re.compile(
+    r"(?:ב-?\s*)?שלוש(?:ה|ת)?\s*רבע(?:י|ים)?(?:\s*(?:מטר(?:ים)?|מ['׳]|m\b))?",
+    re.IGNORECASE,
+)
+_HALF_M_RE = re.compile(
+    r"(?:ב-?\s*)?(?:חצי|½)(?:\s*(?:מטר(?:ים)?|מ['׳]|m\b))?",
+    re.IGNORECASE,
+)
+_QUARTER_M_RE = re.compile(
+    r"(?:ב-?\s*)?רבע(?:\s*(?:מטר(?:ים)?|מ['׳]|m\b))?",
+    re.IGNORECASE,
+)
+_METER_AND_HALF_RE = re.compile(
+    r"(?:ב-?\s*)?מטר(?:ים)?\s*וחצי",
+    re.IGNORECASE,
+)
+_N_AND_HALF_M_RE = re.compile(
+    r"(?:ב-?\s*)?(\d+(?:[.,]\d+)?|אחד|אחת|שניים|שנים|שתיים|שתי|שלושה|שלוש|"
+    r"ארבעה|ארבע|חמישה|חמש)\s*(?:מטר(?:ים)?\s*)?וחצי"
+    r"(?:\s*(?:מטר(?:ים)?|מ['׳]|m\b))?",
+    re.IGNORECASE,
+)
+_FRAC_SLASH_M_RE = re.compile(
+    r"(?:ב-?\s*)?(\d+)\s*/\s*(\d+)(?:\s*(?:מטר(?:ים)?|מ['׳]|m\b))?",
+    re.IGNORECASE,
+)
+_BARE_NUM_BEFORE_DIR_RE = re.compile(
+    r"(?:ב-?\s*)?(\d+(?:[.,]\d+)?)\s*(?=ימינה|שמאלה|לימין|לשמאל)",
+    re.IGNORECASE,
+)
+_HEB_INT_WORDS: dict[str, float] = {
+    "אחד": 1.0,
+    "אחת": 1.0,
+    "שניים": 2.0,
+    "שנים": 2.0,
+    "שתיים": 2.0,
+    "שתי": 2.0,
+    "שלושה": 3.0,
+    "שלוש": 3.0,
+    "ארבעה": 4.0,
+    "ארבע": 4.0,
+    "חמישה": 5.0,
+    "חמש": 5.0,
+}
+# (regex על סוג סמך בעברית, type פנימי) — קיבוע לפני קבוע
+_SUPPORT_KIND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"קיבוע|רתום|fixed", re.I), "fixed"),
+    (re.compile(r"קבוע|נעץ|pin", re.I), "pin"),
+    (re.compile(r"נייד|גליל|roller", re.I), "roller"),
+)
 
 # (regex על סוג בעברית, kind פנימי)
 _LOAD_KIND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -461,10 +584,13 @@ def _parse_distributed_side(text: str) -> str | None:
 
 
 def _parse_span_delta_m(text: str) -> float | None:
-    """דלתא במטרים: «ב-2 מטר», «ב2 מטרים»."""
+    """דלתא במטרים: «ב-2 מטר», «בחצי מטר», «ב2 מטרים»."""
     m = _BY_DELTA_RE.search(text)
     if m:
         return _parse_float_token(m.group(1))
+    # שברים מילוליים: «בחצי מטר», «ברבע מטר»
+    if re.search(r"ב-?\s*(?:חצי|רבע|שלוש|½)", text, re.IGNORECASE):
+        return _parse_move_amount_m(text)
     return None
 
 
@@ -487,6 +613,85 @@ def _pick_distributed_index(
     if side == "right":
         return max(candidates, key=lambda it: _distributed_x1_x2(it[1])[1])[0]
     return min(candidates, key=lambda it: _distributed_x1_x2(it[1])[0])[0]
+
+
+def _pick_load_index(
+    loads: list,
+    text: str,
+    kind: str | None,
+    *,
+    allow_distributed: bool = False,
+) -> int | None:
+    """בחירת עומס לפי סוג + ימני/שמאלי / יחיד."""
+    candidates: list[tuple[int, dict]] = []
+    for i, ld in enumerate(loads):
+        if not isinstance(ld, dict):
+            continue
+        t = str(ld.get("type", "")).lower().strip()
+        if not allow_distributed and t == "distributed":
+            continue
+        if kind is not None:
+            if not _load_matches_kind(ld, kind):
+                continue
+        candidates.append((i, ld))
+    if not candidates:
+        return None
+    text_for_side = _END_RIGHT_RE.sub(" ", text)
+    text_for_side = _END_LEFT_RE.sub(" ", text_for_side)
+    text_for_side = _DELTA_RIGHT_RE.sub(" ", text_for_side)
+    text_for_side = _DELTA_LEFT_RE.sub(" ", text_for_side)
+    side = _parse_side_token(text_for_side)
+    if side is None:
+        if len(candidates) != 1:
+            return None
+        return candidates[0][0]
+    if side == "right":
+        return max(candidates, key=lambda it: _load_anchor_x(it[1]))[0]
+    return min(candidates, key=lambda it: _load_anchor_x(it[1]))[0]
+
+
+def try_set_beam_length(extracted: dict, user_instruction: str) -> dict | None:
+    """שינוי אורך הקורה L — דטרמיניסטי."""
+    text = (user_instruction or "").strip()
+    if not text:
+        return None
+    # לא לגנוב «שנה אורך של עומס מפורס»
+    if _DIST_WORD_RE.search(text) and not re.search(r"קורה", text, re.IGNORECASE):
+        return None
+
+    new_L: float | None = None
+    m_eq = _BEAM_L_EQ_RE.search(text)
+    if m_eq:
+        new_L = _parse_float_token(m_eq.group(1))
+    elif _BEAM_LENGTH_WORD_RE.search(text):
+        lm = _LENGTH_TO_RE.search(text)
+        if lm:
+            new_L = _parse_float_token(lm.group(1))
+        else:
+            meter_m = _METER_AMOUNT_RE.search(text)
+            if meter_m:
+                new_L = _parse_float_token(meter_m.group(1))
+            else:
+                nums = list(_NUM_RE.finditer(text))
+                if len(nums) == 1:
+                    new_L = _parse_float_token(nums[0].group(1))
+    if new_L is None or new_L <= 0:
+        return None
+
+    data = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
+    beam = data.get("beam")
+    if not isinstance(beam, dict):
+        return None
+    try:
+        old_L = float(beam.get("L", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        old_L = 0.0
+    if abs(old_L - float(new_L)) < 1e-9:
+        return None
+    beam = dict(beam)
+    set_beam_L_user(beam, float(new_L))
+    data["beam"] = beam
+    return data
 
 
 def try_resize_distributed_load(extracted: dict, user_instruction: str) -> dict | None:
@@ -678,29 +883,193 @@ def _lock_changed_distributed_spans(original: dict, updated: dict) -> dict:
     return updated
 
 
-def try_move_load_to_beam_end(extracted: dict, user_instruction: str) -> dict | None:
-    """העברת עומס מזוהה (ימני/שמאלי לפי x) לקצה הקורה — דטרמיניסטי.
+def _parse_support_kind(text: str) -> str | None:
+    for pat, kind in _SUPPORT_KIND_PATTERNS:
+        if pat.search(text):
+            return kind
+    return None
 
-    מחזיר extracted מעודכן, או None אם הפקודה לא מתאימה.
-    """
+
+def _heb_int_token(raw: str) -> float | None:
+    s = str(raw or "").strip().lower()
+    if s in _HEB_INT_WORDS:
+        return _HEB_INT_WORDS[s]
+    return _parse_float_token(s)
+
+
+def _parse_move_amount_m(text: str) -> float | None:
+    """כמה מטרים להזיז — תומך בחצי/רבע/מטר וחצי/0.5/1/2 וגם מספר ליד ימינה/שמאלה."""
+    if not text:
+        return None
+    if _THREE_QUARTERS_M_RE.search(text):
+        return 0.75
+    m_nh = _N_AND_HALF_M_RE.search(text)
+    if m_nh:
+        base = _heb_int_token(m_nh.group(1) or "1")
+        if base is not None and base >= 0:
+            return float(base) + 0.5
+    if _METER_AND_HALF_RE.search(text):
+        return 1.5
+    if _HALF_M_RE.search(text):
+        return 0.5
+    if _QUARTER_M_RE.search(text):
+        return 0.25
+    m_frac = _FRAC_SLASH_M_RE.search(text)
+    if m_frac:
+        num = _parse_float_token(m_frac.group(1))
+        den = _parse_float_token(m_frac.group(2))
+        if num is not None and den is not None and den > 0:
+            val = float(num) / float(den)
+            if val > 0:
+                return val
+    m = _METER_AMOUNT_RE.search(text)
+    if m:
+        mag = _parse_float_token(m.group(1))
+        if mag is not None and mag > 0:
+            return mag
+    m_bare_num = _BARE_NUM_BEFORE_DIR_RE.search(text)
+    if m_bare_num:
+        mag = _parse_float_token(m_bare_num.group(1))
+        if mag is not None and mag > 0:
+            return mag
+    # «מטר ימינה» בלי מספר = 1 — רק אם אין שבר מילולי שכבר טופל
+    if _BARE_METER_RE.search(text):
+        return 1.0
+    return None
+
+
+def _parse_relative_move_delta_m(text: str) -> float | None:
+    """דלתא במטרים: ימינה=+ , שמאלה=- . «מטר ימינה» בלי מספר = 1."""
+    if _DELTA_RIGHT_RE.search(text):
+        sign = 1.0
+    elif _DELTA_LEFT_RE.search(text):
+        sign = -1.0
+    else:
+        return None
+    mag = _parse_move_amount_m(text)
+    if mag is None or mag <= 0:
+        return None
+    return sign * mag
+
+
+def _support_x(sup: dict) -> float:
+    try:
+        return float(sup.get("x", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def try_move_support(extracted: dict, user_instruction: str) -> dict | None:
+    """הזזת סמך יחסית (מטר ימינה/שמאלה) או ל-x= — דטרמיניסטי."""
     text = (user_instruction or "").strip()
     if not text or not _MOVE_VERB_RE.search(text):
         return None
-    dest = _parse_dest_end(text)
-    if dest is None:
+    kind = _parse_support_kind(text)
+    has_support_word = bool(_SUPPORT_WORD_RE.search(text))
+    if not has_support_word and kind is None:
         return None
-    kind = _parse_load_kind(text)
-    if kind is None:
+    # אם זה בבירור פקודת עומס בלי מילת סמך — לא תופסים
+    if _parse_load_kind(text) is not None and not has_support_word:
         return None
-    # צד לזיהוי העומס: האזכור שאינו חלק מיעד «קצה …»
-    # מסירים את חלק היעד ואז מחפשים ימני/שמאלי
-    text_for_side = _END_RIGHT_RE.sub(" ", text)
-    text_for_side = _END_LEFT_RE.sub(" ", text_for_side)
-    side = _parse_side_token(text_for_side)
-    if side is None:
-        # אם אין ימני/שמאלי אבל יש רק עומס אחד מהסוג — נבחר אותו
-        side = "only"
 
+    delta = _parse_relative_move_delta_m(text)
+    x_abs = _parse_explicit_x(text)
+    if delta is None and x_abs is None:
+        return None
+
+    data = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
+    beam = data.get("beam")
+    if not isinstance(beam, dict):
+        return None
+    try:
+        L = float(beam.get("L", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if L <= 0:
+        return None
+    supports = beam.get("supports")
+    if not isinstance(supports, list) or not supports:
+        return None
+
+    candidates: list[tuple[int, dict]] = []
+    for i, sup in enumerate(supports):
+        if not isinstance(sup, dict):
+            continue
+        st = str(sup.get("type", "")).lower().strip()
+        if kind is not None and st != kind:
+            continue
+        candidates.append((i, sup))
+    if not candidates:
+        return None
+
+    # «ימינה/שמאלה» = כיוון הזזה, לא בחירת סמך ימני/שמאלי
+    text_for_side = _DELTA_RIGHT_RE.sub(" ", text)
+    text_for_side = _DELTA_LEFT_RE.sub(" ", text_for_side)
+    side = _parse_side_token(text_for_side)
+    if len(candidates) == 1:
+        idx = candidates[0][0]
+    elif side == "right":
+        idx = max(candidates, key=lambda it: _support_x(it[1]))[0]
+    elif side == "left":
+        idx = min(candidates, key=lambda it: _support_x(it[1]))[0]
+    elif kind is not None:
+        # סוג יחיד תואם כבר סונן; אם נשארו כמה מאותו סוג בלי צד — לא לנחש
+        if len(candidates) != 1:
+            return None
+        idx = candidates[0][0]
+    else:
+        return None
+
+    chosen = supports[idx]
+    if not isinstance(chosen, dict):
+        return None
+    cur_x = _support_x(chosen)
+    if x_abs is not None:
+        new_x = x_abs
+    else:
+        new_x = cur_x + float(delta)
+    new_x = max(0.0, min(L, new_x))
+
+    beam = dict(beam)
+    beam["supports"] = [dict(s) if isinstance(s, dict) else s for s in supports]
+    # בלי label — כדי לא לדרוס labeled_points ולהפעיל re-zero שמוחק את ההזזה
+    set_support_x_user(beam, new_x, index=idx)
+    # עוגן קצה שמאל ב-0 כדי ש-finalize לא יזיז את מערכת הצירים אחרי overhang
+    kp_raw = beam.get("key_points_m")
+    kp: list[float] = []
+    if isinstance(kp_raw, list):
+        for p in kp_raw:
+            try:
+                kp.append(float(p))
+            except (TypeError, ValueError):
+                continue
+    if not any(abs(p) < 1e-9 for p in kp):
+        kp.append(0.0)
+    if not any(abs(p - L) < 1e-9 for p in kp):
+        kp.append(L)
+    beam["key_points_m"] = kp
+    data["beam"] = beam
+    return data
+
+
+def try_move_load(extracted: dict, user_instruction: str) -> dict | None:
+    """העברת עומס ל-x= / לקצה קורה / בדלתא ימינה-שמאלה — דטרמיניסטי."""
+    text = (user_instruction or "").strip()
+    if not text or not _MOVE_VERB_RE.search(text):
+        return None
+    if _SUPPORT_WORD_RE.search(text):
+        return None
+    # «הזז קבוע…» בלי מילת עומס — לא כאן (סמך)
+    if _parse_support_kind(text) is not None and _parse_load_kind(text) is None:
+        return None
+
+    dest = _parse_dest_end(text)
+    x_abs = _parse_explicit_x(text)
+    delta = _parse_relative_move_delta_m(text)
+    if dest is None and x_abs is None and delta is None:
+        return None
+
+    kind = _parse_load_kind(text)
     data = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
     beam = data.get("beam")
     if not isinstance(beam, dict):
@@ -715,34 +1084,318 @@ def try_move_load_to_beam_end(extracted: dict, user_instruction: str) -> dict | 
     if not isinstance(loads, list) or not loads:
         return None
 
-    candidates: list[tuple[int, dict]] = []
-    for i, ld in enumerate(loads):
-        if isinstance(ld, dict) and _load_matches_kind(ld, kind):
-            candidates.append((i, ld))
-    if not candidates:
+    idx = _pick_load_index(loads, text, kind, allow_distributed=False)
+    if idx is None:
         return None
 
-    if side == "only":
-        if len(candidates) != 1:
-            return None
-        idx = candidates[0][0]
-    elif side == "right":
-        idx = max(candidates, key=lambda it: _load_anchor_x(it[1]))[0]
-    else:
-        idx = min(candidates, key=lambda it: _load_anchor_x(it[1]))[0]
-
-    target_x = L if dest == "right" else 0.0
-    new_loads = [dict(ld) if isinstance(ld, dict) else ld for ld in loads]
-    chosen = dict(new_loads[idx])
+    chosen = dict(loads[idx])
     if str(chosen.get("type", "")).lower().strip() == "distributed":
-        # לא מעבירים מפורס לקצה בפקודה הזו
         return None
+
+    cur_x = _load_anchor_x(chosen)
+    if x_abs is not None:
+        target_x = x_abs
+    elif dest is not None:
+        target_x = L if dest == "right" else 0.0
+    else:
+        target_x = cur_x + float(delta)
+    target_x = max(0.0, min(L, float(target_x)))
+    if abs(target_x - cur_x) < 1e-9:
+        return None
+
     set_load_x_user(chosen, target_x)
+    new_loads = [dict(ld) if isinstance(ld, dict) else ld for ld in loads]
     new_loads[idx] = chosen
     beam = dict(beam)
     beam["loads"] = new_loads
     data["beam"] = beam
     return data
+
+
+def try_move_load_to_beam_end(extracted: dict, user_instruction: str) -> dict | None:
+    """תאימות לאחור — העברה לקצה הקורה דרך try_move_load."""
+    text = (user_instruction or "").strip()
+    if not text or _parse_dest_end(text) is None:
+        return None
+    return try_move_load(extracted, user_instruction)
+
+
+def _parse_target_load_kind(text: str) -> str | None:
+    for pat, kind in _TARGET_LOAD_KIND_PATTERNS:
+        if pat.search(text):
+            return kind
+    return None
+
+
+def _parse_source_load_kind(text: str, target_kind: str | None) -> str | None:
+    """סוג מקור — מתעלם ממילות היעד («לאנכי»)."""
+    cleaned = text
+    for pat, _kind in _TARGET_LOAD_KIND_PATTERNS:
+        cleaned = pat.sub(" ", cleaned)
+    kind = _parse_load_kind(cleaned)
+    if kind is not None:
+        return kind
+    if target_kind is not None and wants_inclined_to_vertical(text):
+        return "inclined"
+    return None
+
+
+def _parse_inclined_angle_deg(text: str) -> float | None:
+    """מחלץ זווית במעלות מפקודה כמו «שנה זווית ל-45» / «זווית 30 מעלות»."""
+    if not text or not _ANGLE_INTENT_RE.search(text):
+        return None
+    m = _ANGLE_WITH_UNIT_RE.search(text)
+    if m:
+        angle = _parse_float_token(m.group(1))
+    else:
+        m = _ANGLE_AFTER_WORD_RE.search(text)
+        if m:
+            angle = _parse_float_token(m.group(1))
+        else:
+            m = re.search(r"(?:ל-?|=|:)\s*(\d+(?:[.,]\d+)?)", text)
+            if m:
+                angle = _parse_float_token(m.group(1))
+            else:
+                nums = list(_NUM_RE.finditer(text))
+                if len(nums) != 1:
+                    return None
+                angle = _parse_float_token(nums[0].group(1))
+    if angle is None or angle <= 0 or angle >= 90:
+        return None
+    return float(angle)
+
+
+def try_set_inclined_angle(extracted: dict, user_instruction: str) -> dict | None:
+    """שינוי זווית לעומס אלכסוני — דטרמיניסטי."""
+    text = (user_instruction or "").strip()
+    if not text:
+        return None
+    angle = _parse_inclined_angle_deg(text)
+    if angle is None:
+        return None
+    # לא לבלבל עם המרת סוג («שנה לאנכי»)
+    if _parse_target_load_kind(text) is not None:
+        return None
+
+    kind = _parse_load_kind(text)
+    if kind is not None and kind != "inclined":
+        return None
+
+    data = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
+    beam = data.get("beam")
+    if not isinstance(beam, dict):
+        return None
+    loads = beam.get("loads")
+    if not isinstance(loads, list) or not loads:
+        return None
+
+    idx = _pick_load_index(loads, text, "inclined", allow_distributed=False)
+    if idx is None:
+        return None
+
+    chosen = dict(loads[idx])
+    if str(chosen.get("type", "")).lower().strip() != "inclined":
+        return None
+    try:
+        cur_angle = float(chosen.get("angle_deg", 30.0) or 30.0)
+    except (TypeError, ValueError):
+        cur_angle = 30.0
+    if abs(cur_angle - angle) < 1e-9:
+        return None
+
+    chosen["angle_deg"] = angle
+    chosen = _sync_inclined_components(chosen)
+    chosen["_user_mag"] = True
+    new_loads = [dict(ld) if isinstance(ld, dict) else ld for ld in loads]
+    new_loads[idx] = chosen
+    beam = dict(beam)
+    beam["loads"] = new_loads
+    data["beam"] = beam
+    return data
+
+
+def try_flip_load_direction(extracted: dict, user_instruction: str) -> dict | None:
+    """שינוי/היפוך כיוון עומס — דטרמיניסטי."""
+    text = (user_instruction or "").strip()
+    if not text or not _DIR_INTENT_RE.search(text):
+        return None
+    # המרת סוג («שנה לאנכי») — לא היפוך כיוון
+    if _parse_target_load_kind(text) is not None:
+        return None
+    if _SUPPORT_WORD_RE.search(text):
+        return None
+
+    kind = _parse_load_kind(text)
+    data = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
+    beam = data.get("beam")
+    if not isinstance(beam, dict):
+        return None
+    loads = beam.get("loads")
+    if not isinstance(loads, list) or not loads:
+        return None
+
+    idx = _pick_load_index(loads, text, kind, allow_distributed=True)
+    if idx is None:
+        return None
+
+    from bot.draft_editor import toggle_any_load_direction
+
+    want_dl = bool(re.search(r"↙|dl\b|לכיוון\s*שמאל|שמאלה", text, re.I))
+    want_dr = bool(re.search(r"↘|dr\b|לכיוון\s*ימין|ימינה", text, re.I))
+    want_up = bool(re.search(r"למעלה|↑", text, re.I))
+    want_down = bool(re.search(r"למטה|↓", text, re.I))
+    want_left = bool(re.search(r"←|שמאלה|לשמאל", text, re.I)) and not want_dl
+    want_right = bool(re.search(r"→|ימינה|לימין", text, re.I)) and not want_dr
+
+    chosen = dict(loads[idx])
+    t = str(chosen.get("type", "")).lower().strip()
+
+    # כיוון מפורש לאלכסוני
+    if t == "inclined" and (want_dl or want_dr):
+        import math
+
+        target_dir = "dl" if want_dl else "dr"
+        cur = str(chosen.get("incl_dir", "") or "").lower()
+        if cur == target_dir:
+            return None
+        mag = float(chosen.get("magnitude_ton") or 0.0)
+        if mag < 1e-6:
+            mag = math.hypot(
+                float(chosen.get("Fx", 0) or 0),
+                float(chosen.get("Fy", 0) or 0),
+            )
+        angle = float(chosen.get("angle_deg", 30) or 30)
+        rad = math.radians(angle)
+        fx_mag = mag * math.cos(rad)
+        fy_mag = mag * math.sin(rad)
+        if target_dir == "dl":
+            chosen["Fx"], chosen["Fy"] = -abs(fx_mag), abs(fy_mag)
+        else:
+            chosen["Fx"], chosen["Fy"] = abs(fx_mag), abs(fy_mag)
+        chosen["incl_dir"] = target_dir
+        chosen["magnitude_ton"] = mag
+        new_loads = [dict(ld) if isinstance(ld, dict) else ld for ld in loads]
+        new_loads[idx] = chosen
+        beam = dict(beam)
+        beam["loads"] = new_loads
+        data["beam"] = beam
+        return data
+
+    # כיוון מפורש לצירי
+    if _is_axial_point(chosen) and (want_left or want_right):
+        try:
+            fx = float(chosen.get("Fx", chosen.get("fx", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            fx = 0.0
+        mag = abs(fx) if abs(fx) >= 1e-9 else 5.0
+        new_fx = -mag if want_left else mag
+        if abs(new_fx - fx) < 1e-9:
+            return None
+        chosen["Fx"] = new_fx
+        chosen["Fy"] = 0.0
+        new_loads = [dict(ld) if isinstance(ld, dict) else ld for ld in loads]
+        new_loads[idx] = chosen
+        beam = dict(beam)
+        beam["loads"] = new_loads
+        data["beam"] = beam
+        return data
+
+    # אנכי למעלה/למטה
+    if _is_vertical_point(chosen) and (want_up or want_down):
+        try:
+            fy = float(chosen.get("Fy", chosen.get("fy", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            fy = 0.0
+        mag = abs(fy) if abs(fy) >= 1e-9 else 5.0
+        # Fy חיובי = מטה
+        new_fy = -mag if want_up else mag
+        if abs(new_fy - fy) < 1e-9:
+            return None
+        chosen["Fy"] = new_fy
+        chosen["Fx"] = 0.0
+        new_loads = [dict(ld) if isinstance(ld, dict) else ld for ld in loads]
+        new_loads[idx] = chosen
+        beam = dict(beam)
+        beam["loads"] = new_loads
+        data["beam"] = beam
+        return data
+
+    # ברירת מחדל — היפוך
+    if not re.search(r"הפוך|תהפוך|החליף|שנה\s+כיוון|כיוון", text, re.I):
+        return None
+    out = toggle_any_load_direction(data, idx + 1)
+    if out is data:
+        return None
+    return out
+
+
+def try_change_load_type(extracted: dict, user_instruction: str) -> dict | None:
+    """המרת סוג עומס (למשל אלכסוני→אנכי) — דטרמיניסטי."""
+    text = (user_instruction or "").strip()
+    if not text:
+        return None
+    target_kind = _parse_target_load_kind(text)
+    if target_kind is None and wants_inclined_to_vertical(text):
+        target_kind = "vertical"
+    if target_kind is None:
+        return None
+    if not _CHANGE_TYPE_VERB_RE.search(text) and not wants_inclined_to_vertical(text):
+        return None
+
+    source_kind = _parse_source_load_kind(text, target_kind)
+    settable = _KIND_TO_SETTABLE.get(target_kind)
+    if settable is None:
+        return None
+
+    data = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
+    beam = data.get("beam")
+    if not isinstance(beam, dict):
+        return None
+    loads = beam.get("loads")
+    if not isinstance(loads, list) or not loads:
+        return None
+
+    # «האלכסוניים» / «כל האלכסוניים» לאנכי — כל האלכסוניים
+    if source_kind == "inclined" and target_kind == "vertical" and re.search(
+        r"אלכסוניים|משופעים|כל\s+ה(?:עומסים\s+)?ה?(?:אלכסונ|משופע)",
+        text,
+        re.I,
+    ):
+        return convert_inclined_loads_to_vertical(data)
+
+    idx = _pick_load_index(
+        loads,
+        text,
+        source_kind,
+        allow_distributed=True,
+    )
+    if idx is None and source_kind is None:
+        # יעד בלבד + עומס יחיד
+        idx = _pick_load_index(loads, text, None, allow_distributed=True)
+    if idx is None and source_kind == "inclined" and target_kind == "vertical":
+        # כל האלכסוניים אם אין בחירה בודדת ברורה
+        inclined_idxs = [
+            i
+            for i, ld in enumerate(loads)
+            if isinstance(ld, dict) and _load_matches_kind(ld, "inclined")
+        ]
+        if not inclined_idxs:
+            return None
+        if len(inclined_idxs) == 1:
+            idx = inclined_idxs[0]
+        else:
+            return convert_inclined_loads_to_vertical(data)
+    if idx is None:
+        return None
+
+    from bot.draft_editor import load_picker_kind, set_load_type
+
+    cur = loads[idx]
+    if not isinstance(cur, dict):
+        return None
+    if load_picker_kind(cur) == settable:
+        return None
+    return set_load_type(data, idx + 1, settable)
 
 
 def apply_nl_draft_edit(extracted: dict, user_instruction: str) -> tuple[dict | None, list[str]]:
@@ -758,9 +1411,29 @@ def apply_nl_draft_edit(extracted: dict, user_instruction: str) -> tuple[dict | 
     if resized is not None:
         return _finalize_or_raw(resized), []
 
-    moved = try_move_load_to_beam_end(current, instruction)
+    lengthened = try_set_beam_length(current, instruction)
+    if lengthened is not None:
+        return _finalize_or_raw(lengthened), []
+
+    moved_support = try_move_support(current, instruction)
+    if moved_support is not None:
+        return _finalize_or_raw(moved_support), []
+
+    moved = try_move_load(current, instruction)
     if moved is not None:
         return _finalize_or_raw(moved), []
+
+    angled = try_set_inclined_angle(current, instruction)
+    if angled is not None:
+        return _finalize_or_raw(angled), []
+
+    flipped = try_flip_load_direction(current, instruction)
+    if flipped is not None:
+        return _finalize_or_raw(flipped), []
+
+    typed = try_change_load_type(current, instruction)
+    if typed is not None:
+        return _finalize_or_raw(typed), []
 
     added = try_add_load(current, instruction)
     if added is not None:

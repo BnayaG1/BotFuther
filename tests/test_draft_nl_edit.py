@@ -6,11 +6,18 @@ from unittest.mock import MagicMock, patch
 
 from bot.draft_keyboard import build_draft_approve_keyboard
 from bot.draft_nl_edit import (
+    _parse_relative_move_delta_m,
     apply_nl_draft_edit,
     convert_inclined_loads_to_vertical,
     try_add_load,
+    try_change_load_type,
+    try_flip_load_direction,
+    try_set_inclined_angle,
+    try_move_load,
     try_move_load_to_beam_end,
+    try_move_support,
     try_resize_distributed_load,
+    try_set_beam_length,
     wants_inclined_to_vertical,
 )
 
@@ -43,47 +50,24 @@ def test_apply_nl_draft_edit_empty_instruction():
     assert errors
 
 
-def test_apply_nl_draft_edit_updates_L_via_mock_gemini():
-    updated_payload = {
-        "exercise_type": "beam",
-        "beam": {
-            "L": 12.0,
-            "support_mode": "simply_supported",
-            "supports": [
-                {"label": "A", "type": "pin", "x": 0.0},
-                {"label": "B", "type": "roller", "x": 12.0},
-            ],
-            "loads": [
-                {"type": "point", "x": 5.0, "Fy": 3.0},
-            ],
-        },
-    }
-    fake_response = MagicMock()
-    fake_response.text = (
-        '{"exercise_type":"beam","beam":{"L":12.0,'
-        '"supports":[{"label":"A","type":"pin","x":0.0},'
-        '{"label":"B","type":"roller","x":12.0}],'
-        '"loads":[{"type":"point","x":5.0,"Fy":3.0}]}}'
-    )
+def test_try_set_beam_length_deterministic():
+    out = try_set_beam_length(EXTRACTED, "האורך הוא 12 מטר")
+    assert out is not None
+    assert float(out["beam"]["L"]) == 12.0
+    assert out["beam"].get("_user_L") is True
 
-    with (
-        patch("bot.draft_nl_edit.gemini_runtime", return_value=(MagicMock(), "m")),
-        patch(
-            "bot.draft_nl_edit.generate_content_with_retries",
-            return_value=fake_response,
-        ),
-        patch(
-            "bot.draft_nl_edit.finalize_beam_extraction",
-            side_effect=lambda data, **_kw: data,
-        ),
+
+def test_apply_nl_draft_edit_updates_L_without_gemini():
+    with patch("bot.draft_nl_edit.generate_content_with_retries") as gemini, patch(
+        "bot.draft_nl_edit.finalize_beam_extraction",
+        side_effect=lambda data, **_kw: data,
     ):
-        updated, errors = apply_nl_draft_edit(EXTRACTED, "האורך הוא 12 מטר")
+        updated, errors = apply_nl_draft_edit(EXTRACTED, "שנה אורך הקורה ל-12")
 
     assert errors == []
     assert updated is not None
     assert float(updated["beam"]["L"]) == 12.0
-    # sanity: mock payload shape still usable
-    assert updated_payload["beam"]["L"] == 12.0
+    gemini.assert_not_called()
 
 
 def test_apply_nl_draft_edit_gemini_failure():
@@ -188,6 +172,42 @@ def test_apply_nl_forces_inclined_to_vertical_even_if_gemini_keeps_inclined():
     assert ld["type"] == "point"
     assert float(ld["Fy"]) == 6.0
     assert float(ld.get("Fx", 0.0)) == 0.0
+
+
+def test_move_fixed_support_one_meter_right():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "support_mode": "simply_supported",
+            "supports": [
+                {"label": "A", "type": "pin", "x": 0.0},
+                {"label": "B", "type": "roller", "x": 10.0},
+            ],
+            "loads": [
+                {"type": "point", "x": 5.0, "Fy": 3.0},
+            ],
+        },
+    }
+    out = try_move_support(extracted, "הזז את הסמך הקבוע מטר ימינה")
+    assert out is not None
+    supports = out["beam"]["supports"]
+    assert float(supports[0]["x"]) == 1.0
+    assert supports[0].get("_user_x") is True
+    assert float(supports[1]["x"]) == 10.0
+    assert float(out["beam"]["loads"][0]["x"]) == 5.0
+
+
+def test_apply_nl_moves_support_without_gemini():
+    with patch("bot.draft_nl_edit.generate_content_with_retries") as gemini:
+        updated, errors = apply_nl_draft_edit(
+            EXTRACTED, "הזיז את הסמך הקבוע מטר ימינה"
+        )
+    assert errors == []
+    assert updated is not None
+    assert float(updated["beam"]["supports"][0]["x"]) == 1.0
+    assert float(updated["beam"]["loads"][0]["x"]) == 5.0
+    gemini.assert_not_called()
 
 
 def test_move_right_moment_to_right_end_keeps_left_moment():
@@ -503,3 +523,279 @@ def test_extend_left_edge_of_right_distributed_by_2m():
     assert float(left["x1"]) == 0.0 and float(left["x2"]) == 3.0
     assert float(right["x1"]) == 6.0
     assert float(right["x2"]) == 10.0
+
+
+def test_enlarge_distributed_synonym():
+    out = try_resize_distributed_load(
+        _dist_extracted(0.0, 4.0),
+        "הגדל את המפורס",
+    )
+    assert out is not None
+    assert float(out["beam"]["loads"][0]["x1"]) == 0.0
+    assert float(out["beam"]["loads"][0]["x2"]) == 5.0
+
+
+def test_shrink_distributed_synonym():
+    out = try_resize_distributed_load(
+        _dist_extracted(0.0, 4.0),
+        "הקטן את המפורס",
+    )
+    assert out is not None
+    assert float(out["beam"]["loads"][0]["x1"]) == 0.0
+    assert float(out["beam"]["loads"][0]["x2"]) == 3.0
+
+
+def test_move_load_to_x_equals():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [
+                {"type": "moment", "x": 2.0, "M": 5.0},
+                {"type": "point", "x": 5.0, "Fy": 3.0},
+            ],
+        },
+    }
+    out = try_move_load(extracted, "הזז את המומנט ל-x=6")
+    assert out is not None
+    assert float(out["beam"]["loads"][0]["x"]) == 6.0
+    assert out["beam"]["loads"][0].get("_user_x") is True
+    assert float(out["beam"]["loads"][1]["x"]) == 5.0
+
+
+def test_move_load_delta_right():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [{"type": "point", "x": 3.0, "Fy": 2.0}],
+        },
+    }
+    out = try_move_load(extracted, "הזז את העומס האנכי מטר ימינה")
+    assert out is not None
+    assert float(out["beam"]["loads"][0]["x"]) == 4.0
+
+
+def test_parse_relative_move_half_meters():
+    assert _parse_relative_move_delta_m("הזז חצי מטר ימינה") == 0.5
+    assert _parse_relative_move_delta_m("הזז בחצי מטר שמאלה") == -0.5
+    assert _parse_relative_move_delta_m("הזז 0.5 מטר ימינה") == 0.5
+    assert _parse_relative_move_delta_m("הזז 0.5 ימינה") == 0.5
+    assert _parse_relative_move_delta_m("הזז רבע מטר ימינה") == 0.25
+    assert _parse_relative_move_delta_m("הזז מטר וחצי שמאלה") == -1.5
+    assert _parse_relative_move_delta_m("הזז 1/2 מטר ימינה") == 0.5
+    assert _parse_relative_move_delta_m("הזז מטר ימינה") == 1.0
+
+
+def test_move_support_half_meter_right():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "support_mode": "simply_supported",
+            "supports": [
+                {"label": "A", "type": "pin", "x": 0.0},
+                {"label": "B", "type": "roller", "x": 10.0},
+            ],
+            "loads": [{"type": "point", "x": 5.0, "Fy": 3.0}],
+            "key_points_m": [0.0, 10.0],
+        },
+    }
+    out = try_move_support(extracted, "הזז את הסמך הקבוע חצי מטר ימינה")
+    assert out is not None
+    assert float(out["beam"]["supports"][0]["x"]) == 0.5
+
+
+def test_move_load_half_meter_left():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [{"type": "point", "x": 3.0, "Fy": 2.0}],
+        },
+    }
+    out = try_move_load(extracted, "הזז את העומס האנכי 0.5 מטר שמאלה")
+    assert out is not None
+    assert float(out["beam"]["loads"][0]["x"]) == 2.5
+
+
+def test_set_inclined_angle_to_45():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [
+                {
+                    "type": "inclined",
+                    "x": 5.0,
+                    "magnitude_ton": 6.0,
+                    "angle_deg": 30.0,
+                    "incl_dir": "dr",
+                    "Fx": 5.196,
+                    "Fy": 3.0,
+                }
+            ],
+        },
+    }
+    out = try_set_inclined_angle(extracted, "שנה זווית האלכסוני ל-45 מעלות")
+    assert out is not None
+    ld = out["beam"]["loads"][0]
+    assert float(ld["angle_deg"]) == 45.0
+    assert abs(float(ld["Fx"]) - abs(float(ld["Fy"]))) < 0.05
+
+
+def test_apply_nl_set_angle_skips_gemini():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [
+                {
+                    "type": "inclined",
+                    "x": 4.0,
+                    "magnitude_ton": 5.0,
+                    "angle_deg": 30.0,
+                    "incl_dir": "dl",
+                }
+            ],
+        },
+    }
+    with patch("bot.draft_nl_edit.generate_content_with_retries") as gemini, patch(
+        "bot.draft_nl_edit.finalize_beam_extraction",
+        side_effect=lambda data, **_kw: data,
+    ):
+        updated, errors = apply_nl_draft_edit(
+            extracted, "שנה את הזווית ל-60"
+        )
+    assert errors == []
+    assert float(updated["beam"]["loads"][0]["angle_deg"]) == 60.0
+    gemini.assert_not_called()
+
+
+def test_flip_inclined_direction_to_dl():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [
+                {
+                    "type": "inclined",
+                    "x": 5.0,
+                    "magnitude_ton": 6.0,
+                    "angle_deg": 45.0,
+                    "incl_dir": "dr",
+                    "Fx": 4.24,
+                    "Fy": 4.24,
+                }
+            ],
+        },
+    }
+    out = try_flip_load_direction(extracted, "שנה כיוון האלכסוני ל↙")
+    assert out is not None
+    assert out["beam"]["loads"][0]["incl_dir"] == "dl"
+    assert float(out["beam"]["loads"][0]["Fx"]) < 0
+
+
+def test_flip_axial_direction_toggle():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [{"type": "point", "x": 4.0, "Fy": 0.0, "Fx": 5.0}],
+        },
+    }
+    out = try_flip_load_direction(extracted, "הפוך כיוון העומס הצירי")
+    assert out is not None
+    assert float(out["beam"]["loads"][0]["Fx"]) == -5.0
+
+
+def test_change_inclined_to_vertical_type():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [
+                {
+                    "type": "inclined",
+                    "x": 5.0,
+                    "magnitude_ton": 6.0,
+                    "angle_deg": 30.0,
+                    "incl_dir": "dr",
+                }
+            ],
+        },
+    }
+    with patch(
+        "bot.draft_editor.finalize_beam_extraction",
+        side_effect=lambda data, **_kw: data,
+    ):
+        out = try_change_load_type(extracted, "שנה את האלכסוני לאנכי")
+    assert out is not None
+    ld = out["beam"]["loads"][0]
+    assert ld["type"] == "point"
+    assert float(ld["Fy"]) == 6.0
+    assert float(ld.get("Fx", 0.0)) == 0.0
+
+
+def test_change_vertical_to_moment():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [{"type": "point", "x": 4.0, "Fy": 8.0, "Fx": 0.0}],
+        },
+    }
+    with patch(
+        "bot.draft_editor.finalize_beam_extraction",
+        side_effect=lambda data, **_kw: data,
+    ):
+        out = try_change_load_type(extracted, "שנה את העומס האנכי למומנט")
+    assert out is not None
+    ld = out["beam"]["loads"][0]
+    assert ld["type"] == "moment"
+    assert float(ld["M"]) == 8.0
+
+
+def test_apply_nl_change_type_skips_gemini():
+    extracted = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 10.0,
+            "loads": [
+                {
+                    "type": "inclined",
+                    "x": 5.0,
+                    "magnitude_ton": 4.0,
+                    "angle_deg": 45.0,
+                    "incl_dir": "dl",
+                }
+            ],
+        },
+    }
+    with patch(
+        "bot.draft_nl_edit.generate_content_with_retries",
+        side_effect=AssertionError("Gemini should not be called"),
+    ), patch(
+        "bot.draft_nl_edit.finalize_beam_extraction",
+        side_effect=lambda data, **_kw: data,
+    ), patch(
+        "bot.draft_editor.finalize_beam_extraction",
+        side_effect=lambda data, **_kw: data,
+    ):
+        updated, errors = apply_nl_draft_edit(
+            extracted, "שנה את האלכסוני לאנכי"
+        )
+    assert errors == []
+    assert updated["beam"]["loads"][0]["type"] == "point"
+
+
+def test_support_move_still_preferred_over_load():
+    """רגרסיה: הזזת סמך לא מזיזה עומס."""
+    with patch("bot.draft_nl_edit.generate_content_with_retries") as gemini:
+        updated, errors = apply_nl_draft_edit(
+            EXTRACTED, "הזיז את הסמך הקבוע מטר ימינה"
+        )
+    assert errors == []
+    assert float(updated["beam"]["supports"][0]["x"]) == 1.0
+    assert float(updated["beam"]["loads"][0]["x"]) == 5.0
+    gemini.assert_not_called()
