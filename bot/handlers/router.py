@@ -398,31 +398,25 @@ def _purchase_cta_markup(access: ImageAccessResult) -> InlineKeyboardMarkup | No
 
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    if INTRO_AVAILABLE:
-        rows.append(
-            [InlineKeyboardButton(_START_INTRO_LABEL, callback_data="menu:intro")]
-        )
-    rows.extend(
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
         [
-            [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
-            [
-                InlineKeyboardButton(
-                    _START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    _PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas"
-                )
-            ],
-        ]
-    )
+            InlineKeyboardButton(
+                _START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                _PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas"
+            )
+        ],
+    ]
     if COUPON_ACCESS_ENABLED:
         rows.append(
             [InlineKeyboardButton(_START_PURCHASE_LABEL, callback_data="menu:coupon")]
         )
     return InlineKeyboardMarkup(rows)
+
 
 
 def build_persistent_keyboard() -> ReplyKeyboardMarkup:
