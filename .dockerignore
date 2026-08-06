@@ -11,5 +11,4 @@ coupons.db
 exercises.db
 *.db-journal
 validator_images/failures
-intro/
 

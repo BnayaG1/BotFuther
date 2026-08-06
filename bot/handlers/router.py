@@ -72,12 +72,22 @@ from bot.formulas import (
     topic_image_caption_hebrew,
     topic_pending_caption_hebrew,
 )
-# תיקיית intro/ כבויה
-INTRO_AVAILABLE = False
-build_opening_keyboard = None  # type: ignore[assignment]
-intro_topic_body_hebrew = None  # type: ignore[assignment]
-opening_message_hebrew = None  # type: ignore[assignment]
-parse_intro_callback = None  # type: ignore[assignment]
+try:
+    from intro import (
+        build_opening_keyboard,
+        intro_topic_body_hebrew,
+        opening_message_hebrew,
+        parse_intro_callback,
+    )
+
+    INTRO_AVAILABLE = True
+except ImportError:
+    INTRO_AVAILABLE = False
+    build_opening_keyboard = None  # type: ignore[assignment]
+    intro_topic_body_hebrew = None  # type: ignore[assignment]
+    opening_message_hebrew = None  # type: ignore[assignment]
+    parse_intro_callback = None  # type: ignore[assignment]
+
 
 from bot.draft_editor import (
     apply_field_edit,
@@ -211,7 +221,7 @@ _PERSISTENT_QUOTA_LABEL = "מכסה"
 _PERSISTENT_COUPON_LABEL = "קופון"
 _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
-_START_INTRO_LABEL = "מבוא"
+_START_INTRO_LABEL = "לימוד"
 _START_SEND_IMAGE_LABEL = "פתרון לתרגיל"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
 _START_REDEEM_COUPON_LABEL = "הזנת קוד קופון"
@@ -398,24 +408,32 @@ def _purchase_cta_markup(access: ImageAccessResult) -> InlineKeyboardMarkup | No
 
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
+    rows: list[list[InlineKeyboardButton]] = []
+    if INTRO_AVAILABLE:
+        rows.append(
+            [InlineKeyboardButton(_START_INTRO_LABEL, callback_data="menu:intro")]
+        )
+    rows.extend(
         [
-            InlineKeyboardButton(
-                _START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                _PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas"
-            )
-        ],
-    ]
+            [InlineKeyboardButton(_START_SEND_IMAGE_LABEL, callback_data="menu:new")],
+            [
+                InlineKeyboardButton(
+                    _START_GIVE_EXERCISE_LABEL, callback_data="menu:give_exercise"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    _PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas"
+                )
+            ],
+        ]
+    )
     if COUPON_ACCESS_ENABLED:
         rows.append(
             [InlineKeyboardButton(_START_PURCHASE_LABEL, callback_data="menu:coupon")]
         )
     return InlineKeyboardMarkup(rows)
+
 
 
 
