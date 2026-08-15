@@ -89,7 +89,8 @@ try:
     )
 
     INTRO_AVAILABLE = True
-except ImportError:
+except Exception as exc:
+    log.warning("Failed to import intro module (INTRO_AVAILABLE=False): %s", exc)
     INTRO_AVAILABLE = False
     build_how_to_approach_keyboard = None  # type: ignore[assignment]
     build_inclined_load_keyboard = None  # type: ignore[assignment]
