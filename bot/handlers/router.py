@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import math
 import shutil
 import tempfile
 import time
@@ -74,8 +75,15 @@ from bot.formulas import (
 )
 try:
     from intro import (
+        build_how_to_approach_keyboard,
+        build_inclined_load_keyboard,
+        build_mavo_continue_keyboard,
         build_opening_keyboard,
+        generate_fixed_mavo_exercise_png,
+        generate_mavo_exercise_png,
+        how_to_approach_message_hebrew,
         intro_topic_body_hebrew,
+        mavo_followup_message_hebrew,
         opening_message_hebrew,
         parse_intro_callback,
     )
@@ -83,8 +91,15 @@ try:
     INTRO_AVAILABLE = True
 except ImportError:
     INTRO_AVAILABLE = False
+    build_how_to_approach_keyboard = None  # type: ignore[assignment]
+    build_inclined_load_keyboard = None  # type: ignore[assignment]
+    build_mavo_continue_keyboard = None  # type: ignore[assignment]
     build_opening_keyboard = None  # type: ignore[assignment]
+    generate_fixed_mavo_exercise_png = None  # type: ignore[assignment]
+    generate_mavo_exercise_png = None  # type: ignore[assignment]
+    how_to_approach_message_hebrew = None  # type: ignore[assignment]
     intro_topic_body_hebrew = None  # type: ignore[assignment]
+    mavo_followup_message_hebrew = None  # type: ignore[assignment]
     opening_message_hebrew = None  # type: ignore[assignment]
     parse_intro_callback = None  # type: ignore[assignment]
 
@@ -132,6 +147,7 @@ from bot.solution_session import (
     begin_image_session,
     begin_practice_chat_trail,
     clear_assistant_prev_stack,
+    clear_exercise_image_message_id,
     clear_pending_bank_exercise,
     consume_pending_bank_exercise,
     consume_pending_solve_mode,
@@ -139,6 +155,7 @@ from bot.solution_session import (
     discard_practice_chat_trail,
     end_practice_session,
     get_chat_anchor_message_id,
+    get_exercise_image_message_id,
     get_solution_session,
     has_formulas_chat_trail,
     has_practice_chat_trail,
@@ -221,7 +238,8 @@ _PERSISTENT_QUOTA_LABEL = "מכסה"
 _PERSISTENT_COUPON_LABEL = "קופון"
 _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
-_START_INTRO_LABEL = "לימוד"
+_START_INTRO_LABEL = "לימוד בסיס"
+
 _START_SEND_IMAGE_LABEL = "פתרון לתרגיל"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
 _START_REDEEM_COUPON_LABEL = "הזנת קוד קופון"
@@ -322,11 +340,15 @@ async def _deliver_approved_solve(
         notebook_path = render_notebook_png_temp(extracted, solved)
         if notebook_path is not None:
             try:
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("ראשי", callback_data="menu:main")]]
+                )
                 with notebook_path.open("rb") as photo:
                     sent = await context.bot.send_photo(
                         chat_id=chat_id,
                         photo=photo,
                         caption="פתרון מחברת מלא",
+                        reply_markup=kb,
                     )
                 if track_practice:
                     _track_sent_message(chat_id, sent)
@@ -451,12 +473,23 @@ def build_persistent_keyboard() -> ReplyKeyboardMarkup:
 
 
 _CHAT_UI_VERSION_KEY = "bot_ui_version"
+_CHAT_UI_VERSION_NOTICE_MSG_ID_KEY = "bot_ui_version_notice_msg_id"
 
 
 async def sync_chat_ui_to_current_version(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """אחרי דיפלוי — בהודעה הראשונה מרענן מקלדת/תפריט כדי לא להישאר על גרסה ישנה."""
+    notice_msg_id = context.chat_data.pop(_CHAT_UI_VERSION_NOTICE_MSG_ID_KEY, None)
+    if notice_msg_id and update.effective_chat:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=notice_msg_id,
+            )
+        except Exception as exc:
+            log.debug("UI sync notice message deletion failed chat=%s: %s", update.effective_chat.id, exc)
+
     message = update.message
     if message is None:
         return
@@ -471,10 +504,12 @@ async def sync_chat_ui_to_current_version(
         return
 
     try:
-        await message.reply_text(
+        sent_msg = await message.reply_text(
             "הבוט עודכן אצלך לגרסה העדכנית.",
             reply_markup=build_persistent_keyboard(),
         )
+        if sent_msg and hasattr(sent_msg, "message_id"):
+            context.chat_data[_CHAT_UI_VERSION_NOTICE_MSG_ID_KEY] = sent_msg.message_id
     except BadRequest as exc:
         log.warning("UI sync reply failed chat=%s: %s", telegram_chat_id(update), exc)
 
@@ -755,6 +790,17 @@ async def _delete_callback_message(query) -> None:
         log.debug("Could not clear callback keyboard: %s", exc)
 
 
+async def _remove_callback_keyboard(query) -> None:
+    """מסיר את מקלדת האינליין בהודעה בלי למחוק את הטקסט."""
+    message = getattr(query, "message", None)
+    if message is None:
+        return
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except BadRequest as exc:
+        log.debug("Could not clear callback keyboard: %s", exc)
+
+
 async def cleanup_formulas_chat(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -786,8 +832,10 @@ async def cleanup_practice_chat(
     chat_id: int,
     *,
     clear_progress: bool = True,
+    keep_exercise_image: bool = False,
 ) -> None:
     """מוחק מהצ'אט את כל הודעות התרגול הנוכחי (תמונה/מצב/מחברת/מדריך)."""
+    ex_img_id = get_exercise_image_message_id(chat_id)
     ids = pop_practice_chat_message_ids(chat_id)
     ids.extend(pop_assistant_message_ids(chat_id))
     seen: set[int] = set()
@@ -796,6 +844,8 @@ async def cleanup_practice_chat(
         if mid_i <= 0 or mid_i in seen:
             continue
         seen.add(mid_i)
+        if keep_exercise_image and ex_img_id is not None and mid_i == ex_img_id:
+            continue
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=mid_i)
         except Exception:
@@ -810,6 +860,8 @@ async def cleanup_practice_chat(
             pass
         clear_assistant_prev_stack(chat_id)
         end_practice_session(chat_id)
+        if not keep_exercise_image:
+            clear_exercise_image_message_id(chat_id)
 
 
 _CHAT_WIPE_MAX_MESSAGES = 400
@@ -1010,7 +1062,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
 
     # יציאה מתרגול לנושא אחר — מוחקים את הודעות התרגיל מהצ'אט.
-    if action in ("new", "formulas", "intro", "coupon") or action.startswith("mode:"):
+    if action in ("new", "formulas", "intro", "coupon", "main") or action.startswith("mode:"):
         leave_session = get_solution_session(chat_id)
         if has_practice_chat_trail(chat_id) or (
             leave_session is not None and leave_session.from_practice
@@ -1018,10 +1070,16 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await cleanup_practice_chat(context, chat_id)
 
     # יציאה מנוסחאות לנושא אחר — מוחקים את הודעות הנוסחאות מהצ'אט.
-    if action in ("new", "intro", "coupon", "give_exercise") or action.startswith(
+    if action in ("new", "intro", "coupon", "give_exercise", "main") or action.startswith(
         "mode:"
     ):
         await _leave_formulas_chat_if_needed(context, chat_id)
+
+    if action == "main":
+        await query.answer()
+        await _delete_callback_message(query)
+        await _send_main_action_menu(context, chat_id)
+        return
 
     if action == "coupon":
         if not COUPON_ACCESS_ENABLED:
@@ -1173,13 +1231,541 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if topic_id is None:
         await query.answer()
         return
-    body = intro_topic_body_hebrew(topic_id) if intro_topic_body_hebrew else None
     await query.answer()
+
+    if topic_id == "how_to_approach":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        begin_practice_chat_trail(chat_id)
+
+        text = how_to_approach_message_hebrew() if how_to_approach_message_hebrew is not None else ""
+        if text:
+            kb = build_how_to_approach_keyboard() if build_how_to_approach_keyboard is not None else None
+            sent_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=kb,
+            )
+            _track_sent_message(chat_id, sent_msg)
+        return
+
+    if topic_id in ("support_exercises", "fixed_support_exercises"):
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _remove_callback_keyboard(query)
+
+        is_fixed = topic_id == "fixed_support_exercises"
+        gen_func = generate_fixed_mavo_exercise_png if is_fixed else generate_mavo_exercise_png
+        prefix = "exgen_fixed_mavo_" if is_fixed else "exgen_mavo_"
+        ex_label = "ריתום" if is_fixed else "סמכים"
+
+        if gen_func is not None:
+            with tempfile.TemporaryDirectory(prefix=prefix) as td:
+                png_path = gen_func(Path(td))
+                with png_path.open("rb") as photo:
+                    sent_photo = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=build_persistent_keyboard(),
+                    )
+                _track_sent_message(chat_id, sent_photo)
+
+        if mavo_followup_message_hebrew is not None:
+            followup_text = mavo_followup_message_hebrew(ex_label)
+            kb = build_mavo_continue_keyboard() if build_mavo_continue_keyboard is not None else None
+            sent_followup = await context.bot.send_message(
+                chat_id=chat_id,
+                text=followup_text,
+                reply_markup=kb,
+            )
+            _track_sent_message(chat_id, sent_followup)
+        return
+
+    if topic_id == "mavo_continue":
+        return
+
+    if topic_id == "distributed_load":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        user_id = telegram_user_id(update)
+        await _delete_callback_message(query)
+
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        begin_practice_chat_trail(chat_id)
+
+        body = intro_topic_body_hebrew("distributed_load") if intro_topic_body_hebrew else None
+        if body:
+            sent_first = await context.bot.send_message(
+                chat_id=chat_id,
+                text=body,
+                reply_markup=build_persistent_keyboard(),
+            )
+            _track_sent_message(chat_id, sent_first)
+
+        try:
+            from intro.distributed_load import build_distributed_explanation_text
+            from intro.distributed_load.generator import (
+                generate_equivalent_point_load_exercise,
+                generate_exercise as generate_distributed_exercise,
+            )
+        except ImportError as exc:
+            log.exception("distributed_load generator import failed: %s", exc)
+            await _send_text_safe(context, chat_id, "מחולל התרגילים לעומס מפורס לא זמין כרגע.")
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="exgen_distributed_") as td:
+                artifact = generate_distributed_exercise(out_dir=Path(td), stem="live")
+                png_path = artifact.png_path
+                extracted = copy.deepcopy(artifact.extracted)
+                meta = dict(extracted.get("meta") or {})
+                meta["source"] = "exercise_generator_distributed"
+                meta["skip_vision_normalize"] = True
+                extracted["meta"] = meta
+                with png_path.open("rb") as photo:
+                    sent = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=build_persistent_keyboard(),
+                    )
+                _track_sent_message(chat_id, sent)
+
+                exp_text = build_distributed_explanation_text(extracted)
+                sent_exp = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=exp_text,
+                    reply_markup=build_persistent_keyboard(),
+                )
+                _track_sent_message(chat_id, sent_exp)
+
+                equiv_png_path = generate_equivalent_point_load_exercise(
+                    artifact.exercise, out_dir=Path(td), stem="live_equivalent"
+                )
+                with equiv_png_path.open("rb") as photo:
+                    sent_equiv = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=build_persistent_keyboard(),
+                    )
+                _track_sent_message(chat_id, sent_equiv)
+
+                from intro.distributed_load import (
+                    build_distributed_load_keyboard,
+                    practice_prompt_hebrew as distributed_practice_prompt_hebrew,
+                )
+                sent_prompt = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=distributed_practice_prompt_hebrew(),
+                    reply_markup=build_distributed_load_keyboard(),
+                )
+                _track_sent_message(chat_id, sent_prompt)
+        except Exception as exc:
+            log.exception("Failed to generate distributed exercise chat=%s: %s", chat_id, exc)
+            await _send_text_safe(context, chat_id, "לא הצלחתי להכין תרגיל כרגע. נסי/ה שוב בעוד רגע.")
+            return
+
+        if COUPON_ACCESS_ENABLED and user_id is not None:
+            consume_practice_slot(int(user_id))
+        return
+
+    if topic_id == "inclined_load":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        user_id = telegram_user_id(update)
+        await _delete_callback_message(query)
+
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        begin_practice_chat_trail(chat_id)
+
+        body = intro_topic_body_hebrew("inclined_load") if intro_topic_body_hebrew else None
+        if body:
+            sent_first = await context.bot.send_message(
+                chat_id=chat_id,
+                text=body,
+                reply_markup=build_persistent_keyboard(),
+            )
+            _track_sent_message(chat_id, sent_first)
+
+        try:
+            from intro.inclined_load import (
+                build_inclined_explanation_text,
+                build_inclined_load_keyboard,
+            )
+            from intro.inclined_load.generator import (
+                generate_decomposed_exercise,
+                generate_exercise as generate_inclined_exercise,
+            )
+        except ImportError as exc:
+            log.exception("inclined_load generator import failed: %s", exc)
+            await _send_text_safe(context, chat_id, "מחולל התרגילים לעומס אלכסוני לא זמין כרגע.")
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="exgen_inclined_") as td:
+                artifact = generate_inclined_exercise(out_dir=Path(td), stem="live")
+                png_path = artifact.png_path
+                extracted = copy.deepcopy(artifact.extracted)
+                meta = dict(extracted.get("meta") or {})
+                meta["source"] = "exercise_generator_inclined"
+                meta["skip_vision_normalize"] = True
+                extracted["meta"] = meta
+                with png_path.open("rb") as photo:
+                    sent = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=build_persistent_keyboard(),
+                    )
+                _track_sent_message(chat_id, sent)
+
+                # שליחת ההסבר הדינמי
+                exp_text = build_inclined_explanation_text(extracted)
+                sent = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=exp_text,
+                    reply_markup=build_persistent_keyboard(),
+                )
+                _track_sent_message(chat_id, sent)
+                _track_sent_message(chat_id, sent)
+
+                # שליחת הודעה רביעית: תמונת התרגיל המפורק + מקלדת תרגול/חזרה
+                decomposed_png_path = generate_decomposed_exercise(
+                    artifact.exercise, out_dir=Path(td), stem="live_decomposed"
+                )
+                keyboard = build_inclined_load_keyboard() if build_inclined_load_keyboard else None
+                with decomposed_png_path.open("rb") as photo:
+                    sent = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=keyboard,
+                    )
+                _track_sent_message(chat_id, sent)
+        except Exception as exc:
+            log.exception("Failed to generate inclined exercise chat=%s: %s", chat_id, exc)
+            await _send_text_safe(context, chat_id, "לא הצלחתי להכין תרגיל כרגע. נסי/ה שוב בעוד רגע.")
+            return
+
+        if COUPON_ACCESS_ENABLED and user_id is not None:
+            consume_practice_slot(int(user_id))
+        return
+
+    if topic_id == "distributed_on_support":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        user_id = telegram_user_id(update)
+        await _delete_callback_message(query)
+        try:
+            from intro.distributed_load.generator import (
+                generate_on_support_exercise as generate_distributed_on_support_exercise,
+            )
+        except ImportError as exc:
+            log.exception("distributed_load generator import failed: %s", exc)
+            await _send_text_safe(context, chat_id, "מחולל התרגילים לעומס מפורס על סמך לא זמין כרגע.")
+            return
+
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        begin_practice_chat_trail(chat_id)
+        try:
+            with tempfile.TemporaryDirectory(prefix="exgen_dist_support_") as td:
+                artifact = generate_distributed_on_support_exercise(out_dir=Path(td), stem="live")
+                png_path = artifact.png_path
+                extracted = copy.deepcopy(artifact.extracted)
+                meta = dict(extracted.get("meta") or {})
+                meta["source"] = "exercise_generator_distributed_on_support"
+                meta["skip_vision_normalize"] = True
+                extracted["meta"] = meta
+                with png_path.open("rb") as photo:
+                    sent = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=build_persistent_keyboard(),
+                    )
+                _track_sent_message(chat_id, sent)
+
+                from intro.distributed_load import build_distributed_on_support_explanation_text
+                explanation_text = build_distributed_on_support_explanation_text(extracted)
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+                ])
+                sent_msg = await context.bot.send_message(chat_id=chat_id, text=explanation_text, reply_markup=kb)
+                _track_sent_message(chat_id, sent_msg)
+        except Exception as exc:
+            log.exception("Failed to generate distributed on support exercise chat=%s: %s", chat_id, exc)
+            await _send_text_safe(context, chat_id, "לא הצלחתי להכין תרגיל כרגע. נסי/ה שוב בעוד רגע.")
+            return
+
+        if COUPON_ACCESS_ENABLED and user_id is not None:
+            consume_practice_slot(int(user_id))
+        return
+
+    if topic_id == "practice_distributed":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        user_id = telegram_user_id(update)
+        await _delete_callback_message(query)
+        try:
+            from intro.distributed_load.generator import generate_exercise as generate_distributed_exercise
+        except ImportError as exc:
+            log.exception("distributed_load generator import failed: %s", exc)
+            await _send_text_safe(context, chat_id, "מחולל התרגילים לעומס מפורס לא זמין כרגע.")
+            return
+
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        begin_practice_chat_trail(chat_id)
+        try:
+            with tempfile.TemporaryDirectory(prefix="exgen_distributed_") as td:
+                artifact = generate_distributed_exercise(out_dir=Path(td), stem="live")
+                png_path = artifact.png_path
+                extracted = copy.deepcopy(artifact.extracted)
+                with png_path.open("rb") as photo:
+                    sent = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=build_persistent_keyboard(),
+                    )
+                _track_sent_message(chat_id, sent)
+
+                beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
+                loads = beam.get("loads") if isinstance(beam.get("loads"), list) else []
+                dist_load = next((ld for ld in loads if isinstance(ld, dict) and ld.get("type") == "distributed"), None)
+                if dist_load:
+                    w = float(dist_load.get("w", 4.0))
+                    x1 = float(dist_load.get("x1", 2.0))
+                    x2 = float(dist_load.get("x2", 6.0))
+                    dist = abs(x2 - x1)
+                    mid_x = (x1 + x2) / 2.0
+                    equivalent_force = w * dist
+                    context.chat_data["distributed_practice_active"] = {
+                        "w": w,
+                        "dist": dist,
+                        "equivalent_force": equivalent_force,
+                        "mid_x": mid_x,
+                        "awaiting_input": True,
+                    }
+
+                from intro.distributed_load import practice_question_prompt_hebrew
+                sent_msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=practice_question_prompt_hebrew(),
+                    reply_markup=build_persistent_keyboard(),
+                )
+                _track_sent_message(chat_id, sent_msg)
+        except Exception as exc:
+            log.exception("Failed to generate distributed practice exercise chat=%s: %s", chat_id, exc)
+            await _send_text_safe(context, chat_id, "לא הצלחתי להכין תרגיל כרגע. נסי/ה שוב בעוד רגע.")
+            return
+
+        if COUPON_ACCESS_ENABLED and user_id is not None:
+            consume_practice_slot(int(user_id))
+        return
+
+    if topic_id == "practice_inclined":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        user_id = telegram_user_id(update)
+        await _delete_callback_message(query)
+        try:
+            from intro.inclined_load import practice_prompt_hebrew
+            from intro.inclined_load.generator import generate_exercise as generate_inclined_exercise
+        except ImportError as exc:
+            log.exception("inclined_load generator import failed: %s", exc)
+            await _send_text_safe(context, chat_id, "מחולל התרגילים לעומס אלכסוני לא זמין כרגע.")
+            return
+
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        begin_practice_chat_trail(chat_id)
+        try:
+            with tempfile.TemporaryDirectory(prefix="exgen_inclined_") as td:
+                artifact = generate_inclined_exercise(out_dir=Path(td), stem="live")
+                png_path = artifact.png_path
+                extracted = copy.deepcopy(artifact.extracted)
+                with png_path.open("rb") as photo:
+                    sent = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        reply_markup=build_persistent_keyboard(),
+                    )
+                _track_sent_message(chat_id, sent)
+
+                beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
+                loads = beam.get("loads") if isinstance(beam.get("loads"), list) else []
+                inc_load = next((ld for ld in loads if isinstance(ld, dict) and ld.get("type") == "inclined"), None)
+                if inc_load:
+                    mag = float(inc_load.get("magnitude_ton", 10.0))
+                    angle = float(inc_load.get("angle_deg", 30.0))
+                    rad = math.radians(angle)
+                    fy = mag * math.sin(rad)
+                    fx = mag * math.cos(rad)
+                    context.chat_data["inclined_practice_active"] = {
+                        "magnitude_ton": mag,
+                        "angle_deg": angle,
+                        "fy": fy,
+                        "fx": fx,
+                        "awaiting_input": True,
+                    }
+
+                prompt_text = practice_prompt_hebrew() if practice_prompt_hebrew else (
+                    "בוא נראה שהבנת את זה.\n"
+                    "תשלח לי את הפתרונות כמספרים, עם פסיק באמצע לא משנה הסדר.\n"
+                    "(לדגומא: 4.87,5.65)"
+                )
+                sent_msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=prompt_text,
+                    reply_markup=build_persistent_keyboard(),
+                )
+                _track_sent_message(chat_id, sent_msg)
+        except Exception as exc:
+            log.exception("Failed to generate inclined practice exercise chat=%s: %s", chat_id, exc)
+            await _send_text_safe(context, chat_id, "לא הצלחתי להכין תרגיל כרגע. נסי/ה שוב בעוד רגע.")
+            return
+
+        if COUPON_ACCESS_ENABLED and user_id is not None:
+            consume_practice_slot(int(user_id))
+        return
+
+    if topic_id == "distributed_try_again":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        if "distributed_practice_active" in context.chat_data:
+            context.chat_data["distributed_practice_active"]["awaiting_input"] = True
+        try:
+            from intro.distributed_load import try_again_prompt_hebrew
+            prompt_text = try_again_prompt_hebrew()
+        except ImportError:
+            prompt_text = (
+                "בוא ננסה שוב.\n"
+                "תשלח לי את הפתרונות כמספרים, עם פסיק באמצע לא משנה הסדר.\n"
+                "(לדגומא: 4.87,5.65)"
+            )
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=prompt_text,
+            reply_markup=build_persistent_keyboard(),
+        )
+        _track_sent_message(chat_id, sent)
+        return
+
+    if topic_id == "distributed_show_solution":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        active_dist = context.chat_data.pop("distributed_practice_active", None)
+        if active_dist:
+            w = active_dist["w"]
+            dist = active_dist["dist"]
+            req_force = active_dist["equivalent_force"]
+            req_dist = active_dist.get("mid_x", 0.0)
+
+            force_str = f"{int(req_force)}" if req_force.is_integer() else f"{req_force:g}"
+            dist_str = f"{int(req_dist)}" if req_dist.is_integer() else f"{req_dist:g}"
+
+            sol_text = (
+                f"הפתרונות של העומס המפורס בתרגיל:\n"
+                f"\n"
+                f"הכח השקול: {force_str}t\n"
+                f"המרחק מצד שמאל: {dist_str}m"
+            )
+        else:
+            sol_text = "לא נמצאו נתוני תרגיל פעיל."
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("תרגול", callback_data="intro:practice_distributed")],
+            [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+        ])
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=sol_text,
+            reply_markup=kb,
+        )
+        _track_sent_message(chat_id, sent)
+        return
+
+    if topic_id == "inclined_try_again":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        if "inclined_practice_active" in context.chat_data:
+            context.chat_data["inclined_practice_active"]["awaiting_input"] = True
+        try:
+            from intro.inclined_load import try_again_prompt_hebrew
+            prompt_text = try_again_prompt_hebrew()
+        except ImportError:
+            prompt_text = (
+                "בוא ננסה שוב.\n"
+                "תשלח לי את הפתרונות כמספרים, עם פסיק באמצע לא משנה הסדר.\n"
+                "(לדגומא: 4.87,5.65)"
+            )
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=prompt_text,
+            reply_markup=build_persistent_keyboard(),
+        )
+        _track_sent_message(chat_id, sent)
+        return
+
+    if topic_id == "inclined_show_solution":
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        active_inclined = context.chat_data.pop("inclined_practice_active", None)
+        if active_inclined:
+            mag = active_inclined["magnitude_ton"]
+            angle = active_inclined["angle_deg"]
+            fy = active_inclined["fy"]
+            fx = active_inclined["fx"]
+
+            mag_str = f"{int(mag)}" if mag.is_integer() else f"{mag:.2f}"
+            angle_str = f"{int(angle)}" if angle.is_integer() else f"{angle:.1f}"
+
+            fy_rounded = round(fy, 2)
+            fx_rounded = round(fx, 2)
+            fy_str = f"{int(fy_rounded)}" if fy_rounded.is_integer() else f"{fy_rounded:g}"
+            fx_str = f"{int(fx_rounded)}" if fx_rounded.is_integer() else f"{fx_rounded:g}"
+
+            sol_text = (
+                f"הפתרונות של העומס האלכסוני בתרגיל:\n"
+                f"\n"
+                f"האנכי: {mag_str}sin({angle_str}) = {fy_str}t\n"
+                f"הצירי: {mag_str}cos({angle_str}) = {fx_str}t"
+            )
+        else:
+            sol_text = "לא נמצאו נתוני תרגיל פעיל."
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("תרגול", callback_data="intro:practice_inclined")],
+            [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+        ])
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=sol_text,
+            reply_markup=kb,
+        )
+        _track_sent_message(chat_id, sent)
+        return
+
+    if topic_id == "main":
+        if query.message and build_opening_keyboard is not None and opening_message_hebrew is not None:
+            try:
+                await query.message.edit_text(
+                    opening_message_hebrew(),
+                    reply_markup=build_opening_keyboard(),
+                )
+            except BadRequest:
+                chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=opening_message_hebrew(),
+                    reply_markup=build_opening_keyboard(),
+                )
+        return
+
+    body = intro_topic_body_hebrew(topic_id) if intro_topic_body_hebrew else None
     if not body:
         return
     chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
     await _delete_callback_message(query)
-    await context.bot.send_message(chat_id=chat_id, text=body)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=body,
+        reply_markup=build_persistent_keyboard(),
+    )
 
 async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1670,6 +2256,184 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = telegram_chat_id(update)
     text = update.message.text.strip()
 
+    chat_data = getattr(context, "chat_data", None)
+    active_inclined = chat_data.get("inclined_practice_active") if isinstance(chat_data, dict) else None
+    active_inclined = chat_data.get("inclined_practice_active") if isinstance(chat_data, dict) else None
+    if isinstance(active_inclined, dict):
+        if text in (
+            _PERSISTENT_MAIN_LABEL,
+            _START_INTRO_LABEL,
+            _PERSISTENT_FORMULAS_LABEL,
+            _PERSISTENT_ASSISTANT_LABEL,
+            _PERSISTENT_COUPON_LABEL,
+            _PERSISTENT_QUOTA_LABEL,
+            _PERSISTENT_BUG_REPORT_LABEL,
+        ):
+            context.chat_data.pop("inclined_practice_active", None)
+        else:
+            _track_sent_message(chat_id, update.message)
+            parts = text.replace(" ", "").split(",")
+            u1, u2 = None, None
+            if len(parts) == 2:
+                try:
+                    u1 = float(parts[0])
+                    u2 = float(parts[1])
+                except ValueError:
+                    u1, u2 = None, None
+
+            if u1 is not None and u2 is not None:
+                fy = active_inclined["fy"]
+                fx = active_inclined["fx"]
+
+                is_correct = (
+                    (abs(u1 - fy) < 0.15 and abs(u2 - fx) < 0.15)
+                    or (abs(u1 - fx) < 0.15 and abs(u2 - fy) < 0.15)
+                )
+
+                if is_correct:
+                    context.chat_data.pop("inclined_practice_active", None)
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("תרגול", callback_data="intro:practice_inclined")],
+                        [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+                    ])
+                    sent = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="צדקת! התוצאות שהבאת נכונים.\nאיך תרצה להמשיך?",
+                        reply_markup=kb,
+                    )
+                    _track_sent_message(chat_id, sent)
+                    return
+                else:
+                    active_inclined["awaiting_input"] = False
+                    mag = active_inclined.get("magnitude_ton", 10.0)
+                    angle = active_inclined.get("angle_deg", 30.0)
+                    mag_str = f"{int(mag)}" if mag.is_integer() else f"{mag:.2f}"
+                    angle_str = f"{int(angle)}" if angle.is_integer() else f"{angle:.1f}"
+
+                    err_text = (
+                        "נראה שטעית איפשהו, אולי לא הכנסת את המספרים הנכונים למחשבון.\n"
+                        "זה צריך להיראות ככה:\n"
+                        f"אנכי - {mag_str}sin({angle_str})\n"
+                        f"צירי - {mag_str}cos({angle_str})\n"
+                        "תרצה לנסות שוב או שאני יישלח את הפתרונות?"
+                    )
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("אנסה שוב", callback_data="intro:inclined_try_again")],
+                        [InlineKeyboardButton("הצג פתרון", callback_data="intro:inclined_show_solution")],
+                    ])
+                    sent = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=err_text,
+                        reply_markup=kb,
+                    )
+                    _track_sent_message(chat_id, sent)
+                    return
+            else:
+                context.chat_data["inclined_practice_active"]["awaiting_input"] = True
+                try:
+                    from intro.inclined_load import invalid_format_prompt_hebrew
+                    format_err_text = invalid_format_prompt_hebrew()
+                except ImportError:
+                    format_err_text = (
+                        "בשביל שאצליח להבין את התשובות שרשמת, זה צריך להיראות בנוסח הבא - מספר,מספר.\n"
+                        "לדוגמא - 4.67,5"
+                    )
+                sent = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=format_err_text,
+                    reply_markup=build_persistent_keyboard(),
+                )
+                _track_sent_message(chat_id, sent)
+                return
+
+    active_dist = chat_data.get("distributed_practice_active") if isinstance(chat_data, dict) else None
+    if isinstance(active_dist, dict):
+        if text in (
+            _PERSISTENT_MAIN_LABEL,
+            _START_INTRO_LABEL,
+            _PERSISTENT_FORMULAS_LABEL,
+            _PERSISTENT_ASSISTANT_LABEL,
+            _PERSISTENT_COUPON_LABEL,
+            _PERSISTENT_QUOTA_LABEL,
+            _PERSISTENT_BUG_REPORT_LABEL,
+        ):
+            context.chat_data.pop("distributed_practice_active", None)
+        else:
+            _track_sent_message(chat_id, update.message)
+            parts = text.replace(" ", "").split(",")
+            u1, u2 = None, None
+            if len(parts) == 2:
+                try:
+                    u1 = float(parts[0])
+                    u2 = float(parts[1])
+                except ValueError:
+                    u1, u2 = None, None
+
+            if u1 is not None and u2 is not None:
+                req_force = active_dist["equivalent_force"]
+                req_dist = active_dist.get("mid_x", 0.0)
+
+                is_correct = (
+                    (abs(u1 - req_force) < 0.15 and abs(u2 - req_dist) < 0.15)
+                    or (abs(u1 - req_dist) < 0.15 and abs(u2 - req_force) < 0.15)
+                )
+
+                if is_correct:
+                    context.chat_data.pop("distributed_practice_active", None)
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("תרגול", callback_data="intro:practice_distributed")],
+                        [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+                    ])
+                    sent = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="צדקת! התוצאות שהבאת נכונים.\nאיך תרצה להמשיך?",
+                        reply_markup=kb,
+                    )
+                    _track_sent_message(chat_id, sent)
+                    return
+                else:
+                    active_dist["awaiting_input"] = False
+                    w = active_dist["w"]
+                    dist = active_dist["dist"]
+                    w_str = f"{int(w)}" if w.is_integer() else f"{w:.2f}"
+                    dist_str = f"{int(dist)}" if dist.is_integer() else f"{dist:.2f}"
+
+                    err_text = (
+                        "נראה שטעית איפשהו, אולי לא הכנסת את המספרים הנכונים למחשבון.\n"
+                        "זה צריך להיראות ככה:\n"
+                        f"כח שקול - {w_str}*{dist_str}\n"
+                        f"מרחק מצד שמאל - המרחק מ-0 עד אמצע העומס\n"
+                        "תרצה לנסות שוב או שאני יישלח את הפתרונות?"
+                    )
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("אנסה שוב", callback_data="intro:distributed_try_again")],
+                        [InlineKeyboardButton("הצג פתרון", callback_data="intro:distributed_show_solution")],
+                    ])
+                    sent = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=err_text,
+                        reply_markup=kb,
+                    )
+                    _track_sent_message(chat_id, sent)
+                    return
+            else:
+                context.chat_data["distributed_practice_active"]["awaiting_input"] = True
+                try:
+                    from intro.distributed_load import invalid_format_prompt_hebrew
+                    format_err_text = invalid_format_prompt_hebrew()
+                except ImportError:
+                    format_err_text = (
+                        "בשביל שאצליח להבין את התשובות שרשמת, זה צריך להיראות בנוסח הבא - מספר,מספר.\n"
+                        "לדוגמא - 4.67,5"
+                    )
+                sent = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=format_err_text,
+                    reply_markup=build_persistent_keyboard(),
+                )
+                _track_sent_message(chat_id, sent)
+                return
+
     if text.upper() == _GENERATED_EXERCISE_TRIGGER:
         await _deliver_generated_exercise(
             context,
@@ -1706,6 +2470,35 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             through_message_id=int(through_mid) if through_mid is not None else None,
         )
         await _send_main_action_menu(context, chat_id)
+        return
+
+    if text == _START_INTRO_LABEL:
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        await _send_intro_opening(context, chat_id)
+        return
+
+    if text == _PERSISTENT_FORMULAS_LABEL:
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+        await cleanup_formulas_chat(context, chat_id)
+        await _send_formulas_menu(
+            context,
+            chat_id,
+            user_id=telegram_user_id(update),
+            message=update.message,
+        )
+        return
+    if text == _PERSISTENT_BUG_REPORT_LABEL:
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        await _prompt_bug_report(update.message)
         return
 
     if has_active_assistant_progress(chat_id):
@@ -1770,24 +2563,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _leave_formulas_chat_if_needed(context, chat_id)
         await cmd_quota(update, context)
         return
-    if text == _PERSISTENT_FORMULAS_LABEL:
-        leave_session = get_solution_session(chat_id)
-        if has_practice_chat_trail(chat_id) or (
-            leave_session is not None and leave_session.from_practice
-        ):
-            await cleanup_practice_chat(context, chat_id)
-        await cleanup_formulas_chat(context, chat_id)
-        await _send_formulas_menu(
-            context,
-            chat_id,
-            user_id=telegram_user_id(update),
-            message=update.message,
-        )
-        return
-    if text == _PERSISTENT_BUG_REPORT_LABEL:
-        await _leave_formulas_chat_if_needed(context, chat_id)
-        await _prompt_bug_report(update.message)
-        return
+
 
     if COUPON_ACCESS_ENABLED:
         in_coupon_prompt = chat_id in _coupon_prompt_chats

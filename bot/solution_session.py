@@ -98,9 +98,29 @@ def consume_pending_bank_exercise(chat_id: int) -> tuple[int, dict] | None:
     return _pending_bank_exercise.pop(int(chat_id), None)
 
 
+# הודעת תמונת התרגיל בצ'אט — לשימור בלחיצה על «פתרון».
+_exercise_image_message_ids: dict[int, int] = {}
+
+
+def set_exercise_image_message_id(chat_id: int, message_id: int | None) -> None:
+    if message_id is None:
+        _exercise_image_message_ids.pop(int(chat_id), None)
+    else:
+        _exercise_image_message_ids[int(chat_id)] = int(message_id)
+
+
+def get_exercise_image_message_id(chat_id: int) -> int | None:
+    return _exercise_image_message_ids.get(int(chat_id))
+
+
+def clear_exercise_image_message_id(chat_id: int) -> None:
+    _exercise_image_message_ids.pop(int(chat_id), None)
+
+
 def begin_practice_chat_trail(chat_id: int) -> None:
     """מתחיל מעקב חדש אחרי הודעות תרגול בצ'אט."""
     _practice_chat_message_ids[int(chat_id)] = []
+    _exercise_image_message_ids.pop(int(chat_id), None)
 
 
 def append_practice_chat_message_id(chat_id: int, message_id: int | None) -> None:
@@ -112,6 +132,8 @@ def append_practice_chat_message_id(chat_id: int, message_id: int | None) -> Non
     ids = _practice_chat_message_ids.setdefault(int(chat_id), [])
     if mid not in ids:
         ids.append(mid)
+    if int(chat_id) not in _exercise_image_message_ids:
+        _exercise_image_message_ids[int(chat_id)] = mid
 
 
 def pop_practice_chat_message_ids(chat_id: int) -> list[int]:
@@ -125,6 +147,7 @@ def has_practice_chat_trail(chat_id: int) -> bool:
 def discard_practice_chat_trail(chat_id: int) -> None:
     """מנקה מעקב בזיכרון בלי מחיקת הודעות בטלגרם."""
     _practice_chat_message_ids.pop(int(chat_id), None)
+    _exercise_image_message_ids.pop(int(chat_id), None)
 
 
 def begin_formulas_chat_trail(chat_id: int) -> None:

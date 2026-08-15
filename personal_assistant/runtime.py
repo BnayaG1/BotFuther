@@ -66,6 +66,7 @@ _ASSISTANT_BACK = "back"
 _ASSISTANT_NOOP = "noop"
 _ASSISTANT_TO_REACTIONS = "to_reactions"
 _ASSISTANT_FINISH = "finish"
+_ASSISTANT_SHOW_SOLUTION = "show_solution"
 
 _EXERCISE_FINISHED_TEXT = (
     "איזה יופי, סיימנו את התרגיל.\n"
@@ -238,24 +239,22 @@ def build_to_reactions_keyboard() -> InlineKeyboardMarkup:
 
 
 def build_reactions_keyboard(progress: ReactionProgress) -> InlineKeyboardMarkup:
-    """עמודה שמאלית: 3 כפתורי ריאקציה. עמודה ימנית: המשך/סיימתי + חזרה (2 שורות)."""
+    """עמודה שמאלית: 3 כפתורי ריאקציה. עמודה ימנית: המשך, חזרה, סיימתי."""
     targets = _REACTION_JUMP_TARGETS.get(progress.beam_kind, ())
     if not targets:
         return build_next_only_keyboard()
 
-    if is_last_reaction_solution(progress):
-        continue_button = InlineKeyboardButton(
-            "סיימתי", callback_data=f"assist:{_ASSISTANT_FINISH}"
-        )
-    else:
-        continue_button = InlineKeyboardButton("המשך", callback_data="assist:next")
-    right_column = [continue_button, build_back_button(), _build_spacer_button()]
+    continue_button = InlineKeyboardButton("המשך", callback_data="assist:next")
+    finish_button = InlineKeyboardButton(
+        "סיימתי", callback_data=f"assist:{_ASSISTANT_FINISH}"
+    )
+    right_column = [continue_button, build_back_button(), finish_button]
     rows: list[list[InlineKeyboardButton]] = []
     for i, (label, equation) in enumerate(targets):
         jump_button = InlineKeyboardButton(
             label, callback_data=f"assist:{_ASSISTANT_GOTO_PREFIX}{equation.value}"
         )
-        right_button = right_column[i] if i < len(right_column) else _build_spacer_button()
+        right_button = right_column[i] if i < len(right_column) else finish_button
         rows.append([jump_button, right_button])
     return InlineKeyboardMarkup(rows)
 
@@ -285,6 +284,7 @@ def parse_assistant_callback(data: str) -> str | None:
         _ASSISTANT_NOOP,
         _ASSISTANT_TO_REACTIONS,
         _ASSISTANT_FINISH,
+        _ASSISTANT_SHOW_SOLUTION,
     ):
         return action
     if action.startswith(_ASSISTANT_GOTO_PREFIX):
@@ -475,36 +475,64 @@ async def handle_assistant_action(
         return
 
     if action == _ASSISTANT_FINISH:
-        if not isinstance(progress, ReactionProgress) or not is_last_reaction_solution(
-            progress
-        ):
+        if not isinstance(progress, ReactionProgress):
             await send_text(
                 context,
                 chat_id,
                 "הפעולה הזו עדיין לא זמינה — השתמשו בכפתור שמתחת להודעה.",
             )
             return
-        from bot.handlers.router import (
-            build_persistent_keyboard,
-            cleanup_practice_chat,
+        await _delete_tracked_messages(context, chat_id)
+        finish_kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "פתרון", callback_data=f"assist:{_ASSISTANT_SHOW_SOLUTION}"
+                    )
+                ],
+                [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+            ]
         )
+        await _send_with_keyboard(
+            context,
+            chat_id,
+            "אוקי נראה שסיימת את התרגיל. רוצה לקבל את הפתרון המלא לתרגיל הזה?",
+            send_text=send_text,
+            reply_markup=finish_kb,
+        )
+        return
 
-        # מוחק את כל הודעות התרגיל (תמונה + מדריך) לפני תפריט הסיום.
-        await cleanup_practice_chat(context, chat_id)
-        # Inline + ReplyKeyboard לא יכולים על אותה הודעה — כמו ב-/start:
-        # קודם טקסט עם המקלדת הקבועה, ואז תפריט הכפתורים.
-        await send_text(
-            context,
-            chat_id,
-            _EXERCISE_FINISHED_TEXT,
-            reply_markup=build_persistent_keyboard(),
-        )
-        await send_text(
-            context,
-            chat_id,
-            "בחר/י פעולה:",
-            reply_markup=build_exercise_finished_keyboard(),
-        )
+    if action == _ASSISTANT_SHOW_SOLUTION:
+        extracted = getattr(progress, "extracted", None) or {}
+        from bot.handlers.router import cleanup_practice_chat
+        from bot.solution_check import solve_extracted_beam
+        from bot.notebook_render import render_notebook_png_temp
+
+        await cleanup_practice_chat(context, chat_id, keep_exercise_image=True)
+
+        if extracted:
+            try:
+                solved = solve_extracted_beam(extracted)
+            except Exception:
+                solved = {"result": {"reactions_ton": {}}}
+
+            notebook_path = render_notebook_png_temp(extracted, solved)
+            if notebook_path is not None:
+                try:
+                    kb = InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("ראשי", callback_data="menu:main")]]
+                    )
+                    with notebook_path.open("rb") as photo:
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=photo,
+                            caption="פתרון מחברת מלא",
+                            reply_markup=kb,
+                        )
+                except Exception as exc:
+                    log.warning("Failed to send notebook chat=%s: %s", chat_id, exc)
+                finally:
+                    notebook_path.unlink(missing_ok=True)
         return
 
     if action.startswith(_ASSISTANT_GOTO_PREFIX):

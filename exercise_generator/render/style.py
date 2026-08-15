@@ -62,4 +62,4 @@ STAMP_TEXT = "המהנדס הדיגיטלי"
 STAMP_INK_RGB = (110, 110, 110)  # שחור רך (לא שחור מלא)
 STAMP_WIDTH_FRAC = 0.095  # ~9.5% מרוחב התמונה
 STAMP_PAD_FRAC = 0.01  # מרווח מהשוליים
-STAMP_SPIDER_RELATIVE = "assets/digital_engineer_spider.png"
+STAMP_BARCODE_RELATIVE = "assets/digital_engineer_barcode.png"

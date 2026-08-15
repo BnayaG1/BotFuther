@@ -51,10 +51,10 @@ def test_combined_screen_then_next_load():
 
     first = build_current_screen_hebrew(progress)
     assert "יש 3 עומסים בעייתיים" in first
-    assert "מפורס" in first
+    assert "העומס הנוכחי הוא מפורס." in first
+    assert "עומס מפורס במשקל 3t\\m, ומתפרס על 5 מטרים." in first
     assert "הכח השקול = 3 × 5" in first
     assert "והתוצאה - 15t" in first
-    assert "טון/מ'" not in first.split("הכח השקול =", 1)[-1].split("\n")[0]
     assert progress.has_more_loads is True
     assert next_action_goes_to_reactions(progress) is False
 
@@ -112,7 +112,8 @@ def test_single_load_solution_goes_to_reactions():
     assert progress.load_count == 1
     screen = build_current_screen_hebrew(progress)
     assert "יש עומס בעייתי אחד" in screen
-    assert "אלכסוני" in screen
+    assert "העומס הנוכחי הוא אלכסוני." in screen
+    assert "עומס אלכסוני במשקל 4t, זווית 30 מעלות, לכיוון ימינה-מטה." in screen
     assert "לפרק את העומס הזה מאלכסוני" in screen
     assert "Fx =" in screen and "Fy =" in screen
     assert next_action_goes_to_reactions(progress) is True

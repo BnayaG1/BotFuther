@@ -41,9 +41,9 @@ def test_start_keyboard_has_no_concept_button():
     assert not any("מושג" in label for label in labels)
     assert not any("דיווח" in label for label in labels)
     if INTRO_AVAILABLE:
-        assert any("מבוא" in label for label in labels)
+        assert any("לימוד בסיס" in label for label in labels)
         assert "menu:intro" in callbacks
-        assert labels[0] == "מבוא"
+        assert labels[0] == "לימוד בסיס"
     else:
         assert not any("מבוא" in label for label in labels)
         assert "menu:intro" not in callbacks

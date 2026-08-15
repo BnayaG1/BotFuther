@@ -15,8 +15,8 @@ from exercise_generator.render import style
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _spider_path() -> Path:
-    return _PKG_ROOT / style.STAMP_SPIDER_RELATIVE
+def _barcode_path() -> Path:
+    return _PKG_ROOT / style.STAMP_BARCODE_RELATIVE
 
 
 def _hebrew_font(size: int) -> ImageFont.ImageFont:
@@ -33,31 +33,17 @@ def _hebrew_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _recolor_rgba_ink(img: Image.Image, rgb: tuple[int, int, int]) -> Image.Image:
-    """צובע פיקסלים אטומים בצבע הדיו; שומר אלפא."""
-    arr = np.asarray(img).copy()
-    r, g, b = rgb
-    opaque = arr[:, :, 3] > 0
-    arr[opaque, 0] = r
-    arr[opaque, 1] = g
-    arr[opaque, 2] = b
-    return Image.fromarray(arr, mode="RGBA")
-
-
 @lru_cache(maxsize=1)
 def _compose_stamp_rgba() -> Image.Image | None:
-    spider_path = _spider_path()
-    if not spider_path.is_file():
+    barcode_path = _barcode_path()
+    if not barcode_path.is_file():
         warnings.warn(
-            f"stamp spider missing: {spider_path}",
+            f"stamp barcode missing: {barcode_path}",
             stacklevel=2,
         )
         return None
 
-    spider = _recolor_rgba_ink(
-        Image.open(spider_path).convert("RGBA"),
-        style.STAMP_INK_RGB,
-    )
+    barcode = Image.open(barcode_path).convert("RGBA")
     text = style.STAMP_TEXT
     # Pillow מצייר LTR — הופכים לתצוגה עברית נכונה
     text_draw = text[::-1]
@@ -68,22 +54,22 @@ def _compose_stamp_rgba() -> Image.Image | None:
     bbox = draw.textbbox((0, 0), text_draw, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    # עכביש קומפקטי מעל הטקסט
-    spider_w = max(90, int(tw * 0.85))
-    ratio = spider_w / max(spider.width, 1)
-    spider_h = max(1, int(spider.height * ratio))
-    spider = spider.resize((spider_w, spider_h), Image.Resampling.LANCZOS)
+    # ברקוד קומפקטי מעל הטקסט
+    barcode_w = max(90, int(tw * 0.85))
+    ratio = barcode_w / max(barcode.width, 1)
+    barcode_h = max(1, int(barcode.height * ratio))
+    barcode = barcode.resize((barcode_w, barcode_h), Image.Resampling.LANCZOS)
 
     gap = 6
     pad = 4
-    total_w = max(spider_w, tw) + 2 * pad
-    total_h = pad + spider_h + gap + th + pad
+    total_w = max(barcode_w, tw) + 2 * pad
+    total_h = pad + barcode_h + gap + th + pad
     canvas = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-    canvas.paste(spider, ((total_w - spider_w) // 2, pad), spider)
+    canvas.paste(barcode, ((total_w - barcode_w) // 2, pad))
 
     draw = ImageDraw.Draw(canvas)
     tx = (total_w - tw) // 2 - bbox[0]
-    ty = pad + spider_h + gap - bbox[1]
+    ty = pad + barcode_h + gap - bbox[1]
     ink = (*style.STAMP_INK_RGB, 255)
     draw.text((tx, ty), text_draw, font=font, fill=ink)
     return canvas

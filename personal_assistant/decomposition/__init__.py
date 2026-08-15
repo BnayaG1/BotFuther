@@ -90,17 +90,18 @@ def _decomposition_load_type_label_hebrew(ld: dict) -> str:
 def _load_summary_hebrew(ld: dict, beam: dict) -> str:
     t = str(ld.get("type", "")).lower()
     if t == "inclined":
-        x = _fmt_num(float(ld.get("x", 0.0)))
         mag = _fmt_num(_inclined_mag(ld))
         angle = _fmt_num(float(ld.get("angle_deg", 30.0) or 30.0))
         dir_he = "שמאלה-מטה" if _inclined_dir(ld) == "dl" else "ימינה-מטה"
-        return f"עומס אלכסוני {mag} טון, {angle} מעלות, {dir_he}, ב-x={x} מ'"
+        return f"עומס אלכסוני במשקל {mag}t, זווית {angle} מעלות, לכיוון {dir_he}."
     if t == "distributed":
         x1, x2 = distributed_span_from_left(ld, beam)
         w = float(ld.get("w", ld.get("q", ld.get("magnitude", 0.0))) or 0.0)
+        w_abs = abs(float(w))
+        length = abs(float(x2) - float(x1))
         return (
-            f"עומס מפורס, {_fmt_num(abs(w))} טון/מ', "
-            f"מ-x={_fmt_num(x1)} עד x={_fmt_num(x2)} מ'"
+            f"עומס מפורס במשקל {_fmt_num(w_abs)}t\\m, "
+            f"ומתפרס על {_fmt_num(length)} מטרים."
         )
     return "עומס"
 

@@ -5,6 +5,8 @@
 
 ## Execution
 - **Strict Scope**: Do strictly what is requested. No unprompted extra changes, assumptions, or over-engineering.
+- **No Unprompted Git Push**: Never run `git push` or modify git tracking/gitignore unless explicitly instructed by the user.
+
 
 ## Architecture & Code Structure
 - **Clean Architecture**: Always prioritize clean organization, modularity, and proper structural architecture.

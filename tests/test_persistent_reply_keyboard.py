@@ -112,6 +112,7 @@ def test_persistent_keyboard_includes_main_button():
     assert "ראשי" in texts
     assert handlers._PERSISTENT_QUOTA_LABEL not in texts
     assert handlers._PERSISTENT_ASSISTANT_LABEL not in texts
+    assert handlers._START_INTRO_LABEL not in texts
 
 
 @pytest.mark.anyio
@@ -195,3 +196,37 @@ async def test_bug_report_success_restores_persistent_keyboard():
     args, kwargs = update.message.reply_text.await_args
     assert "נשלח לצוות" in args[0]
     assert isinstance(kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+
+
+@pytest.mark.anyio
+async def test_on_text_intro_button_triggers_intro_opening():
+    update = MagicMock(spec=Update)
+    update.message = MagicMock(spec=Message)
+    update.message.text = handlers._START_INTRO_LABEL
+    update.effective_chat = Chat(id=777001, type="private")
+    update.effective_user = User(id=888, is_bot=False, first_name="T")
+
+    context = MagicMock()
+
+    with patch.object(handlers, "telegram_chat_id", return_value=777001):
+        with patch.object(handlers, "_send_intro_opening", new_callable=AsyncMock) as mock_intro:
+            await handlers.on_text(update, context)
+            mock_intro.assert_awaited_once_with(context, 777001)
+
+
+@pytest.mark.anyio
+async def test_on_text_persistent_buttons_work_during_assistant_progress():
+    update = MagicMock(spec=Update)
+    update.message = MagicMock(spec=Message)
+    update.message.text = handlers._PERSISTENT_FORMULAS_LABEL
+    update.effective_chat = Chat(id=777002, type="private")
+    update.effective_user = User(id=889, is_bot=False, first_name="T")
+
+    context = MagicMock()
+
+    with patch.object(handlers, "telegram_chat_id", return_value=777002):
+        with patch.object(handlers, "has_active_assistant_progress", return_value=True):
+            with patch.object(handlers, "_send_formulas_menu", new_callable=AsyncMock) as mock_formulas:
+                await handlers.on_text(update, context)
+                mock_formulas.assert_awaited_once()
+

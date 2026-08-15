@@ -81,10 +81,10 @@ def test_last_reaction_solution_shows_finish_button_simply_supported():
         equation=ReactionEquation.SIGMA_MA,
         phase=ReactionPhase.SOLUTION,
     )
-    assert runtime.is_last_reaction_solution(progress)
     kb = runtime.build_reactions_keyboard(progress)
-    assert kb.inline_keyboard[0][1].text == "סיימתי"
-    assert kb.inline_keyboard[0][1].callback_data == "assist:finish"
+    assert kb.inline_keyboard[0][1].text == "המשך"
+    assert kb.inline_keyboard[2][1].text == "סיימתי"
+    assert kb.inline_keyboard[2][1].callback_data == "assist:finish"
 
 
 def test_last_reaction_solution_shows_finish_button_cantilever():
@@ -93,10 +93,10 @@ def test_last_reaction_solution_shows_finish_button_cantilever():
         equation=ReactionEquation.SIGMA_M_TIP,
         phase=ReactionPhase.SOLUTION,
     )
-    assert runtime.is_last_reaction_solution(progress)
     kb = runtime.build_reactions_keyboard(progress)
-    assert kb.inline_keyboard[0][1].text == "סיימתי"
-    assert kb.inline_keyboard[0][1].callback_data == "assist:finish"
+    assert kb.inline_keyboard[0][1].text == "המשך"
+    assert kb.inline_keyboard[2][1].text == "סיימתי"
+    assert kb.inline_keyboard[2][1].callback_data == "assist:finish"
 
 
 def test_earlier_reaction_solution_keeps_continue_button():
@@ -105,10 +105,9 @@ def test_earlier_reaction_solution_keeps_continue_button():
         equation=ReactionEquation.SIGMA_MA,
         phase=ReactionPhase.EXPLAIN,
     )
-    assert not runtime.is_last_reaction_solution(progress)
     kb = runtime.build_reactions_keyboard(progress)
     assert kb.inline_keyboard[0][1].text == "המשך"
-    assert kb.inline_keyboard[0][1].callback_data == "assist:next"
+    assert kb.inline_keyboard[2][1].text == "סיימתי"
 
 
 def test_exercise_finished_keyboard_matches_main_menu_actions():
@@ -127,7 +126,7 @@ def test_reactions_keyboard_layout_simply_supported():
     assert [[b.text for b in row] for row in rows] == [
         ["Ax", "המשך"],
         ["Ay", "חזרה"],
-        ["By", " "],
+        ["By", "סיימתי"],
     ]
     assert [b.callback_data for b in rows[0]] == [
         "assist:goto:sigma_fx",
@@ -139,7 +138,7 @@ def test_reactions_keyboard_layout_simply_supported():
     ]
     assert [b.callback_data for b in rows[2]] == [
         "assist:goto:sigma_ma",
-        "assist:noop",
+        "assist:finish",
     ]
 
 
@@ -150,7 +149,7 @@ def test_reactions_keyboard_layout_cantilever():
     assert [[b.text for b in row] for row in rows] == [
         ["Ax", "המשך"],
         ["Ma", "חזרה"],
-        ["Ay", " "],
+        ["Ay", "סיימתי"],
     ]
     assert [b.callback_data for b in rows[0]] == [
         "assist:goto:sigma_fx",
@@ -162,7 +161,7 @@ def test_reactions_keyboard_layout_cantilever():
     ]
     assert [b.callback_data for b in rows[2]] == [
         "assist:goto:sigma_m_tip",
-        "assist:noop",
+        "assist:finish",
     ]
 
 
@@ -199,7 +198,7 @@ async def test_handle_goto_jumps_to_chosen_reaction():
     assert [[b.text for b in row] for row in kb.inline_keyboard] == [
         ["Ax", "המשך"],
         ["Ay", "חזרה"],
-        ["By", " "],
+        ["By", "סיימתי"],
     ]
     runtime.clear_personal_assistant_progress(chat_id)
 
@@ -224,12 +223,12 @@ async def test_handle_goto_for_non_reaction_progress_is_unavailable():
 
 
 @pytest.mark.anyio
-async def test_handle_finish_sends_completion_menu_and_clears_progress():
+async def test_handle_finish_sends_completion_menu():
     chat_id = 88040
     progress = ReactionProgress(
         beam_kind=ReactionBeamKind.SIMPLY_SUPPORTED,
         equation=ReactionEquation.SIGMA_MA,
-        phase=ReactionPhase.SOLUTION,
+        phase=ReactionPhase.EXPLAIN,
         extracted=EXTRACTED,
     )
     runtime.set_personal_assistant_progress(chat_id, progress)
@@ -242,45 +241,14 @@ async def test_handle_finish_sends_completion_menu_and_clears_progress():
         context, chat_id, "finish", send_text=send_text
     )
 
-    assert runtime.get_personal_assistant_progress(chat_id) is None
-    assert send_text.await_count == 2
-    first_text = send_text.await_args_list[0].args[2]
-    assert "איזה יופי, סיימנו את התרגיל" in first_text
-    assert "איך תרצה להמשיך" in first_text
-    first_kb = send_text.await_args_list[0].kwargs["reply_markup"]
-    assert hasattr(first_kb, "keyboard")  # ReplyKeyboardMarkup
-    second_text = send_text.await_args_list[1].args[2]
-    assert second_text == "בחר/י פעולה:"
-    second_kb = send_text.await_args_list[1].kwargs["reply_markup"]
-    assert [[b.text, b.callback_data] for row in second_kb.inline_keyboard for b in row] == [
-        ["תרגול", "menu:give_exercise"],
-        ["פתרון מלא", "menu:new"],
-        ["נוסחאות", "menu:formulas"],
+    assert send_text.await_count == 1
+    sent_text = send_text.await_args.args[2]
+    assert "אוקי נראה שסיימת את התרגיל" in sent_text
+    kb = send_text.await_args.kwargs["reply_markup"]
+    assert [[b.text, b.callback_data] for row in kb.inline_keyboard for b in row] == [
+        ["פתרון", "assist:show_solution"],
+        ["ראשי", "menu:main"],
     ]
-
-
-@pytest.mark.anyio
-async def test_handle_finish_unavailable_before_last_solution():
-    chat_id = 88041
-    progress = ReactionProgress(
-        beam_kind=ReactionBeamKind.SIMPLY_SUPPORTED,
-        equation=ReactionEquation.SIGMA_MB,
-        phase=ReactionPhase.SOLUTION,
-        extracted=EXTRACTED,
-    )
-    runtime.set_personal_assistant_progress(chat_id, progress)
-
-    context = MagicMock()
-    context.bot.delete_message = AsyncMock()
-    send_text = AsyncMock(return_value=MagicMock(message_id=402))
-
-    await runtime.handle_assistant_action(
-        context, chat_id, "finish", send_text=send_text
-    )
-
-    assert runtime.get_personal_assistant_progress(chat_id) is progress
-    text = send_text.await_args.args[2]
-    assert "לא זמינה" in text
 
 
 def test_advance_decomp_flow_to_reactions():
@@ -554,6 +522,7 @@ async def test_back_button_from_first_decomposition_screen_returns_to_opening():
     kb = send_text.await_args.kwargs.get("reply_markup")
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
         "assist:begin_decomposition",
+        "assist:to_reactions",
     ]
     runtime.clear_personal_assistant_progress(chat_id)
 
@@ -800,3 +769,65 @@ async def test_deliver_after_draft_approve_routes_add_to_bank_mode():
         edit_draft_message=edit_draft,
     )
     deliver_notebook.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_handle_show_solution_cleans_chat_and_delivers_notebook():
+    chat_id = 88099
+    progress = ReactionProgress(
+        beam_kind=ReactionBeamKind.SIMPLY_SUPPORTED,
+        equation=ReactionEquation.SIGMA_MA,
+        phase=ReactionPhase.EXPLAIN,
+        extracted=EXTRACTED,
+    )
+    runtime.set_personal_assistant_progress(chat_id, progress)
+
+    context = MagicMock()
+    context.bot.delete_message = AsyncMock()
+    send_photo = AsyncMock()
+    context.bot.send_photo = send_photo
+
+    with patch("bot.handlers.router.cleanup_practice_chat", new_callable=AsyncMock) as mock_cleanup, \
+         patch("bot.notebook_render.render_notebook_png_temp") as mock_render:
+        dummy_path = MagicMock()
+        dummy_path.open.return_value.__enter__.return_value = MagicMock()
+        mock_render.return_value = dummy_path
+
+        await runtime.handle_assistant_action(
+            context, chat_id, "show_solution", send_text=AsyncMock()
+        )
+
+        mock_cleanup.assert_awaited_once_with(context, chat_id, keep_exercise_image=True)
+        mock_render.assert_called_once()
+        send_photo.assert_awaited_once()
+        assert send_photo.call_args.kwargs["caption"] == "פתרון מחברת מלא"
+
+
+@pytest.mark.anyio
+async def test_cleanup_practice_chat_keeps_exercise_image():
+    from bot.handlers.router import cleanup_practice_chat
+    from bot.solution_session import (
+        append_assistant_message_id,
+        append_practice_chat_message_id,
+        begin_image_session,
+        begin_practice_chat_trail,
+    )
+
+    chat_id = 88100
+    begin_image_session(chat_id)
+    begin_practice_chat_trail(chat_id)
+    append_practice_chat_message_id(chat_id, 1001)  # Exercise image ID
+    append_practice_chat_message_id(chat_id, 1002)  # Intermediate text
+    append_assistant_message_id(chat_id, 1003)      # Guide step
+
+    context = MagicMock()
+    context.bot.delete_message = AsyncMock()
+
+    await cleanup_practice_chat(context, chat_id, keep_exercise_image=True)
+
+    deleted_ids = [call.kwargs["message_id"] for call in context.bot.delete_message.call_args_list]
+    assert 1001 not in deleted_ids
+    assert 1002 in deleted_ids
+    assert 1003 in deleted_ids
+
+
