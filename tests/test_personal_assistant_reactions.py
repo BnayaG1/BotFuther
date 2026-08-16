@@ -300,3 +300,50 @@ def test_flow_decomposition_to_reactions_and_enter_after_done():
     assert reactions is not None
     assert reactions.beam_kind == ReactionBeamKind.SIMPLY_SUPPORTED
     assert reactions.decomposed_load_indices == decomp.load_indices
+
+
+def test_build_ax_explain_single_vs_multiple_axial_loads():
+    from personal_assistant.reactions.simply_supported.sigma_fx import build_ax_explain_hebrew as ss_ax_explain
+    from personal_assistant.reactions.cantilever.sigma_fx import build_ax_explain_hebrew as cant_ax_explain
+
+    single_load = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 5.0,
+            "supports": [{"label": "A", "type": "pin", "x": 0.0}, {"label": "B", "type": "roller", "x": 5.0}],
+            "loads": [{"type": "point", "x": 2.0, "Fx": 4.0, "Fy": 0.0}],
+        },
+    }
+
+    ss_out = ss_ax_explain(single_load)
+    assert "בתרגיל שלנו יש עומס צירי אחד." in ss_out
+    assert "העומס הוא 4, ונציב אותו כ" in ss_out
+
+    cant_load = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 5.0,
+            "supports": [{"label": "A", "type": "fixed", "x": 0.0}],
+            "loads": [{"type": "point", "x": 2.0, "Fx": 4.0, "Fy": 0.0}],
+        },
+    }
+    cant_out = cant_ax_explain(cant_load)
+    assert "בתרגיל שלנו יש עומס צירי אחד." in cant_out
+    assert "העומס הוא 4, ונציב אותו כ" in cant_out
+
+    multi_load = {
+        "exercise_type": "beam",
+        "beam": {
+            "L": 5.0,
+            "supports": [{"label": "A", "type": "pin", "x": 0.0}, {"label": "B", "type": "roller", "x": 5.0}],
+            "loads": [
+                {"type": "point", "x": 2.0, "Fx": 4.0, "Fy": 0.0},
+                {"type": "point", "x": 4.0, "Fx": 2.0, "Fy": 0.0},
+            ],
+        },
+    }
+    multi_out = ss_ax_explain(multi_load)
+    assert "בתרגיל שלנו יש 2 עומסים ציריים." in multi_out
+    assert "נתחיל בעומס הצירי הראשון משמאל שהוא 4" in multi_out
+
+

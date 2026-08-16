@@ -13,16 +13,24 @@ from bot.handlers import cmd_coupon, on_buy_callback
 from bot.purchase import PACKAGE_CATALOG, get_package, parse_buy_callback
 
 
-def test_package_catalog_has_two_options():
-    assert len(PACKAGE_CATALOG) == 2
+def test_package_catalog_has_four_options():
+    assert len(PACKAGE_CATALOG) == 4
     pkg_month = get_package("6_30")
     assert pkg_month is not None
-    assert pkg_month.price_ils == 30
+    assert pkg_month.price_ils == 39
     assert pkg_month.daily_quota == 6
     assert pkg_month.period_days == 30
+    pkg_2m = get_package("6_60")
+    assert pkg_2m is not None
+    assert pkg_2m.price_ils == 74
+    assert pkg_2m.period_days == 60
+    pkg_3m = get_package("6_90")
+    assert pkg_3m is not None
+    assert pkg_3m.price_ils == 105
+    assert pkg_3m.period_days == 90
     pkg_long = get_package("6_120")
     assert pkg_long is not None
-    assert pkg_long.price_ils == 90
+    assert pkg_long.price_ils == 134
     assert pkg_long.daily_quota == 6
     assert pkg_long.period_days == 120
 
@@ -47,7 +55,7 @@ async def test_cmd_coupon_shows_purchase_menu():
 
     update.message.reply_text.assert_awaited_once()
     _args, kwargs = update.message.reply_text.await_args
-    assert "רכישת חבילה" in _args[0]
+    assert "כמה חודשים תרצה לקבל?" in _args[0]
     assert kwargs.get("reply_markup") is not None
 
 
@@ -73,7 +81,7 @@ async def test_buy_confirm_creates_request_and_shows_payment():
                     chat_id=200,
                     daily_quota=6,
                     period_days=30,
-                    price_ils=30,
+                    price_ils=39,
                     package_label="x",
                     status="pending",
                     created_at=1.0,
@@ -85,7 +93,7 @@ async def test_buy_confirm_creates_request_and_shows_payment():
     context.bot.send_message.assert_awaited()
     pay_kwargs = context.bot.send_message.await_args.kwargs
     pay_text = pay_kwargs["text"]
-    assert "30" in pay_text
+    assert "39" in pay_text
     assert config.BIT_PHONE in pay_text
     assert config.PAYMENT_CONFIRM_WHATSAPP_URL in pay_text
     assert pay_kwargs.get("reply_markup") is not None

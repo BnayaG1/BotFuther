@@ -15,6 +15,7 @@ class PackageOption:
     daily_quota: int
     period_days: int
     price_ils: int
+    original_price_ils: int | None = None
 
     @property
     def tier(self) -> int:
@@ -23,13 +24,19 @@ class PackageOption:
 
     def label_hebrew(self) -> str:
         period = _period_label(self.period_days)
+        if self.original_price_ils and self.original_price_ils != self.price_ils:
+            return f"{period} · ₪{self.price_ils} (במקום ₪{self.original_price_ils})"
         return f"{period} · ₪{self.price_ils}"
 
     def summary_hebrew(self) -> str:
         period = _period_label(self.period_days)
+        if self.original_price_ils and self.original_price_ils != self.price_ils:
+            price_str = f"₪{self.price_ils} (במקום ₪{self.original_price_ils})"
+        else:
+            price_str = f"₪{self.price_ils}"
         return (
-            f"• תקופה: *{period}*\n"
-            f"• מחיר: *₪{self.price_ils}*\n"
+            f"• תקופה: <b>{period}</b>\n"
+            f"• מחיר: <b>{price_str}</b>\n"
             f"• גישה מועדפת לפתרון ותרגול "
             f"(המתנה של 10 דקות בין שימושים)"
         )
@@ -38,6 +45,8 @@ class PackageOption:
 def _period_label(days: int) -> str:
     if days == 30:
         return "חודש"
+    if days == 60:
+        return "חודשיים"
     if days == 90:
         return "3 חודשים"
     if days == 100:
@@ -50,8 +59,10 @@ def _period_label(days: int) -> str:
 
 
 PACKAGE_CATALOG: tuple[PackageOption, ...] = (
-    PackageOption("6_30", 6, 30, 30),
-    PackageOption("6_120", 6, 120, 90),
+    PackageOption("6_30", 6, 30, 39),
+    PackageOption("6_60", 6, 60, 74, 78),
+    PackageOption("6_90", 6, 90, 105, 117),
+    PackageOption("6_120", 6, 120, 134, 156),
 )
 
 _PACKAGES_BY_ID: dict[str, PackageOption] = {p.package_id: p for p in PACKAGE_CATALOG}
@@ -62,28 +73,18 @@ def get_package(package_id: str) -> PackageOption | None:
 
 
 def purchase_menu_intro_hebrew() -> str:
-    return (
-        "*רכישת חבילה*\n\n"
-        "בחר/י את החבילה המתאימה.\n"
-        "אחרי אישור תקבל/י הוראות תשלום בביט — "
-        "לאחר האישור שלנו יישלח אליך קוד קופון.\n\n"
-        "כבר יש לך קוד? שלח/י אותו כהודעת טקסט לבוט."
-    )
+    return "כמה חודשים תרצה לקבל?"
 
 
 def build_purchase_menu_keyboard() -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for pkg in PACKAGE_CATALOG:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    pkg.label_hebrew(),
-                    callback_data=f"buy:pkg:{pkg.package_id}",
-                )
-            ]
+    buttons = [
+        InlineKeyboardButton(
+            _period_label(pkg.period_days),
+            callback_data=f"buy:pkg:{pkg.package_id}",
         )
-    rows.append([InlineKeyboardButton("ביטול", callback_data="buy:cancel")])
-    return InlineKeyboardMarkup(rows)
+        for pkg in PACKAGE_CATALOG
+    ]
+    return InlineKeyboardMarkup([buttons])
 
 
 def build_package_confirm_keyboard(package_id: str) -> InlineKeyboardMarkup:
@@ -105,20 +106,20 @@ def build_package_confirm_keyboard(package_id: str) -> InlineKeyboardMarkup:
 
 def package_confirm_text_hebrew(pkg: PackageOption) -> str:
     return (
-        "*סיכום החבילה*\n\n"
+        "<b>סיכום החבילה</b>\n\n"
         f"{pkg.summary_hebrew()}\n\n"
         "לאשר ולקבל פרטי תשלום בביט?"
     )
 
 
 def payment_instructions_hebrew(pkg: PackageOption) -> str:
+    phone = BIT_PHONE.strip()
     return (
-        "*הבקשה נקלטה*\n\n"
         f"{pkg.summary_hebrew()}\n\n"
-        "*לתשלום בביט:*\n"
-        f"העבר/י *₪{pkg.price_ils}* לטלפון:\n"
-        f"`{BIT_PHONE}`\n\n"
-        "*אחרי התשלום:*\n"
+        "<b>לתשלום בביט:</b>\n"
+        f"העבר/י <b>₪{pkg.price_ils}</b> לטלפון:\n"
+        f"<code>{phone}</code>\n\n"
+        "<b>אחרי התשלום:</b>\n"
         "שלח/י צילום מסך של אישור התשלום בוואטסאפ:\n"
         f"{PAYMENT_CONFIRM_WHATSAPP_URL}\n\n"
         "לאחר שנאשר את התשלום יישלח אליך קוד קופון בהודעה."

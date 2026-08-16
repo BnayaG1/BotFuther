@@ -399,6 +399,32 @@ async def _send_progress_screen(
     )
 
 
+async def _send_finish_screen(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    send_text: SendTextFn,
+) -> None:
+    await _delete_tracked_messages(context, chat_id)
+    finish_kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "פתרון", callback_data=f"assist:{_ASSISTANT_SHOW_SOLUTION}"
+                )
+            ],
+            [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+        ]
+    )
+    await _send_with_keyboard(
+        context,
+        chat_id,
+        "אוקי נראה שסיימת את התרגיל. רוצה לקבל את הפתרון המלא לתרגיל הזה?",
+        send_text=send_text,
+        reply_markup=finish_kb,
+    )
+
+
 async def handle_assistant_action(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -482,29 +508,12 @@ async def handle_assistant_action(
                 "הפעולה הזו עדיין לא זמינה — השתמשו בכפתור שמתחת להודעה.",
             )
             return
-        await _delete_tracked_messages(context, chat_id)
-        finish_kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "פתרון", callback_data=f"assist:{_ASSISTANT_SHOW_SOLUTION}"
-                    )
-                ],
-                [InlineKeyboardButton("ראשי", callback_data="menu:main")],
-            ]
-        )
-        await _send_with_keyboard(
-            context,
-            chat_id,
-            "אוקי נראה שסיימת את התרגיל. רוצה לקבל את הפתרון המלא לתרגיל הזה?",
-            send_text=send_text,
-            reply_markup=finish_kb,
-        )
+        await _send_finish_screen(context, chat_id, send_text=send_text)
         return
 
     if action == _ASSISTANT_SHOW_SOLUTION:
         extracted = getattr(progress, "extracted", None) or {}
-        from bot.handlers.router import cleanup_practice_chat
+        from bot.handlers.router import _track_sent_message, cleanup_practice_chat
         from bot.solution_check import solve_extracted_beam
         from bot.notebook_render import render_notebook_png_temp
 
@@ -523,12 +532,13 @@ async def handle_assistant_action(
                         [[InlineKeyboardButton("ראשי", callback_data="menu:main")]]
                     )
                     with notebook_path.open("rb") as photo:
-                        await context.bot.send_photo(
+                        sent = await context.bot.send_photo(
                             chat_id=chat_id,
                             photo=photo,
                             caption="פתרון מחברת מלא",
                             reply_markup=kb,
                         )
+                        _track_sent_message(chat_id, sent)
                 except Exception as exc:
                     log.warning("Failed to send notebook chat=%s: %s", chat_id, exc)
                 finally:
@@ -571,10 +581,21 @@ async def handle_assistant_action(
         )
         return
 
+    was_at_last_reaction = isinstance(progress, ReactionProgress) and (
+        is_last_reaction_solution(progress)
+        or progress.equation in (ReactionEquation.STABILITY_FY, ReactionEquation.DONE)
+    )
     _push_personal_assistant_history(chat_id, progress)
     await _delete_tracked_messages(context, chat_id)
     progress = advance_on_next(progress)
+    if was_at_last_reaction and isinstance(progress, ReactionProgress):
+        progress.equation = ReactionEquation.DONE
     set_personal_assistant_progress(chat_id, progress)
+    if isinstance(progress, ReactionProgress) and (
+        progress.equation == ReactionEquation.DONE or was_at_last_reaction
+    ):
+        await _send_finish_screen(context, chat_id, send_text=send_text)
+        return
     await _send_progress_screen(context, chat_id, progress, send_text=send_text)
 
 

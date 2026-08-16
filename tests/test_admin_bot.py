@@ -19,7 +19,7 @@ from bot.purchase import PACKAGE_CATALOG
 
 
 def test_price_buttons_map_to_packages():
-    assert len({pkg.package_id for pkg in PACKAGE_CATALOG}) == 2
+    assert len({pkg.package_id for pkg in PACKAGE_CATALOG}) == 4
     for pkg in PACKAGE_CATALOG:
         label = _admin_menu_button_label(pkg)
         assert _PRICE_TO_PACKAGE[label] == pkg.package_id
@@ -27,10 +27,12 @@ def test_price_buttons_map_to_packages():
 
 
 def test_price_button_mapping_examples():
-    assert _PRICE_TO_PACKAGE["₪30"] == "6_30"
-    assert _PRICE_TO_PACKAGE["30"] == "6_30"
-    assert _PRICE_TO_PACKAGE["₪90"] == "6_120"
-    assert _PRICE_TO_PACKAGE["90"] == "6_120"
+    assert _PRICE_TO_PACKAGE["₪39"] == "6_30"
+    assert _PRICE_TO_PACKAGE["39"] == "6_30"
+    assert _PRICE_TO_PACKAGE["₪74"] == "6_60"
+    assert _PRICE_TO_PACKAGE["₪105"] == "6_90"
+    assert _PRICE_TO_PACKAGE["₪134"] == "6_120"
+    assert _PRICE_TO_PACKAGE["134"] == "6_120"
 
 
 def test_is_admin_respects_configured_ids(monkeypatch):
@@ -48,7 +50,7 @@ def test_admin_menu_keyboard_shows_payment_amounts():
     for pkg in PACKAGE_CATALOG:
         assert _admin_menu_button_label(pkg) in labels
     price_labels = [lbl for lbl in labels if lbl.startswith("₪")]
-    assert price_labels == ["₪30", "₪90"]
+    assert price_labels == ["₪39", "₪74", "₪105", "₪134"]
     assert "תפריט" in labels
 
 

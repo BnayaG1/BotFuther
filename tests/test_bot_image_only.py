@@ -16,14 +16,14 @@ def test_welcome_text_is_image_only():
     assert "היי, אני שמח שהגעת לכאן" in text
     assert "תמונה" in text
     assert "תרגול" in text
-    assert "פתרון מחברת" in text
+    assert "הפתרון המלא" in text
     assert "מדריך" in text
     assert "נוסחאות" in text
     assert "דיווח" in text
     assert "סטטיקה" in text
     assert "24 שעות" in text
-    assert "₪30" in text
-    assert "₪90" in text
+    assert "39 שקלים" in text
+    assert "10 אחוז הנחה" in text
     assert "בראש שקט" in text
     assert "מהנדס הדיגיטלי" not in text
     assert "מושג" not in text

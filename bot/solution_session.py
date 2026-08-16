@@ -141,7 +141,14 @@ def pop_practice_chat_message_ids(chat_id: int) -> list[int]:
 
 
 def has_practice_chat_trail(chat_id: int) -> bool:
-    return bool(_practice_chat_message_ids.get(int(chat_id))) or int(chat_id) in _pending_bank_exercise
+    session = _sessions.get(int(chat_id))
+    has_session_msgs = bool(session and session.assistant_message_ids)
+    return (
+        bool(_practice_chat_message_ids.get(int(chat_id)))
+        or bool(_exercise_image_message_ids.get(int(chat_id)))
+        or int(chat_id) in _pending_bank_exercise
+        or has_session_msgs
+    )
 
 
 def discard_practice_chat_trail(chat_id: int) -> None:

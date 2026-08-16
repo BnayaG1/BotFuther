@@ -22,13 +22,17 @@ from intro.support_exercises import body_hebrew as support_body_hebrew
 
 _OPENING_TEXT = "לאן תרצה לקחת את זה?"
 
-_HOW_TO_APPROACH_TEXT = (
-    "בסטטיקה, העיקרון המנחה הוא שבסופו של דבר הכל מתאפס ל-0, ובחודשים הראשונים של הלמידה התרגילים ייראו ככה:\n"
+_HOW_TO_APPROACH_FIRST_TEXT = (
+    "בסטטיקה, העקרון המנחה הוא שבסופו ש דבר הכל מתאפס ל-0, ובחודשים הראשונים של הלמידה התרגילים ייראו ככה:\n"
     "קורה + 2 סמכים\\ריתום + עומסים.\n"
     "\n"
     "זה הכל.\n"
     "\n"
-    "תבחר סמכים או ריתום בהתאם למה שאתה רוצה שנעבור עליו ביחד עד לפתרון."
+    "אם אתה רוצה רגע להבין מה עומד מאחורי התרגילים לחץ על הכפתור הבא"
+)
+
+_HOW_TO_APPROACH_SECOND_TEXT = (
+    "במידה ואתה רוצה ללמוד תכלס איך לפתור תרגילים בחר את סוג התרגיל ונעבור על איך פותרים אותו"
 )
 
 _INTRO_MAIN_BUTTONS = [
@@ -38,8 +42,8 @@ _INTRO_MAIN_BUTTONS = [
 ]
 
 _HOW_TO_APPROACH_BUTTONS = [
-    ("support_exercises", "סמכים"),
     ("fixed_support_exercises", "ריתום"),
+    ("support_exercises", "סמכים"),
 ]
 
 _INTRO_TOPIC_BODIES: dict[str, Callable[[], str]] = {
@@ -55,7 +59,11 @@ def opening_message_hebrew() -> str:
 
 
 def how_to_approach_message_hebrew() -> str:
-    return _HOW_TO_APPROACH_TEXT
+    return _HOW_TO_APPROACH_FIRST_TEXT
+
+
+def how_to_approach_second_message_hebrew() -> str:
+    return _HOW_TO_APPROACH_SECOND_TEXT
 
 
 def build_opening_keyboard() -> InlineKeyboardMarkup:

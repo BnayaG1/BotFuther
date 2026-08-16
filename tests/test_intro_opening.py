@@ -24,7 +24,7 @@ def test_opening_message_and_topic_buttons():
     assert isinstance(sub_kb, InlineKeyboardMarkup)
     sub_buttons = [btn for row in sub_kb.inline_keyboard for btn in row]
     sub_labels = [btn.text for btn in sub_buttons]
-    assert sub_labels == ["סמכים", "ריתום"]
+    assert sub_labels == ["ריתום", "סמכים"]
 
     assert opening.parse_intro_callback("intro:how_to_approach") == "how_to_approach"
     assert opening.parse_intro_callback("intro:distributed_load") == "distributed_load"
@@ -109,10 +109,12 @@ async def test_on_intro_callback_how_to_approach():
     await handlers.on_intro_callback(update, context)
 
     query.answer.assert_awaited()
-    context.bot.send_message.assert_awaited_once()
-    msg_args = context.bot.send_message.await_args.kwargs
-    assert msg_args["text"] == opening.how_to_approach_message_hebrew()
-    assert isinstance(msg_args.get("reply_markup"), InlineKeyboardMarkup)
+    assert context.bot.send_message.call_count == 2
+    call_args_list = context.bot.send_message.call_args_list
+    assert call_args_list[0].kwargs["text"] == opening.how_to_approach_message_hebrew()
+    assert call_args_list[1].kwargs["text"] == opening.how_to_approach_second_message_hebrew()
+    assert isinstance(call_args_list[0].kwargs.get("reply_markup"), InlineKeyboardMarkup)
+    assert isinstance(call_args_list[1].kwargs.get("reply_markup"), InlineKeyboardMarkup)
     context.bot.send_photo.assert_not_called()
 
 
@@ -124,7 +126,7 @@ async def test_on_intro_callback_support_exercises():
     query.answer = AsyncMock()
     query.message = MagicMock()
     query.message.chat_id = 991009
-    query.message.edit_reply_markup = AsyncMock()
+    query.message.delete = AsyncMock()
     update.callback_query = query
     update.effective_chat = MagicMock(id=991009)
 
@@ -135,7 +137,7 @@ async def test_on_intro_callback_support_exercises():
     await handlers.on_intro_callback(update, context)
 
     query.answer.assert_awaited()
-    query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    query.message.delete.assert_awaited_once()
     context.bot.send_photo.assert_awaited_once()
     context.bot.send_message.assert_awaited_once()
     msg_args = context.bot.send_message.await_args.kwargs
@@ -151,7 +153,7 @@ async def test_on_intro_callback_fixed_support_exercises():
     query.answer = AsyncMock()
     query.message = MagicMock()
     query.message.chat_id = 991010
-    query.message.edit_reply_markup = AsyncMock()
+    query.message.delete = AsyncMock()
     update.callback_query = query
     update.effective_chat = MagicMock(id=991010)
 
@@ -162,7 +164,7 @@ async def test_on_intro_callback_fixed_support_exercises():
     await handlers.on_intro_callback(update, context)
 
     query.answer.assert_awaited()
-    query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    query.message.delete.assert_awaited_once()
     context.bot.send_photo.assert_awaited_once()
     context.bot.send_message.assert_awaited_once()
     msg_args = context.bot.send_message.await_args.kwargs

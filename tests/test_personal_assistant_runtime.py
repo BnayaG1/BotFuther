@@ -831,3 +831,59 @@ async def test_cleanup_practice_chat_keeps_exercise_image():
     assert 1003 in deleted_ids
 
 
+@pytest.mark.anyio
+async def test_next_at_last_reaction_solution_sends_finish_screen():
+    chat_id = 88200
+    runtime.clear_personal_assistant_progress(chat_id)
+    progress = ReactionProgress(
+        beam_kind=ReactionBeamKind.SIMPLY_SUPPORTED,
+        equation=ReactionEquation.SIGMA_MA,
+        phase=ReactionPhase.SOLUTION,
+        extracted=EXTRACTED,
+    )
+    runtime.set_personal_assistant_progress(chat_id, progress)
+
+    context = MagicMock()
+    context.bot.delete_message = AsyncMock()
+    send_text = AsyncMock(return_value=MagicMock(message_id=500))
+
+    await runtime.handle_assistant_action(context, chat_id, "next", send_text=send_text)
+
+    text = send_text.await_args.args[2]
+    assert "אוקי נראה שסיימת את התרגיל. רוצה לקבל את הפתרון המלא לתרגיל הזה?" in text
+    kb = send_text.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].text == "פתרון"
+    assert kb.inline_keyboard[1][0].text == "ראשי"
+
+
+@pytest.mark.anyio
+async def test_cleanup_practice_chat_deletes_exercise_image_and_notebook_solution_on_main():
+    from bot.handlers.router import cleanup_practice_chat, on_menu_callback
+    from bot.solution_session import (
+        append_practice_chat_message_id,
+        begin_image_session,
+        begin_practice_chat_trail,
+        set_exercise_image_message_id,
+    )
+
+    chat_id = 88300
+    begin_image_session(chat_id)
+    begin_practice_chat_trail(chat_id)
+    set_exercise_image_message_id(chat_id, 2001)
+
+    # נדמה שליחת פתרון מחברת
+    append_practice_chat_message_id(chat_id, 2002)
+
+    context = MagicMock()
+    context.bot.delete_message = AsyncMock()
+
+    # מנקים בסיום תרגיל בעת לחצן «ראשי»
+    await cleanup_practice_chat(context, chat_id, keep_exercise_image=False)
+
+    deleted_ids = [call.kwargs["message_id"] for call in context.bot.delete_message.call_args_list]
+    assert 2001 in deleted_ids
+    assert 2002 in deleted_ids
+
+
+
+

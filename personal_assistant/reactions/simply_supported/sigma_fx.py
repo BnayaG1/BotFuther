@@ -124,18 +124,26 @@ def build_ax_explain_hebrew(extracted: dict, *, prefix: str = "") -> str:
         lines.append("תרצה לראות איך זה נכנס למשוואה עד הגעה לפתרון?")
         return "\n".join(lines)
 
-    lines.append(f"בתרגיל שלנו יש {len(load_terms)} עומסים ציריים.")
-    for i, (_x, term, direction_he, sign_word_he) in enumerate(load_terms, start=1):
+    if len(load_terms) == 1:
+        lines.append("בתרגיל שלנו יש עומס צירי אחד.")
+        _x, term, direction_he, sign_word_he = load_terms[0]
         mag = term[1:] if term.startswith("-") else term
-        if i == 1:
-            lines.append(
-                f"נתחיל בעומס הצירי הראשון משמאל שהוא {mag}, ונציב אותו כ{sign_word_he} בגלל שהוא פונה לכיוון {direction_he}."
-            )
-        else:
-            ord_he = "השני" if i == 2 else "השלישי" if i == 3 else f"ה-{i}"
-            lines.append(
-                f"העומס {ord_he} הוא {mag}, ופונה לכיוון {direction_he}, ולכן נציב אותו במשוואה כ{sign_word_he}."
-            )
+        lines.append(
+            f"העומס הוא {mag}, ונציב אותו כ{sign_word_he} בגלל שהוא פונה לכיוון {direction_he}."
+        )
+    else:
+        lines.append(f"בתרגיל שלנו יש {len(load_terms)} עומסים ציריים.")
+        for i, (_x, term, direction_he, sign_word_he) in enumerate(load_terms, start=1):
+            mag = term[1:] if term.startswith("-") else term
+            if i == 1:
+                lines.append(
+                    f"נתחיל בעומס הצירי הראשון משמאל שהוא {mag}, ונציב אותו כ{sign_word_he} בגלל שהוא פונה לכיוון {direction_he}."
+                )
+            else:
+                ord_he = "השני" if i == 2 else "השלישי" if i == 3 else f"ה-{i}"
+                lines.append(
+                    f"העומס {ord_he} הוא {mag}, ופונה לכיוון {direction_he}, ולכן נציב אותו במשוואה כ{sign_word_he}."
+                )
     lines.append("תרצה לראות איך כל זה נכנס למשוואה אחת עד הגעה לפתרון?")
     return "\n".join(lines)
 

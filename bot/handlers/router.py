@@ -82,6 +82,7 @@ try:
         generate_fixed_mavo_exercise_png,
         generate_mavo_exercise_png,
         how_to_approach_message_hebrew,
+        how_to_approach_second_message_hebrew,
         intro_topic_body_hebrew,
         mavo_followup_message_hebrew,
         opening_message_hebrew,
@@ -99,6 +100,7 @@ except Exception as exc:
     generate_fixed_mavo_exercise_png = None  # type: ignore[assignment]
     generate_mavo_exercise_png = None  # type: ignore[assignment]
     how_to_approach_message_hebrew = None  # type: ignore[assignment]
+    how_to_approach_second_message_hebrew = None  # type: ignore[assignment]
     intro_topic_body_hebrew = None  # type: ignore[assignment]
     mavo_followup_message_hebrew = None  # type: ignore[assignment]
     opening_message_hebrew = None  # type: ignore[assignment]
@@ -351,8 +353,7 @@ async def _deliver_approved_solve(
                         caption="פתרון מחברת מלא",
                         reply_markup=kb,
                     )
-                if track_practice:
-                    _track_sent_message(chat_id, sent)
+                _track_sent_message(chat_id, sent)
             except Exception as exc:
                 log.warning("Failed to send notebook chat=%s: %s", chat_id, exc)
 
@@ -395,18 +396,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def build_start_welcome_text() -> str:
     return (
-        "היי, אני שמח שהגעת לכאן. בניתי את הבוט הזה כדי לעזור לנו לעבור את תרגילי "
-        "הסטטיקה קצת יותר בקלות, בלי להיתקע שעות על אותה שאלה.\n\n"
-        "השימוש בבוט פשוט: אפשר להעלות תמונה של תרגיל שאתה עובד עליו, או לבחור "
-        "«תרגול» ולקבל תרגיל מוכן, שם הנתונים כבר מוגדרים. בכל מקרה, אתה יכול לבחור בין "
-        "פתרון מחברת מלא לבין ליווי צמוד של מדריך. המדריך הזה מלווה אותך "
-        "צעד-צעד עם כפתורים נוחים ומסביר את הדרך, ובנוסף יש לך אופציה נגישה לשלוף "
-        "נוסחאות ספציפיות בהתאם למה שאתה צריך באותו רגע.\n\n"
-        "אם יש בעיות או בקשות ספציפיות, יש אופציה לדיווח שדרכה תוכל לפנות אליי ישירות.\n\n"
-        "הבוט זמין עבורך 24/7 עם כל החבילה המלאה. כדי שתוכל להתרשם ולראות איך זה "
-        "עובד באמת, פתחתי לך גישה מלאה לכל האפשרויות ל-24 שעות הקרובות ללא התחייבות.\n\n"
-        "אחרי 24 השעות אפשר להמשיך עם מנוי: חודש ב־₪30, או 4 חודשים ב־₪90 "
-        "(גישה מועדפת לפתרון ותרגול, עם המתנה של 10 דקות בין שימושים).\n\n"
+        "היי, אני שמח שהגעת לכאן. בניתי את הבוט הזה בשביל להכין אותך כמה שיותר טוב מ-0 ללעבור בהצלחה את המבחן של הסמסטר הראשון בסטטיקה, ואני יעשה כל מה שאני יכול בשביל שזה יקרה.\n\n"
+        "השימוש בבוט פשוט: יש לך אופציה להבין כל דבר בפני עצמו בלימוד הבסיס, שם אתה תוכל לעבור על מה שאתה רוצה עם תרגולים ספציפיים לדברים ספציפיים ולהבין כל שלב ושלב, יש לך נוסחאות לדברים ספציפיים שאתה יכול לשלוף ולרשום לך או פשוט להסתכל עליהם, אתה יכול ללחוץ בתפריט הראשי על תרגול ולקבל תרגיל מהמערכת שלי ברמה של מבחן ומשם גם לקבל מדריך שיעבור איתך שלב שלב על התרגיל שיצא עד לפתרון או במקום לקבל פשוט את הפתרון המלא. אתה יכול גם חופשי לשלוח לבוט תמונה של תרגיל שאתה עובד עליו ולקבל עליו מדריך לפתרון או את הפתרון.\n\n"
+        "בכל בעיה או בקשה אתה יכול ללחוץ בתפרט הקבוע על 'דיווח על תקלה', והדיווח יגיע ישירות אלי.\n\n"
+        "הבוט זמין עבורך ל24 שעות עם גישה חופשית להכל בשביל שתוכל להתרשם ולראות איך זה עובד. לאחר 24 השעות, אם תאהב ותרצה להמשיך אתה יכול לרכוש חבילה לפי חודשים כשחודש אחד עולה 39 שקלים, וכל חודש שתוסיף מההתחלה תקבל עליו 10 אחוז הנחה.\n\n"
         "מוזמן להתחיל להשתמש, מקווה שזה יעזור לך לעבור את הקורס בראש שקט."
     )
 
@@ -839,6 +832,8 @@ async def cleanup_practice_chat(
     ex_img_id = get_exercise_image_message_id(chat_id)
     ids = pop_practice_chat_message_ids(chat_id)
     ids.extend(pop_assistant_message_ids(chat_id))
+    if ex_img_id is not None and not keep_exercise_image and int(ex_img_id) not in ids:
+        ids.append(int(ex_img_id))
     seen: set[int] = set()
     for mid in ids:
         mid_i = int(mid)
@@ -978,31 +973,7 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _send_coupon_redeem_prompt(context, chat_id)
         return
 
-    if action == "pkg":
-        pkg = get_package(arg)
-        if pkg is None:
-            await query.answer("חבילה לא נמצאה", show_alert=True)
-            return
-        await query.answer()
-        await _delete_callback_message(query)
-        text = package_confirm_text_hebrew(pkg)
-        keyboard = build_package_confirm_keyboard(pkg.package_id)
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-            )
-        except BadRequest:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-            )
-        return
-
-    if action == "confirm":
+    if action in ("pkg", "confirm"):
         pkg = get_package(arg)
         if pkg is None:
             await query.answer("חבילה לא נמצאה", show_alert=True)
@@ -1028,7 +999,7 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 chat_id=chat_id,
                 text=pay_text,
                 reply_markup=pay_keyboard,
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         except BadRequest:
             await context.bot.send_message(
@@ -1242,20 +1213,32 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await _leave_formulas_chat_if_needed(context, chat_id)
         begin_practice_chat_trail(chat_id)
 
-        text = how_to_approach_message_hebrew() if how_to_approach_message_hebrew is not None else ""
-        if text:
-            kb = build_how_to_approach_keyboard() if build_how_to_approach_keyboard is not None else None
-            sent_msg = await context.bot.send_message(
+        first_text = how_to_approach_message_hebrew() if how_to_approach_message_hebrew is not None else ""
+        if first_text:
+            kb1 = build_mavo_continue_keyboard() if build_mavo_continue_keyboard is not None else None
+            sent_msg1 = await context.bot.send_message(
                 chat_id=chat_id,
-                text=text,
-                reply_markup=kb,
+                text=first_text,
+                reply_markup=kb1,
             )
-            _track_sent_message(chat_id, sent_msg)
+            _track_sent_message(chat_id, sent_msg1)
+
+        second_text = how_to_approach_second_message_hebrew() if how_to_approach_second_message_hebrew is not None else ""
+        if second_text:
+            kb2 = build_how_to_approach_keyboard() if build_how_to_approach_keyboard is not None else None
+            sent_msg2 = await context.bot.send_message(
+                chat_id=chat_id,
+                text=second_text,
+                reply_markup=kb2,
+            )
+            _track_sent_message(chat_id, sent_msg2)
         return
 
     if topic_id in ("support_exercises", "fixed_support_exercises"):
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-        await _remove_callback_keyboard(query)
+        await _delete_callback_message(query)
+        await cleanup_practice_chat(context, chat_id)
+        begin_practice_chat_trail(chat_id)
 
         is_fixed = topic_id == "fixed_support_exercises"
         gen_func = generate_fixed_mavo_exercise_png if is_fixed else generate_mavo_exercise_png
