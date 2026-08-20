@@ -159,19 +159,30 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not rows:
         await update.message.reply_text("אין משתמשים במערכת.")
         return
-    lines = [f"<b>סה״כ משתמשים: {len(rows)}</b>\n"]
-    for row in rows:
+
+    total = len(rows)
+    lines = [
+        f"👥 <b>רשימת משתמשים במערכת</b> (סה״כ: {total})\n"
+    ]
+
+    for idx, row in enumerate(rows, 1):
         uid = row[0]
         ts = row[1]
         uname = row[2] if len(row) > 2 else None
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        if uname:
-            user_link = f'<a href="https://t.me/{uname}">@{uname}</a>'
-        else:
-            user_link = f'<a href="tg://user?id={uid}">פרופיל ({uid})</a>'
-        lines.append(f"• ID: <code>{uid}</code> | {user_link} ({dt})")
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d/%m/%Y %H:%M")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        if uname:
+            user_str = f'<a href="https://t.me/{uname}">@{uname}</a>'
+        else:
+            user_str = f'<a href="tg://user?id={uid}">פרופיל ({uid})</a>'
+
+        lines.append(
+            f"<b>{idx}. {user_str}</b>\n"
+            f"   • 🆔 מזהה: <code>{uid}</code>\n"
+            f"   • 📅 הצטרפ/ה: {dt}\n"
+        )
+
+    await update.message.reply_text("\n".join(lines).strip(), parse_mode="HTML")
 
 
 async def cmd_user_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
