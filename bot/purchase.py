@@ -26,8 +26,6 @@ class PackageOption:
         if self.daily_quota >= 999:
             return "VIP ללא הגבלות (120 יום)"
         period = _period_label(self.period_days)
-        if self.original_price_ils and self.original_price_ils != self.price_ils:
-            return f"{period} · ₪{self.price_ils} (במקום ₪{self.original_price_ils})"
         return f"{period} · ₪{self.price_ils}"
 
     def summary_hebrew(self) -> str:
@@ -38,10 +36,7 @@ class PackageOption:
                 "• גישה מלאה ללא צינון וללא מגבלה יומית + פתיחת מאגר תרגילים"
             )
         period = _period_label(self.period_days)
-        if self.original_price_ils and self.original_price_ils != self.price_ils:
-            price_str = f"₪{self.price_ils} (במקום ₪{self.original_price_ils})"
-        else:
-            price_str = f"₪{self.price_ils}"
+        price_str = f"₪{self.price_ils}"
         return (
             f"• תקופה: <b>{period}</b>\n"
             f"• מחיר: <b>{price_str}</b>\n"

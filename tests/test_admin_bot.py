@@ -33,6 +33,41 @@ def test_admin_menu_keyboard_includes_vip_option():
     assert len(callbacks) == 5  # 4 רגילות + VIP אחד
 
 
+def test_admin_persistent_reply_keyboard():
+    from bot.admin_bot import build_admin_persistent_reply_keyboard
+    kb = build_admin_persistent_reply_keyboard()
+    labels = [btn.text for row in kb.keyboard for btn in row]
+    assert "חודש · ₪39" in labels
+    assert "חודשיים · ₪72" in labels
+    assert "3 חודשים · ₪99" in labels
+    assert "4 חודשים · ₪120" in labels
+    assert "VIP ללא הגבלות (120 יום)" in labels
+    assert "👥 רשימת משתמשים" in labels
+    assert kb.is_persistent is True
+
+
+@pytest.mark.anyio
+async def test_on_admin_text_package_button(monkeypatch):
+    from bot.admin_bot import on_admin_text
+    monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))
+
+    update = MagicMock()
+    update.effective_user = User(id=99, is_bot=False, first_name="Admin")
+    update.message = MagicMock()
+    update.message.text = "חודש · ₪39"
+    update.message.reply_text = AsyncMock()
+
+    context = MagicMock()
+    await on_admin_text(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    args, kwargs = update.message.reply_text.await_args
+    assert "נבחרה חבילה: <b>חודש · ₪39</b>" in args[0]
+    assert kwargs.get("reply_markup") is not None
+
+
+
+
 @pytest.mark.anyio
 async def test_admin_gen_callback_creates_vip_code(monkeypatch):
     monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))

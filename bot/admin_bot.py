@@ -6,8 +6,10 @@ import logging
 from datetime import datetime, timezone
 
 from telegram import (
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.ext import (
@@ -15,6 +17,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 from telegram.request import HTTPXRequest
 
@@ -22,6 +26,7 @@ from bot.access import get_user_info, init_access_db, list_users_first_seen
 from bot.config import ADMIN_BOT_TOKEN, ADMIN_USER_IDS, get_admin_user_ids
 from bot.generate_coupons import generate_coupon_codes
 from bot.purchase import ADMIN_PACKAGE_CATALOG, PACKAGE_CATALOG, PackageOption, get_package
+
 
 log = logging.getLogger("beam_admin_bot")
 
@@ -42,6 +47,31 @@ def _is_admin(update: Update) -> bool:
 
 
 
+def build_admin_persistent_reply_keyboard() -> ReplyKeyboardMarkup:
+    buttons = [
+        [pkg.label_hebrew() for pkg in ADMIN_PACKAGE_CATALOG[:2]],
+        [pkg.label_hebrew() for pkg in ADMIN_PACKAGE_CATALOG[2:4]],
+        [ADMIN_PACKAGE_CATALOG[4].label_hebrew(), "👥 רשימת משתמשים"],
+    ]
+    return ReplyKeyboardMarkup(
+        buttons,
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+_ADMIN_BOT_COMMANDS = [
+    BotCommand("start", "תפריט אדמין ליצירת קופונים"),
+    BotCommand("users", "רשימת משתמשים וקישורים"),
+    BotCommand("user", "פרטי משתמש לפי ID (/user <ID>)"),
+    BotCommand("help", "עזרה ותפריט"),
+]
+
+
+async def _post_init_set_admin_commands(application: Application) -> None:
+    await application.bot.set_my_commands(_ADMIN_BOT_COMMANDS)
+
+
 def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
@@ -53,7 +83,6 @@ def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
     # 2 כפתורים בשורה
     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
     return InlineKeyboardMarkup(rows)
-
 
 
 def build_quantity_keyboard(package_id: str) -> InlineKeyboardMarkup:
@@ -82,6 +111,42 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "בחר חבילה ליצירת קוד קופון:",
         reply_markup=build_admin_menu_keyboard(),
     )
+    # שליחת/רענון המקלדת הקבועה בתחתית המסך
+    await update.message.reply_text(
+        "מקלדת ניהול פעילה בתחתית המסך.",
+        reply_markup=build_admin_persistent_reply_keyboard(),
+    )
+
+
+async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.text:
+        return
+    if not _is_admin(update):
+        await update.message.reply_text(_UNAUTHORIZED_TEXT)
+        return
+
+    text = update.message.text.strip()
+    if "משתמשים" in text or "רשימ" in text:
+        await cmd_users(update, context)
+        return
+
+    for pkg in ADMIN_PACKAGE_CATALOG:
+        if text == pkg.label_hebrew() or pkg.package_id in text:
+            await update.message.reply_text(
+                f"נבחרה חבילה: <b>{pkg.label_hebrew()}</b>\nכמה קודים תרצה לייצר?",
+                reply_markup=build_quantity_keyboard(pkg.package_id),
+                parse_mode="HTML",
+            )
+            return
+
+    if "יצירת" in text or "קופון" in text:
+        await cmd_start(update, context)
+    else:
+        await update.message.reply_text(
+            "תפריט ניהול אדמין:",
+            reply_markup=build_admin_persistent_reply_keyboard(),
+        )
+
 
 
 async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -101,9 +166,9 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         uname = row[2] if len(row) > 2 else None
         dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
         if uname:
-            user_link = f"<a href=\"https://t.me/{uname}\">@{uname}</a>"
+            user_link = f'<a href="https://t.me/{uname}">@{uname}</a>'
         else:
-            user_link = f"<a href=\"tg://user?id={uid}\">פתח שיחה בטלגרם</a>"
+            user_link = f'<a href="tg://user?id={uid}">פרופיל ({uid})</a>'
         lines.append(f"• ID: <code>{uid}</code> | {user_link} ({dt})")
 
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
@@ -135,9 +200,9 @@ async def cmd_user_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     dt = datetime.fromtimestamp(info["first_seen_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
 
     if uname:
-        chat_link = f"<a href=\"https://t.me/{uname}\">@{uname} (לחץ לפתיחת שיחה)</a>"
+        chat_link = f'<a href="https://t.me/{uname}">@{uname} (לחץ לפתיחת שיחה)</a>'
     else:
-        chat_link = f"<a href=\"tg://user?id={uid}\">פתח שיחה אישית בטלגרם</a>"
+        chat_link = f'<a href="tg://user?id={uid}">פרופיל משתמש ({uid})</a> (ללא יוזרניים בטלגרם)'
 
     coupon_str = "אין קופון פעיל"
     if info["active_coupon"]:
@@ -242,6 +307,7 @@ def build_admin_application(token: str | None = None) -> Application:
         .token(resolved_token)
         .request(request)
         .get_updates_request(request)
+        .post_init(_post_init_set_admin_commands)
         .build()
     )
     app.add_handler(CommandHandler("start", cmd_start))
@@ -249,7 +315,9 @@ def build_admin_application(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler("user", cmd_user_detail))
     app.add_handler(CallbackQueryHandler(on_admin_callback, pattern=r"^admin:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_text))
     return app
+
 
 
 

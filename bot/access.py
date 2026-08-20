@@ -192,7 +192,7 @@ def _ensure_user_first_seen_unlocked(
     conn: sqlite3.Connection, user_id: int, now: float, username: str | None = None
 ) -> float:
     uid = int(user_id)
-    clean_username = username.strip().lstrip("@") if username else None
+    clean_username = username.strip().lstrip("@") if isinstance(username, str) and username.strip() else None
     row = conn.execute(
         "SELECT first_seen_at, username FROM user_first_seen WHERE user_id = ?",
         (uid,),
