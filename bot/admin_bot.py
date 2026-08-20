@@ -226,8 +226,10 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
 
-def build_admin_application() -> Application:
-    if not ADMIN_BOT_TOKEN:
+def build_admin_application(token: str | None = None) -> Application:
+    import os as _os
+    resolved_token = token or _os.getenv("ADMIN_BOT_TOKEN", "").strip() or ADMIN_BOT_TOKEN
+    if not resolved_token:
         raise RuntimeError("ADMIN_BOT_TOKEN is not set")
     request = HTTPXRequest(
         connect_timeout=30.0,
@@ -237,7 +239,7 @@ def build_admin_application() -> Application:
     )
     app = (
         Application.builder()
-        .token(ADMIN_BOT_TOKEN)
+        .token(resolved_token)
         .request(request)
         .get_updates_request(request)
         .build()
@@ -252,13 +254,14 @@ def build_admin_application() -> Application:
 
 
 def run_admin_bot() -> None:
-    if not ADMIN_BOT_TOKEN:
+    import os
+    token = os.getenv("ADMIN_BOT_TOKEN", "").strip() or ADMIN_BOT_TOKEN
+    if not token:
         log.info("Admin bot disabled — ADMIN_BOT_TOKEN not set")
         return
-    if not ADMIN_USER_IDS:
-        log.warning("Admin bot disabled — ADMIN_USER_IDS is empty")
-        return
+    admin_ids = get_admin_user_ids() or ADMIN_USER_IDS
     init_access_db()
-    log.info("Admin bot starting (authorized users: %s)", sorted(ADMIN_USER_IDS))
+    log.info("Admin bot starting (authorized users: %s)", sorted(admin_ids) if admin_ids else "ALL")
     app = build_admin_application()
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+

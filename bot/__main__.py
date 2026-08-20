@@ -88,7 +88,7 @@ async def _run_both_bots(main_app: Application, admin_app: Application) -> None:
         await admin_app.start()
         await main_app.updater.start_polling(**_POLLING_KW)
         await admin_app.updater.start_polling(**_POLLING_KW)
-        log.info("Admin bot polling started (authorized users: %s)", sorted(ADMIN_USER_IDS))
+        log.info("Both bots polling started")
         try:
             await asyncio.Event().wait()
         finally:
@@ -102,8 +102,11 @@ def main() -> None:
     env_files = load_env_files()
     log_startup_config(env_files)
     acquire_bot_instance_lock()
-    
-    token = require_env(*TELEGRAM_KEY_NAMES, label="Telegram bot token")
+
+    # Read tokens AFTER env is loaded
+    main_token = require_env(*TELEGRAM_KEY_NAMES, label="Telegram bot token")
+    admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip()
+
     gemini_runtime()
     init_access_db()
     init_exercise_bank_db()
@@ -111,13 +114,13 @@ def main() -> None:
     request = HTTPXRequest(connect_timeout=30.0, read_timeout=90.0, write_timeout=90.0, pool_timeout=30.0)
     app_bot = (
         Application.builder()
-        .token(token)
+        .token(main_token)
         .request(request)
         .get_updates_request(request)
         .post_init(_post_init_set_commands)
         .build()
     )
-    
+
     # לפני כל טיפול — מרענן מקלדת/תפריט אם המשתמש עדיין על גרסת ממשק ישנה.
     app_bot.add_handler(TypeHandler(Update, sync_chat_ui_to_current_version), group=-1)
     app_bot.add_handler(CommandHandler("start", cmd_start))
@@ -133,7 +136,6 @@ def main() -> None:
     app_bot.add_handler(CallbackQueryHandler(on_menu_callback, pattern=r"^menu:"))
     app_bot.add_handler(CallbackQueryHandler(on_buy_callback, pattern=r"^buy:"))
 
-
     if INTRO_AVAILABLE:
         app_bot.add_handler(CallbackQueryHandler(on_intro_callback, pattern=r"^intro:"))
     app_bot.add_handler(CallbackQueryHandler(on_formula_callback, pattern=r"^formula:"))
@@ -148,18 +150,15 @@ def main() -> None:
     port = int(os.environ.get("PORT", 8080))
     threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
 
-    admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip() or ADMIN_BOT_TOKEN
-    admin_user_ids = get_admin_user_ids() or ADMIN_USER_IDS
-
     if admin_token:
         from bot.admin_bot import build_admin_application
-
-        log.info("Admin bot starting (authorized users: %s)", sorted(admin_user_ids) if admin_user_ids else "ALL")
-        admin_app = build_admin_application()
+        admin_ids = get_admin_user_ids()
+        log.info("Admin bot starting (authorized users: %s)", sorted(admin_ids) if admin_ids else "ALL")
+        admin_app = build_admin_application(admin_token)
         asyncio.run(_run_both_bots(app_bot, admin_app))
     else:
+        log.info("Admin bot disabled — ADMIN_BOT_TOKEN not set")
         app_bot.run_polling(**_POLLING_KW)
-
 
 
 if __name__ == "__main__":
