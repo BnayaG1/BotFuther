@@ -113,10 +113,9 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0]
     assert "סה״כ: 2" in text
-    assert "111" in text
     assert "@john_doe" in text
     assert "https://t.me/john_doe" in text
-    assert "tg://user?id=222" in text
+    assert "222" in text
 
 
 @pytest.mark.anyio

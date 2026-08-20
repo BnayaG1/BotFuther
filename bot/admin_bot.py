@@ -173,12 +173,14 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         if uname:
             user_str = f'<a href="https://t.me/{uname}">@{uname}</a>'
+            user_field = f"@{uname}"
         else:
             user_str = f'<a href="tg://user?id={uid}">פרופיל ({uid})</a>'
+            user_field = f"ללא שם משתמש (ID: <code>{uid}</code>)"
 
         lines.append(
             f"<b>{idx}. {user_str}</b>\n"
-            f"   • 🆔 מזהה: <code>{uid}</code>\n"
+            f"   • 👤 שם משתמש: {user_field}\n"
             f"   • 📅 הצטרפ/ה: {dt}\n"
         )
 
