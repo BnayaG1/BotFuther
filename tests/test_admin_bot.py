@@ -100,7 +100,7 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
     monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))
     monkeypatch.setattr(
         "bot.admin_bot.list_users_first_seen",
-        lambda: [(111, 1_700_000_000.0, "john_doe"), (222, 1_700_000_060.0, None)],
+        lambda **kwargs: [(111, 1_700_000_000.0, "john_doe"), (222, 1_700_000_060.0, None)],
     )
 
     update = MagicMock()

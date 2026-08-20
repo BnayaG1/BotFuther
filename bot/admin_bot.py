@@ -155,7 +155,8 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_admin(update):
         await update.message.reply_text(_UNAUTHORIZED_TEXT)
         return
-    rows = list_users_first_seen()
+    admin_ids = ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids()
+    rows = list_users_first_seen(exclude_admin_ids=admin_ids)
     if not rows:
         await update.message.reply_text("אין משתמשים במערכת.")
         return

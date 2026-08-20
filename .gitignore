@@ -10,6 +10,8 @@ _bot_temp_images/
 *.lock
 coupons.db
 exercises.db
+access.db
+data/
 coupons.backup*.db
 *.db-journal
 *.log
@@ -21,5 +23,6 @@ validator_images/failures/
 exercise_generator/output/**
 !exercise_generator/output/.gitkeep
 !exercise_generator/output/.gitignore
+
 
 

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+import os
+
 from bot.config import (
     APP_DIR,
     FREE_TRIAL_IMAGES,
@@ -23,7 +25,11 @@ log = logging.getLogger("beam_telegram_bot")
 _db_lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-DB_PATH = (APP_DIR / "access.db").resolve()
+_raw_access_db = (
+    os.getenv("ACCESS_DB_PATH", "").strip()
+    or os.getenv("DB_PATH", "").strip()
+)
+DB_PATH = Path(_raw_access_db).resolve() if _raw_access_db else (APP_DIR / "data" / "access.db").resolve()
 
 # חלון מועדף: 24 שעות מ־first_seen_at (/start ראשון).
 FORMULAS_FREE_WINDOW_SEC = 24 * 3600
@@ -420,13 +426,15 @@ def ensure_user_first_seen(
         return _ensure_user_first_seen_unlocked(conn, int(user_id), ts, username=username)
 
 
-def list_users_first_seen() -> list[tuple[int, float, str | None]]:
+def list_users_first_seen(*, exclude_admin_ids: set[int] | frozenset[int] | None = None) -> list[tuple[int, float, str | None]]:
     conn = _connect()
     with _db_lock:
         rows = conn.execute(
             "SELECT user_id, first_seen_at, username FROM user_first_seen "
+            "WHERE user_id > 0 "
             "ORDER BY first_seen_at ASC, user_id ASC"
         ).fetchall()
+        admins = set(exclude_admin_ids) if exclude_admin_ids else set()
         return [
             (
                 int(r["user_id"]),
@@ -434,6 +442,7 @@ def list_users_first_seen() -> list[tuple[int, float, str | None]]:
                 r["username"] if "username" in r.keys() else None,
             )
             for r in rows
+            if int(r["user_id"]) not in admins
         ]
 
 
