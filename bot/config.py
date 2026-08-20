@@ -87,6 +87,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+COUPON_ACCESS_ENABLED = _env_bool("COUPON_ACCESS_ENABLED", True)
+COUPON_GATE_VERSION = "2026-08-18"
+
+_raw_coupon_path = os.getenv("COUPON_DB_PATH", "").strip()
+if _raw_coupon_path:
+    COUPON_DB_PATH = Path(_raw_coupon_path)
+else:
+    COUPON_DB_PATH = APP_DIR / "access.db"
+
+
+
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -283,11 +294,6 @@ COG_CATALOG_ALIASES: dict[str, str] = {
     "צינור עגול": "צינור עגול",
 }
 
-COUPON_DB_PATH = Path(
-    os.getenv("COUPON_DB_PATH", str(APP_DIR / "coupons.db"))
-).resolve()
-COUPON_ACCESS_ENABLED = _env_bool("COUPON_ACCESS_ENABLED", True)
-
 # גרסת ממשק ללקוח טלגרם — להעלות בכל שינוי מקלדת/תפריט/חבילות.
 # אחרי דיפלוי, בהודעה הראשונה של כל משתמש המקלדת מתרעננת לגרסה הזו.
 BOT_UI_VERSION = os.getenv("BOT_UI_VERSION", "2026-08-02-packages-30-90").strip()
@@ -319,11 +325,9 @@ EXERCISE_BANK_SEED_DB_PATH = (
     APP_DIR / "assets" / "exercise_bank" / "exercises.seed.db"
 ).resolve()
 EXERCISE_BANK_SEED_IMAGES_DIR = (APP_DIR / "assets" / "exercise_bank").resolve()
-COUPON_GATE_VERSION = "v3-period"
 IMAGE_QUOTA_WINDOW_HOURS = _env_int("IMAGE_QUOTA_WINDOW_HOURS", 24)
 IMAGE_QUOTA_WINDOW_SEC = float(IMAGE_QUOTA_WINDOW_HOURS * 3600)
 IMAGE_COOLDOWN_SEC = float(max(0, _env_int("IMAGE_COOLDOWN_SEC", 600)))
-# בלי קופון פעיל: שליחת תמונות בלי מכסה, עם המתנה ארוכה יותר בין תמונות.
 IMAGE_GUEST_COOLDOWN_SEC = float(max(0, _env_int("IMAGE_GUEST_COOLDOWN_SEC", 1200)))
 EXERCISE_BANK_COOLDOWN_SEC = float(max(0, _env_int("EXERCISE_BANK_COOLDOWN_SEC", 900)))
 FREE_TRIAL_IMAGES = max(0, _env_int("FREE_TRIAL_IMAGES", 2))
@@ -339,14 +343,33 @@ ADMIN_CHAT_ID = _env_int("ADMIN_CHAT_ID", 0)
 ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "").strip()
 
 
-def _parse_admin_user_ids() -> frozenset[int]:
-    raw = os.getenv("ADMIN_USER_IDS", "").strip()
+def get_admin_user_ids() -> frozenset[int]:
     ids: set[int] = set()
-    for part in raw.split(","):
-        token = part.strip()
-        if token.isdigit():
-            ids.add(int(token))
+    for var_name in ("ADMIN_USER_IDS", "ADMIN_TELEGRAM_ID", "ADMIN_ID", "ADMIN_IDS"):
+        raw = os.getenv(var_name, "").strip()
+        if not raw:
+            continue
+        for part in raw.split(","):
+            token = part.strip().strip("'\"")
+            if token.isdigit():
+                ids.add(int(token))
+    admin_chat = _env_int("ADMIN_CHAT_ID", 0)
+    if admin_chat > 0:
+        ids.add(admin_chat)
     return frozenset(ids)
 
 
+
+def _parse_admin_user_ids() -> frozenset[int]:
+    return get_admin_user_ids()
+
+
+def reload_admin_user_ids() -> frozenset[int]:
+    global ADMIN_USER_IDS, ADMIN_BOT_TOKEN
+    ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "").strip()
+    ADMIN_USER_IDS = get_admin_user_ids()
+    return ADMIN_USER_IDS
+
+
 ADMIN_USER_IDS = _parse_admin_user_ids()
+

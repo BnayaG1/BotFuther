@@ -51,7 +51,7 @@ async def test_menu_new_prompts_to_send_exercise():
     context.bot.send_message = AsyncMock()
     solution_session._pending_solve_mode.pop(88000, None)
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", False):
+    with patch.object(handlers, "check_solve_access", return_value=handlers.ImageAccessResult(status=handlers.ImageAccessStatus.OK)):
         await handlers.on_menu_callback(update, context)
 
     query.answer.assert_awaited_once()
@@ -133,7 +133,7 @@ async def test_on_image_without_pending_defaults_to_notebook():
     context = MagicMock()
     solution_session._pending_solve_mode.pop(chat_id, None)
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", False):
+    with patch.object(handlers, "check_solve_access", return_value=handlers.ImageAccessResult(status=handlers.ImageAccessStatus.OK)):
         with patch.object(handlers, "begin_image_session") as mock_begin:
             mock_begin.return_value = MagicMock()
             with patch.object(
@@ -161,7 +161,7 @@ async def test_on_image_after_assistant_pick_uses_assistant_mode():
 
     context = MagicMock()
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", False):
+    with patch.object(handlers, "check_solve_access", return_value=handlers.ImageAccessResult(status=handlers.ImageAccessStatus.OK)):
         with patch.object(handlers, "begin_image_session") as mock_begin:
             mock_begin.return_value = MagicMock()
             with patch.object(

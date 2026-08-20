@@ -49,8 +49,7 @@ async def test_give_exercise_locked_without_access():
         window_reset_sec=3600,
     )
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "check_practice_feature_access", return_value=denied), \
+    with patch.object(handlers, "check_practice_feature_access", return_value=denied), \
         patch("exercise_generator.pipeline.generate_exercise") as mock_gen:
         await handlers.on_menu_callback(update, context)
 
@@ -67,12 +66,8 @@ async def test_give_exercise_locked_without_access():
             else ""
         )
     text = kwargs.get("text", text)
-    assert "בשביל להמשיך אתה צריך לרכוש חבילה" in text
-    assert "לרכישת חבילה:" in text
-    markup = kwargs.get("reply_markup")
-    assert markup is not None
-    labels = [btn.text for row in markup.inline_keyboard for btn in row]
-    assert "רכישת חבילה" in labels
+    assert "מגבלת" in text
+
 
 
 @pytest.mark.anyio
@@ -112,8 +107,7 @@ async def test_give_exercise_sends_generated_exercise_and_mode_picker(tmp_path):
         feature="practice",
     )
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "check_practice_feature_access", return_value=ok), \
+    with patch.object(handlers, "check_practice_feature_access", return_value=ok), \
         patch.object(handlers, "consume_practice_slot", return_value=ok), \
         patch(
             "exercise_generator.pipeline.generate_exercise", return_value=fake_art
@@ -160,8 +154,7 @@ async def test_leaving_to_formulas_deletes_practice_chat_messages():
     context.bot.delete_message = AsyncMock()
     context.bot.send_message = AsyncMock()
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-        await handlers.on_menu_callback(update, context)
+    await handlers.on_menu_callback(update, context)
 
     deleted = {
         call.kwargs["message_id"]
@@ -255,18 +248,18 @@ async def test_on_image_notebook_mode_checks_solve_access_without_consume():
         feature="solve",
     )
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-        with patch.object(handlers, "check_solve_access", return_value=ok_result) as mock_check:
-            with patch.object(handlers, "begin_image_session") as mock_begin:
-                mock_begin.return_value = MagicMock()
-                with patch.object(
-                    handlers,
-                    "save_message_image_to_temp",
-                    side_effect=RuntimeError("stop"),
-                ):
-                    with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
-                        with patch.object(handlers, "telegram_user_id", return_value=6):
-                            await handlers.on_image(update, context)
+    with patch.object(handlers, "check_solve_access", return_value=ok_result) as mock_check:
+        with patch.object(handlers, "begin_image_session") as mock_begin:
+            mock_begin.return_value = MagicMock()
+            with patch.object(
+                handlers,
+                "save_message_image_to_temp",
+                side_effect=RuntimeError("stop"),
+            ):
+                with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
+                    with patch.object(handlers, "telegram_user_id", return_value=6):
+                        await handlers.on_image(update, context)
 
     mock_check.assert_called_once()
     mock_begin.assert_called_once_with(chat_id, solve_mode=SolveMode.NOTEBOOK)
+

@@ -23,7 +23,9 @@ from bot.config import (
     ADMIN_USER_IDS,
     APP_DIR,
     TELEGRAM_KEY_NAMES,
+    get_admin_user_ids,
 )
+
 from bot.env import load_env_files, log_startup_config, require_env
 from bot.gemini_chat import gemini_runtime
 from bot.access import init_access_db
@@ -47,6 +49,8 @@ from bot.handlers import (
     on_text,
     sync_chat_ui_to_current_version,
 )
+
+
 from bot.instance_lock import acquire_bot_instance_lock
 
 # Flask פשוט כדי למנוע מ-Render לסגור את השרת
@@ -65,11 +69,11 @@ _POLLING_KW = {"drop_pending_updates": True, "allowed_updates": Update.ALL_TYPES
 _BOT_COMMANDS = [
     BotCommand("start", "תפריט ראשי"),
     BotCommand("formulas", "נוסחאות"),
-    BotCommand("coupon", "קופון / רכישת חבילה"),
     BotCommand("quota", "מכסה"),
     BotCommand("reset", "איפוס תרגיל"),
     BotCommand("help", "עזרה"),
 ]
+
 
 
 async def _post_init_set_commands(application: Application) -> None:
@@ -120,13 +124,16 @@ def main() -> None:
     app_bot.add_handler(CommandHandler("help", cmd_start))
     app_bot.add_handler(CommandHandler("reset", cmd_reset))
     app_bot.add_handler(CommandHandler("ping", cmd_ping))
-    app_bot.add_handler(CommandHandler("coupon", cmd_coupon))
     app_bot.add_handler(CommandHandler("quota", cmd_quota))
     app_bot.add_handler(CommandHandler("formulas", cmd_formulas))
     app_bot.add_handler(CommandHandler("formula", cmd_formulas))
+    app_bot.add_handler(CommandHandler("coupon", cmd_coupon))
+
     app_bot.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_image))
     app_bot.add_handler(CallbackQueryHandler(on_menu_callback, pattern=r"^menu:"))
     app_bot.add_handler(CallbackQueryHandler(on_buy_callback, pattern=r"^buy:"))
+
+
     if INTRO_AVAILABLE:
         app_bot.add_handler(CallbackQueryHandler(on_intro_callback, pattern=r"^intro:"))
     app_bot.add_handler(CallbackQueryHandler(on_formula_callback, pattern=r"^formula:"))
@@ -141,17 +148,19 @@ def main() -> None:
     port = int(os.environ.get("PORT", 8080))
     threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
 
-    if ADMIN_BOT_TOKEN and ADMIN_USER_IDS:
+    admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip() or ADMIN_BOT_TOKEN
+    admin_user_ids = get_admin_user_ids() or ADMIN_USER_IDS
+
+    if admin_token:
         from bot.admin_bot import build_admin_application
 
-        log.info("Admin bot starting (authorized users: %s)", sorted(ADMIN_USER_IDS))
+        log.info("Admin bot starting (authorized users: %s)", sorted(admin_user_ids) if admin_user_ids else "ALL")
         admin_app = build_admin_application()
         asyncio.run(_run_both_bots(app_bot, admin_app))
-    elif ADMIN_BOT_TOKEN:
-        log.warning("ADMIN_BOT_TOKEN set but ADMIN_USER_IDS empty — admin bot not started")
-        app_bot.run_polling(**_POLLING_KW)
     else:
         app_bot.run_polling(**_POLLING_KW)
+
+
 
 if __name__ == "__main__":
     if str(APP_DIR) not in sys.path:

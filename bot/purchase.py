@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""תפריט רכישת חבילות קופון — בחירה, אישור, הוראות תשלום בביט."""
+"""תפריט רכישת חבילות — בחירה, אישור, הוראות תשלום בביט."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,16 +19,24 @@ class PackageOption:
 
     @property
     def tier(self) -> int:
-        """מכסה יומית — תואמת ל-tier בקופון."""
+        """מכסה יומית."""
         return self.daily_quota
 
     def label_hebrew(self) -> str:
+        if self.daily_quota >= 999:
+            return "VIP ללא הגבלות (120 יום)"
         period = _period_label(self.period_days)
         if self.original_price_ils and self.original_price_ils != self.price_ils:
             return f"{period} · ₪{self.price_ils} (במקום ₪{self.original_price_ils})"
         return f"{period} · ₪{self.price_ils}"
 
     def summary_hebrew(self) -> str:
+        if self.daily_quota >= 999:
+            return (
+                "• תקופה: <b>120 יום</b>\n"
+                "• דרגה: <b>VIP ללא הגבלות</b>\n"
+                "• גישה מלאה ללא צינון וללא מגבלה יומית + פתיחת מאגר תרגילים"
+            )
         period = _period_label(self.period_days)
         if self.original_price_ils and self.original_price_ils != self.price_ils:
             price_str = f"₪{self.price_ils} (במקום ₪{self.original_price_ils})"
@@ -60,12 +68,17 @@ def _period_label(days: int) -> str:
 
 PACKAGE_CATALOG: tuple[PackageOption, ...] = (
     PackageOption("6_30", 6, 30, 39),
-    PackageOption("6_60", 6, 60, 74, 78),
-    PackageOption("6_90", 6, 90, 105, 117),
-    PackageOption("6_120", 6, 120, 134, 156),
+    PackageOption("6_60", 6, 60, 72, 78),
+    PackageOption("6_90", 6, 90, 99, 117),
+    PackageOption("6_120", 6, 120, 120, 156),
 )
 
-_PACKAGES_BY_ID: dict[str, PackageOption] = {p.package_id: p for p in PACKAGE_CATALOG}
+
+_VIP_OPTION = PackageOption("vip_unlimited", 999999, 120, 0)
+ADMIN_PACKAGE_CATALOG: tuple[PackageOption, ...] = (*PACKAGE_CATALOG, _VIP_OPTION)
+
+_PACKAGES_BY_ID: dict[str, PackageOption] = {p.package_id: p for p in ADMIN_PACKAGE_CATALOG}
+
 
 
 def get_package(package_id: str) -> PackageOption | None:
@@ -122,7 +135,7 @@ def payment_instructions_hebrew(pkg: PackageOption) -> str:
         "<b>אחרי התשלום:</b>\n"
         "שלח/י צילום מסך של אישור התשלום בוואטסאפ:\n"
         f"{PAYMENT_CONFIRM_WHATSAPP_URL}\n\n"
-        "לאחר שנאשר את התשלום יישלח אליך קוד קופון בהודעה."
+        "לאחר שנאשר את התשלום יישלח אליך קוד בהודעה."
     )
 
 
@@ -136,25 +149,6 @@ def build_payment_keyboard() -> InlineKeyboardMarkup:
                 )
             ]
         ]
-    )
-
-
-def admin_purchase_notification_hebrew(
-    *,
-    user_id: int,
-    username: str | None,
-    first_name: str | None,
-    pkg: PackageOption,
-    request_id: int,
-) -> str:
-    uname = f"@{username}" if username else "—"
-    name = first_name or "—"
-    return (
-        f"בקשת רכישה #{request_id}\n"
-        f"משתמש: {name} ({uname})\n"
-        f"user_id: {user_id}\n"
-        f"חבילה: {pkg.label_hebrew()}\n"
-        f"לגבות: ₪{pkg.price_ils} בביט"
     )
 
 

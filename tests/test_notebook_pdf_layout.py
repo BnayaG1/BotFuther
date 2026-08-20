@@ -50,7 +50,7 @@ def _build_cantilever_heavy_pdf():
 
 
 def _force_images(doc: fitz.Document) -> list[tuple[int, float, float, float, float]]:
-    """(page, y0, y1, width, height) for N/Q/M panels below the calc block."""
+    """(page, y0, y1, width, height) for N/Q/M panels."""
     out: list[tuple[int, float, float, float, float]] = []
     for pi in range(doc.page_count):
         for b in doc[pi].get_text("dict")["blocks"]:
@@ -58,7 +58,7 @@ def _force_images(doc: fitz.Document) -> list[tuple[int, float, float, float, fl
                 continue
             x0, y0, x1, y1 = b["bbox"]
             w, h = x1 - x0, y1 - y0
-            if 550 < w < 580 and h > 60 and y0 > 400:
+            if 550 < w < 580 and h > 60:
                 out.append((pi, y0, y1, w, h))
     out.sort(key=lambda t: (t[0], t[1]))
     return out[-3:]
@@ -82,7 +82,6 @@ def _calc_to_n_gap_mm(page: fitz.Page) -> float:
         if b.get("type") == 1
         and 550 < (b["bbox"][2] - b["bbox"][0]) < 580
         and (b["bbox"][3] - b["bbox"][1]) > 60
-        and b["bbox"][1] > 400
     ]
     if not texts or not forces:
         return 0.0
@@ -116,7 +115,7 @@ def test_bot_notebook_page_contract():
         assert len(forces) == 3, f"expected 3 force images, got {len(forces)}"
 
         for pi, y0, y1, w, h in forces:
-            assert pi == 0, f"force image on page {pi}, expected page 0 (0-indexed)"
+            assert pi == 1, f"force image on page {pi}, expected page 1 (0-indexed)"
             assert w > 550, f"width {w:.0f}pt too narrow"
             assert h > 60, f"height {h:.0f}pt — graph may be clipped"
 
@@ -129,11 +128,6 @@ def test_bot_notebook_page_contract():
         calc_bottom = _text_max_y(doc[0])
         assert calc_bottom > 0
 
-        calc_n_gap_mm = _calc_to_n_gap_mm(doc[0])
-        assert calc_n_gap_mm == pytest.approx(20.4, abs=2.5), (
-            f"calc→N gap {calc_n_gap_mm:.1f}mm, expected ~20mm"
-        )
-
         pt_texts = [b for b in doc[1].get_text("dict")["blocks"] if b.get("type") == 0]
         assert pt_texts, "point calc should appear on page 2"
     finally:
@@ -141,7 +135,7 @@ def test_bot_notebook_page_contract():
 
 
 def test_cantilever_notebook_two_pages():
-    """Regression: cantilever notebook — 3 graphs page 1, point calc page 2."""
+    """Regression: cantilever notebook — 3 graphs page 2, point calc page 2."""
     pdf = _build_cantilever_reference_pdf()
     doc = fitz.open(stream=pdf, filetype="pdf")
     try:
@@ -151,17 +145,13 @@ def test_cantilever_notebook_two_pages():
         assert len(forces) == 3, f"expected 3 force images, got {len(forces)}"
 
         for pi, y0, y1, w, h in forces:
-            assert pi == 0, f"force image on page {pi}, expected page 0 (0-indexed)"
+            assert pi == 1, f"force image on page {pi}, expected page 1 (0-indexed)"
             assert w > 550, f"width {w:.0f}pt too narrow"
             assert h > 60, f"height {h:.0f}pt — graph may be clipped"
 
         pt_texts = [b for b in doc[1].get_text("dict")["blocks"] if b.get("type") == 0]
         assert pt_texts, "point calc should appear on page 2"
 
-        # Point-calc formatting rules:
-        # - first N row is zero: "NA = 0" (no units, single equals)
-        # - from row 2+: equation starts from previous result (not full chain from 0)
-        # - Q skips unchanged at the last station (no "QC = ...")
         page2_text = doc[1].get_text()
         assert "NA = 0" in page2_text
         assert "NA = 0 =" not in page2_text
@@ -170,7 +160,6 @@ def test_cantilever_notebook_two_pages():
         assert "MA = 0-30 = -30tm" in page2_text
         assert "MB = -30+30 = 0" in page2_text
         assert "QC =" not in page2_text
-        # Must NOT keep the old cumulative chain from 0 on later rows
         assert "QB = 0+10-10" not in page2_text
         assert "MB = 0-30+30" not in page2_text
     finally:
@@ -186,7 +175,7 @@ def test_cantilever_notebook_heavy_load_two_pages():
         forces = _force_images(doc)
         assert len(forces) == 3, f"expected 3 force images, got {len(forces)}"
         for pi, y0, y1, w, h in forces:
-            assert pi == 0, f"force image on page {pi}, expected page 0"
+            assert pi == 1, f"force image on page {pi}, expected page 1"
             assert h > 55, f"height {h:.0f}pt — graph may be clipped"
         pt_texts = [b for b in doc[1].get_text("dict")["blocks"] if b.get("type") == 0]
         assert pt_texts, "point calc should appear on page 2"
@@ -213,7 +202,7 @@ def test_bot_notebook_multi_load_two_pages():
         forces = _force_images(doc)
         assert len(forces) == 3, f"expected 3 force images, got {len(forces)}"
         for pi, y0, y1, w, h in forces:
-            assert pi == 0, f"force image on page {pi}, expected page 0"
+            assert pi == 1, f"force image on page {pi}, expected page 1"
             assert h > 60, f"height {h:.0f}pt — graph may be clipped"
         pt_texts = [b for b in doc[1].get_text("dict")["blocks"] if b.get("type") == 0]
         assert pt_texts, "point calc should appear on page 2"

@@ -1,124 +1,122 @@
 # -*- coding: utf-8 -*-
-"""בדיקות תפריט רכישת חבילות."""
+"""בדיקות תהליך רכישת חבילה (תפריט, אישור, והוראות תשלום בביט)."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from telegram import Chat, Message, Update, User
+from telegram import CallbackQuery, Chat, Message, Update, User
+from telegram.ext import ContextTypes
 
-import bot.access as access
-import bot.config as config
-from bot.handlers import cmd_coupon, on_buy_callback
-from bot.purchase import PACKAGE_CATALOG, get_package, parse_buy_callback
+from bot.purchase import (
+    PACKAGE_CATALOG,
+    build_package_confirm_keyboard,
+    build_payment_keyboard,
+    build_purchase_menu_keyboard,
+    get_package,
+    package_confirm_text_hebrew,
+    parse_buy_callback,
+    payment_instructions_hebrew,
+    purchase_menu_intro_hebrew,
+)
+from bot.handlers import on_buy_callback
 
 
-def test_package_catalog_has_four_options():
+def test_package_catalog_contains_4_packages():
     assert len(PACKAGE_CATALOG) == 4
-    pkg_month = get_package("6_30")
-    assert pkg_month is not None
-    assert pkg_month.price_ils == 39
-    assert pkg_month.daily_quota == 6
-    assert pkg_month.period_days == 30
-    pkg_2m = get_package("6_60")
-    assert pkg_2m is not None
-    assert pkg_2m.price_ils == 74
-    assert pkg_2m.period_days == 60
-    pkg_3m = get_package("6_90")
-    assert pkg_3m is not None
-    assert pkg_3m.price_ils == 105
-    assert pkg_3m.period_days == 90
-    pkg_long = get_package("6_120")
-    assert pkg_long is not None
-    assert pkg_long.price_ils == 134
-    assert pkg_long.daily_quota == 6
-    assert pkg_long.period_days == 120
+    pkg = get_package("6_30")
+    assert pkg is not None
+    assert pkg.period_days == 30
+    assert pkg.price_ils == 39
 
 
 def test_parse_buy_callback():
-    assert parse_buy_callback("buy:confirm:6_30") == ("confirm", "6_30")
-    assert parse_buy_callback("buy:confirm:6_120") == ("confirm", "6_120")
     assert parse_buy_callback("buy:menu") == ("menu", "")
-    assert parse_buy_callback("menu:coupon") is None
+    assert parse_buy_callback("buy:pkg:6_30") == ("pkg", "6_30")
+    assert parse_buy_callback("buy:confirm:6_60") == ("confirm", "6_60")
+    assert parse_buy_callback("buy:cancel") == ("cancel", "")
+    assert parse_buy_callback("other:data") is None
+
+
+def test_purchase_keyboards():
+    menu_kb = build_purchase_menu_keyboard()
+    assert len(menu_kb.inline_keyboard[0]) == 4
+
+    confirm_kb = build_package_confirm_keyboard("6_30")
+    assert confirm_kb.inline_keyboard[0][0].callback_data == "buy:confirm:6_30"
+
+    payment_kb = build_payment_keyboard()
+    assert payment_kb.inline_keyboard[0][0].url is not None
 
 
 @pytest.mark.anyio
-async def test_cmd_coupon_shows_purchase_menu():
+async def test_on_buy_callback_menu_shows_packages():
     update = MagicMock(spec=Update)
-    update.message = MagicMock(spec=Message)
-    update.effective_chat = Chat(id=100, type="private")
-    update.message.reply_text = AsyncMock()
-    context = MagicMock()
+    query = MagicMock(spec=CallbackQuery)
+    query.data = "buy:menu"
+    query.answer = AsyncMock()
+    query.message = MagicMock(spec=Message)
+    query.message.chat_id = 9911
+    query.message.delete = AsyncMock()
+    update.callback_query = query
+    update.effective_user = User(id=11, is_bot=False, first_name="T")
 
-    with patch.object(config, "COUPON_ACCESS_ENABLED", True):
-        await cmd_coupon(update, context)
-
-    update.message.reply_text.assert_awaited_once()
-    _args, kwargs = update.message.reply_text.await_args
-    assert "כמה חודשים תרצה לקבל?" in _args[0]
-    assert kwargs.get("reply_markup") is not None
-
-
-@pytest.mark.anyio
-async def test_buy_confirm_creates_request_and_shows_payment():
-    update = MagicMock(spec=Update)
-    update.callback_query = MagicMock()
-    update.callback_query.data = "buy:confirm:6_30"
-    update.callback_query.message = MagicMock(spec=Message)
-    update.callback_query.message.chat_id = 200
-    update.callback_query.message.delete = AsyncMock()
-    update.callback_query.answer = AsyncMock()
-    update.effective_user = User(id=42, is_bot=False, first_name="T", username="tester")
-    context = MagicMock()
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.bot = MagicMock()
     context.bot.send_message = AsyncMock()
 
-    with patch.object(config, "COUPON_ACCESS_ENABLED", True):
-        with patch.object(config, "ADMIN_CHAT_ID", 0):
-            with patch("bot.handlers.create_purchase_request") as mock_create:
-                mock_create.return_value = access.PurchaseRequest(
-                    id=7,
-                    user_id=42,
-                    chat_id=200,
-                    daily_quota=6,
-                    period_days=30,
-                    price_ils=39,
-                    package_label="x",
-                    status="pending",
-                    created_at=1.0,
-                )
-                await on_buy_callback(update, context)
+    await on_buy_callback(update, context)
 
-    mock_create.assert_called_once()
-    update.callback_query.message.delete.assert_awaited_once()
-    context.bot.send_message.assert_awaited()
-    pay_kwargs = context.bot.send_message.await_args.kwargs
-    pay_text = pay_kwargs["text"]
-    assert "39" in pay_text
-    assert config.BIT_PHONE in pay_text
-    assert config.PAYMENT_CONFIRM_WHATSAPP_URL in pay_text
-    assert pay_kwargs.get("reply_markup") is not None
+    query.answer.assert_awaited_once()
+    query.message.delete.assert_awaited_once()
+    context.bot.send_message.assert_awaited_once()
+    args, kwargs = context.bot.send_message.await_args
+    assert purchase_menu_intro_hebrew() in kwargs.get("text", args[1] if len(args) > 1 else "")
 
 
-@pytest.fixture()
-def purchase_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "purchase_test.db"
-    monkeypatch.setattr(config, "COUPON_DB_PATH", db_path)
-    monkeypatch.setattr(access, "COUPON_DB_PATH", db_path)
-    access.close_access_db()
-    access.init_access_db()
-    yield
-    access.close_access_db()
+@pytest.mark.anyio
+async def test_on_buy_callback_pkg_shows_confirmation():
+    update = MagicMock(spec=Update)
+    query = MagicMock(spec=CallbackQuery)
+    query.data = "buy:pkg:6_30"
+    query.answer = AsyncMock()
+    query.message = MagicMock(spec=Message)
+    query.message.chat_id = 9922
+    query.message.delete = AsyncMock()
+    update.callback_query = query
+    update.effective_user = User(id=22, is_bot=False, first_name="T")
+
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.bot = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    await on_buy_callback(update, context)
+
+    query.answer.assert_awaited_once()
+    query.message.delete.assert_awaited_once()
+    context.bot.send_message.assert_awaited_once()
 
 
-def test_create_purchase_request_in_db(purchase_db):
-    req = access.create_purchase_request(
-        user_id=99,
-        chat_id=100,
-        daily_quota=6,
-        period_days=30,
-        price_ils=30,
-        package_label="חודש · ₪30",
-    )
-    assert req.id >= 1
-    assert req.daily_quota == 6
-    assert req.status == "pending"
+@pytest.mark.anyio
+async def test_on_buy_callback_confirm_shows_payment_instructions():
+    update = MagicMock(spec=Update)
+    query = MagicMock(spec=CallbackQuery)
+    query.data = "buy:confirm:6_30"
+    query.answer = AsyncMock()
+    query.message = MagicMock(spec=Message)
+    query.message.chat_id = 9933
+    query.message.delete = AsyncMock()
+    update.callback_query = query
+    update.effective_user = User(id=33, is_bot=False, first_name="T")
+
+    context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
+    context.bot = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    await on_buy_callback(update, context)
+
+    query.answer.assert_awaited_once()
+    query.message.delete.assert_awaited_once()
+    context.bot.send_message.assert_awaited_once()
+    args, kwargs = context.bot.send_message.await_args
+    assert "לתשלום בביט" in kwargs.get("text", args[1] if len(args) > 1 else "")

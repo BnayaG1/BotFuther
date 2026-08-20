@@ -47,12 +47,12 @@ async def test_on_text_quota_button_triggers_quota_flow():
 
     context = MagicMock()
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-        with patch.object(handlers, "quota_status_for_user", return_value="quota reply"):
-            with patch.object(handlers, "telegram_user_id", return_value=222):
-                with patch.object(handlers, "handle_draft_text") as mock_draft:
-                    await handlers.on_text(update, context)
-                    mock_draft.assert_not_called()
+    with patch.object(handlers, "quota_status_for_user", return_value="quota reply"):
+        with patch.object(handlers, "telegram_user_id", return_value=222):
+            with patch.object(handlers, "handle_draft_text") as mock_draft:
+                await handlers.on_text(update, context)
+                mock_draft.assert_not_called()
+
 
     update.message.reply_text.assert_awaited_once()
     args, kwargs = update.message.reply_text.await_args
@@ -83,7 +83,8 @@ async def test_on_text_assistant_button_sets_pending_mode():
 
     with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
         with patch.object(handlers, "telegram_user_id", return_value=333):
-            with patch.object(handlers, "COUPON_ACCESS_ENABLED", False):
+            with patch.object(handlers, "check_solve_access", return_value=handlers.ImageAccessResult(status=handlers.ImageAccessStatus.OK)):
+
                 with patch.object(handlers, "has_active_assistant_progress", return_value=False):
                     with patch.object(
                         handlers, "select_solve_mode", return_value="שלח/י תמונה"

@@ -22,8 +22,6 @@ def test_welcome_text_is_image_only():
     assert "דיווח" in text
     assert "סטטיקה" in text
     assert "24 שעות" in text
-    assert "39 שקלים" in text
-    assert "10 אחוז הנחה" in text
     assert "בראש שקט" in text
     assert "מהנדס הדיגיטלי" not in text
     assert "מושג" not in text
@@ -36,10 +34,13 @@ def test_start_keyboard_has_no_concept_button():
     callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
     assert any("פתרון לתרגיל" in label for label in labels)
     assert any("רכישת חבילה" in label for label in labels)
+    assert "buy:menu" in callbacks
     assert not any("הזנת קוד" in label for label in labels)
     assert "buy:redeem" not in callbacks
+    assert "menu:coupon" not in callbacks
     assert not any("מושג" in label for label in labels)
     assert not any("דיווח" in label for label in labels)
+
     if INTRO_AVAILABLE:
         assert any("לימוד בסיס" in label for label in labels)
         assert "menu:intro" in callbacks
@@ -50,7 +51,7 @@ def test_start_keyboard_has_no_concept_button():
 
 
 @pytest.mark.anyio
-async def test_on_text_auto_reply_when_not_draft_or_coupon():
+async def test_on_text_auto_reply_when_not_draft():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
     update.message.text = "מה זה מומנט?"

@@ -7,11 +7,18 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+import bot.access as access
 import bot.handlers as handlers
 import intro.opening as opening
 
 
+@pytest.fixture(autouse=True)
+def allow_intro_access_in_opening_tests(monkeypatch):
+    monkeypatch.setattr("bot.handlers.router.has_intro_access", lambda uid: True)
+
+
 def test_opening_message_and_topic_buttons():
+
     text = opening.opening_message_hebrew()
     assert text == "לאן תרצה לקחת את זה?"
     kb = opening.build_opening_keyboard()

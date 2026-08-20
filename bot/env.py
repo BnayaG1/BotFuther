@@ -10,14 +10,12 @@ from dotenv import load_dotenv
 
 from bot.config import (
     APP_DIR,
-    COUPON_ACCESS_ENABLED,
-    COUPON_DB_PATH,
-    COUPON_GATE_VERSION,
     DEFAULT_MODEL,
     DEPRECATED_MODEL_PREFIXES,
     GEMINI_VISION_KEY_NAMES,
     TELEGRAM_KEY_NAMES,
 )
+
 
 log = logging.getLogger("beam_telegram_bot")
 
@@ -49,7 +47,13 @@ def load_env_files() -> list[Path]:
             loaded.append(resolved)
     if not loaded:
         load_dotenv()
+    try:
+        from bot.config import reload_admin_user_ids
+        reload_admin_user_ids()
+    except ImportError:
+        pass
     return loaded
+
 
 
 def env(*names: str) -> str | None:
@@ -124,17 +128,18 @@ def log_startup_config(env_files: list[Path]) -> None:
 
     tg = env(*TELEGRAM_KEY_NAMES)
     vision = env(*GEMINI_VISION_KEY_NAMES)
+    admin_tg = os.getenv("ADMIN_BOT_TOKEN", "").strip()
     log.info("Telegram token: %s", "OK (" + mask_secret(tg) + ")" if tg else "MISSING")
+    log.info(
+        "Admin bot token: %s",
+        "OK (" + mask_secret(admin_tg) + ")" if admin_tg else "MISSING",
+    )
     log.info(
         "Gemini vision key: %s",
         "OK (" + mask_secret(vision) + ")" if vision else "MISSING",
     )
+
     log.info("Gemini model: %s", resolve_primary_model())
     log.info("Vision model: %s", resolve_vision_model())
-    gate = "ON" if COUPON_ACCESS_ENABLED else "OFF"
-    log.info(
-        "Coupon gate: %s %s (%s)",
-        COUPON_GATE_VERSION,
-        gate,
-        COUPON_DB_PATH,
-    )
+
+

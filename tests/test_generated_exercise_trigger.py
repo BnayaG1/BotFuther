@@ -50,8 +50,7 @@ async def test_letter_b_sends_generated_exercise_and_mode_picker(tmp_path: Path)
 
     solution_session._pending_bank_exercise.pop(chat_id, None)
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "check_practice_feature_access", return_value=_practice_ok()), \
+    with patch.object(handlers, "check_practice_feature_access", return_value=_practice_ok()), \
         patch.object(handlers, "consume_practice_slot", return_value=_practice_ok()), \
         patch(
             "exercise_generator.pipeline.generate_exercise", return_value=fake_art
@@ -188,8 +187,7 @@ async def test_letter_b_lowercase_also_works(tmp_path: Path):
     fake_art.png_path = png
     fake_art.extracted = {"beam": {"L": 5.0}}
 
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "check_practice_feature_access", return_value=_practice_ok()), \
+    with patch.object(handlers, "check_practice_feature_access", return_value=_practice_ok()), \
         patch.object(handlers, "consume_practice_slot", return_value=_practice_ok()), \
         patch("exercise_generator.pipeline.generate_exercise", return_value=fake_art):
         await handlers.on_text(update, context)

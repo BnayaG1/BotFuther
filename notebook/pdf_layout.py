@@ -40,12 +40,12 @@ class NotebookPdfLayout:
     """קונפיגורציית פריסה ל-PDF של הבוט בלבד (לא matplotlib / iframe)."""
 
     gap_after_calc_squares: int = 2
-    gap_n_to_q_squares: int = 10
-    gap_q_to_m_squares: int = 10
+    gap_n_to_q_squares: int = 2
+    gap_q_to_m_squares: int = 2
     gap_after_m_squares: int = 2
     point_calc_base_mm: float = round(10 * 25.4 / 96, 3)
     point_calc_gap_scale: float = 0.12
-    panel_height_scale: float = 2.56  # פי 2 מ־1.28 — מתיחה אנכית של פאנלי N/Q/M
+    panel_height_scale: float = 1.90  # מותאם לחלוקת 2 עמודים (עמוד 1: שרטוט+ריאקציות, עמוד 2: גרפים+חישובי נקודות)
     page_padding_top_mm: float = 7.0
     page_padding_x_mm: float = 6.0
     page_padding_bottom_mm: float = 8.0
@@ -120,11 +120,11 @@ def build_bot_notebook_extra_html(
     forces_html: str,
     point_calc_inner_html: str,
 ) -> str:
-    """עמוד 1 (calc) | page-break | forces | page-break | חישובי נקודות."""
+    """עמוד 1 (שרטוט + חישובי ריאקציות) | page-break | עמוד 2 (דיאגרמות N/Q/M + חישובי נקודות)."""
     pt_gap = point_calc_top_gap_mm(layout)
     pts_scroll = (
         f'<div class="nb-point-calc-scroll" style="margin-top:{pt_gap}mm">'
         f"{point_calc_inner_html}</div>"
     )
-    # שבירת עמוד לפני הגרפים — מונעת דחיסת תמונת N כשלא נשאר מקום בעמוד החישובים
-    return calc_html + PAGE_BREAK_HTML + forces_html + PAGE_BREAK_HTML + pts_scroll
+    # עמוד 1: שרטוט + ריאקציות. עמוד 2: דיאגרמות + חישובי נקודות
+    return calc_html + PAGE_BREAK_HTML + forces_html + pts_scroll

@@ -1,143 +1,33 @@
 # -*- coding: utf-8 -*-
-"""יצירת קודי קופון חד-פעמיים ב-SQLite.
-
-דוגמה:
-    python -m bot.generate_coupons --package 6_30 --count 20
-    python -m bot.generate_coupons --quota 6 --days 120 --count 10
-    python -m bot.generate_coupons --package 6_120 --count 5 --out codes.txt
-"""
+"""מחולל קודי קופון — יצירת מחרוזות קודים אקראיות והכנסתן למסד הנתונים."""
 from __future__ import annotations
 
-import argparse
 import secrets
-import sys
-from pathlib import Path
+import string
 
-from bot.access import (
-    VALID_DAILY_QUOTAS,
-    VALID_PERIOD_DAYS,
-    insert_coupon_codes,
-    normalize_coupon_code,
-)
-from bot.config import APP_DIR, COUPON_DB_PATH
-from bot.purchase import PACKAGE_CATALOG, get_package
+from bot.access import insert_coupon_codes
+
+_CODE_ALPHABET = string.ascii_uppercase + string.digits
+# להסיר תווים מבלבלים כמו O, 0, I, 1, L
+_SAFE_ALPHABET = "".join(c for c in _CODE_ALPHABET if c not in "O0I1L")
 
 
-def _make_code(length: int = 10) -> str:
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+def _generate_random_code(length: int = 10) -> str:
+    return "".join(secrets.choice(_SAFE_ALPHABET) for _ in range(length))
 
 
 def generate_coupon_codes(
     *,
-    count: int,
-    daily_quota: int,
-    period_days: int,
-    length: int = 10,
+    count: int = 1,
+    daily_quota: int = 6,
+    period_days: int = 30,
+    code_length: int = 10,
 ) -> list[str]:
-    """יוצר קודי קופון חדשים לחבילה ושומר ב-DB. מחזיר את הקודים שנוספו."""
-    if count < 1:
-        raise ValueError("count must be >= 1")
-
+    """מייצר ומכניס למסד הנתונים רשימת קודי קופון חדשים."""
     codes: list[str] = []
-    seen: set[str] = set()
-    while len(codes) < count:
-        code = normalize_coupon_code(_make_code(length))
-        if code in seen:
-            continue
-        seen.add(code)
+    for _ in range(count):
+        code = _generate_random_code(code_length)
         codes.append(code)
 
-    added = insert_coupon_codes(
-        codes,
-        daily_quota=daily_quota,
-        period_days=period_days,
-    )
-    return codes[:added]
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate one-time coupon codes")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--package",
-        choices=[p.package_id for p in PACKAGE_CATALOG],
-        help="Package id, e.g. 6_30 or 6_120",
-    )
-    group.add_argument(
-        "--quota",
-        type=int,
-        choices=sorted(VALID_DAILY_QUOTAS),
-        help="Daily image quota (use with --days)",
-    )
-    parser.add_argument(
-        "--days",
-        type=int,
-        choices=sorted(VALID_PERIOD_DAYS),
-        help="Subscription period in days: 30 or 120",
-    )
-    parser.add_argument("--count", type=int, required=True)
-    parser.add_argument("--length", type=int, default=10)
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Optional file to append generated codes",
-    )
-    args = parser.parse_args(argv)
-
-    if args.count < 1:
-        print("count must be >= 1", file=sys.stderr)
-        return 1
-
-    if args.package:
-        pkg = get_package(args.package)
-        if pkg is None:
-            print(f"Unknown package: {args.package}", file=sys.stderr)
-            return 1
-        daily_quota = pkg.daily_quota
-        period_days = pkg.period_days
-        package_id = pkg.package_id
-    else:
-        if args.days is None:
-            print("--days is required when using --quota", file=sys.stderr)
-            return 1
-        daily_quota = int(args.quota)
-        period_days = int(args.days)
-        package_id = f"{daily_quota}_{period_days}"
-
-    try:
-        added_codes = generate_coupon_codes(
-            count=args.count,
-            daily_quota=daily_quota,
-            period_days=period_days,
-            length=args.length,
-        )
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    added = len(added_codes)
-    print(f"DB: {COUPON_DB_PATH}")
-    print(
-        f"Requested: {args.count}, inserted: {added}, "
-        f"package: {package_id} ({daily_quota}/day, {period_days} days)"
-    )
-
-    lines = [f"{package_id}\t{c}" for c in added_codes]
-    for line in lines:
-        print(line)
-
-    if args.out is not None:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        with args.out.open("a", encoding="utf-8") as fh:
-            for line in lines:
-                fh.write(line + "\n")
-        print(f"Wrote {len(lines)} lines to {args.out}")
-
-    return 0
-
-
-if __name__ == "__main__":
-    if str(APP_DIR) not in sys.path:
-        sys.path.insert(0, str(APP_DIR))
-    raise SystemExit(main())
+    insert_coupon_codes(codes, daily_quota=daily_quota, period_days=period_days)
+    return codes

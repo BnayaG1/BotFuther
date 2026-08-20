@@ -66,8 +66,7 @@ async def test_on_text_formulas_button_opens_menu():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999010):
         with patch.object(handlers, "telegram_user_id", return_value=1010):
-            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                await handlers.on_text(update, context)
+            await handlers.on_text(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
@@ -78,7 +77,7 @@ async def test_on_text_formulas_button_opens_menu():
 
 @pytest.mark.anyio
 async def test_formulas_open_without_coupon_access():
-    """נוסחאות פתוחות תמיד — גם בלי גישת קופון."""
+    """נוסחאות פתוחות תמיד."""
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
     update.message.text = handlers._PERSISTENT_FORMULAS_LABEL
@@ -90,8 +89,7 @@ async def test_formulas_open_without_coupon_access():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999012):
         with patch.object(handlers, "telegram_user_id", return_value=1012):
-            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                await handlers.on_text(update, context)
+            await handlers.on_text(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
@@ -116,8 +114,7 @@ async def test_formulas_open_during_free_window():
 
     with patch.object(handlers, "telegram_chat_id", return_value=999013):
         with patch.object(handlers, "telegram_user_id", return_value=1013):
-            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                await handlers.on_text(update, context)
+            await handlers.on_text(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
@@ -136,8 +133,7 @@ async def test_cmd_formulas_opens_menu():
     context = MagicMock()
     with patch.object(handlers, "telegram_chat_id", return_value=999011):
         with patch.object(handlers, "telegram_user_id", return_value=1011):
-            with patch.object(handlers, "COUPON_ACCESS_ENABLED", True):
-                await handlers.cmd_formulas(update, context)
+            await handlers.cmd_formulas(update, context)
 
     update.message.reply_text.assert_awaited()
     args, kwargs = update.message.reply_text.await_args
@@ -296,8 +292,7 @@ async def test_leaving_formulas_to_give_exercise_deletes_chat_messages():
         access_source=AccessSource.FREE_WINDOW,
         feature="practice",
     )
-    with patch.object(handlers, "COUPON_ACCESS_ENABLED", True), \
-        patch.object(handlers, "check_practice_feature_access", return_value=ok), \
+    with patch.object(handlers, "check_practice_feature_access", return_value=ok), \
         patch.object(handlers, "consume_practice_slot", return_value=ok), \
         patch(
             "exercise_generator.pipeline.generate_exercise", return_value=fake_art

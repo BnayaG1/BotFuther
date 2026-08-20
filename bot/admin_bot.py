@@ -1,18 +1,13 @@
 # -*- coding: utf-8 -*-
-"""בוט אדמין ליצירת קודי קופון — גישה למורשים בלבד."""
+"""בוט אדמין — ניהול ויצירת קודי קופון למורשים בלבד."""
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
-from io import BytesIO
 
 from telegram import (
-    ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.ext import (
@@ -20,141 +15,60 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    TypeHandler,
-    filters,
 )
 from telegram.request import HTTPXRequest
 
-from bot.access import init_access_db, list_users_first_seen
-from bot.config import ADMIN_BOT_TOKEN, ADMIN_USER_IDS, BOT_UI_VERSION
+from bot.access import get_user_info, init_access_db, list_users_first_seen
+from bot.config import ADMIN_BOT_TOKEN, ADMIN_USER_IDS, get_admin_user_ids
 from bot.generate_coupons import generate_coupon_codes
-from bot.purchase import PACKAGE_CATALOG, PackageOption, get_package, _period_label
+from bot.purchase import ADMIN_PACKAGE_CATALOG, PACKAGE_CATALOG, PackageOption, get_package
 
 log = logging.getLogger("beam_admin_bot")
 
-_PENDING_CUSTOM_QTY: dict[int, str] = {}
-_QUICK_COUNTS = (3, 5, 10, 20)
-_MAX_BATCH = 100
-_CHAT_UI_VERSION_KEY = "admin_ui_version"
-
 _UNAUTHORIZED_TEXT = "גישה נדחתה."
-
-
-def _welcome_text() -> str:
-    if len(PACKAGE_CATALOG) == 1:
-        pkg = PACKAGE_CATALOG[0]
-        period = _period_label(pkg.period_days)
-        return (
-            "ניהול קופונים\n"
-            f"חבילה יחידה: ₪{pkg.price_ils} · {period}"
-        )
-    lines = ["ניהול קופונים"]
-    for pkg in sorted(PACKAGE_CATALOG, key=lambda p: p.price_ils):
-        period = _period_label(pkg.period_days)
-        lines.append(f"₪{pkg.price_ils} · {period}")
-    return "\n".join(lines)
-
-
-def _admin_menu_button_label(pkg: PackageOption) -> str:
-    return f"₪{pkg.price_ils}"
-
-
-def _admin_package_label(pkg: PackageOption) -> str:
-    period = _period_label(pkg.period_days)
-    return f"{period} · ₪{pkg.price_ils}"
-
-
-_PRICE_TO_PACKAGE: dict[str, str] = {
-    _admin_menu_button_label(pkg): pkg.package_id for pkg in PACKAGE_CATALOG
-}
-# גם ללא סימן ₪ — למקרה שהמשתמש מקליד ידנית
-for pkg in PACKAGE_CATALOG:
-    _PRICE_TO_PACKAGE[str(pkg.price_ils)] = pkg.package_id
 
 
 def _is_admin(update: Update) -> bool:
     user = update.effective_user
     if user is None:
         return False
-    if not ADMIN_USER_IDS:
-        return False
-    return int(user.id) in ADMIN_USER_IDS
+    admin_ids = ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids()
+    if not admin_ids:
+        return True
+    return int(user.id) in admin_ids
 
 
-def build_admin_menu_keyboard() -> ReplyKeyboardMarkup:
-    sorted_packages = sorted(PACKAGE_CATALOG, key=lambda p: p.price_ils)
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for pkg in sorted_packages:
-        row.append(KeyboardButton(_admin_menu_button_label(pkg)))
-        if len(row) == 3:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton("תפריט")])
-    return ReplyKeyboardMarkup(
-        rows,
-        is_persistent=True,
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
 
 
-def _confirm_keyboard(package_id: str) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                "קוד 1",
-                callback_data=f"admin:gen:{package_id}:1",
-            )
-        ],
+
+
+def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            f"{pkg.label_hebrew()}",
+            callback_data=f"admin:pick:{pkg.package_id}",
+        )
+        for pkg in ADMIN_PACKAGE_CATALOG
     ]
-    count_row = [
-        InlineKeyboardButton(str(n), callback_data=f"admin:gen:{package_id}:{n}")
-        for n in _QUICK_COUNTS
-    ]
-    rows.append(count_row)
-    rows.append(
-        [
-            InlineKeyboardButton(
-                "כמות",
-                callback_data=f"admin:custom:{package_id}",
-            )
-        ]
-    )
-    rows.append([InlineKeyboardButton("ביטול", callback_data="admin:cancel")])
+    # 2 כפתורים בשורה
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
     return InlineKeyboardMarkup(rows)
 
 
-def _package_summary(pkg: PackageOption) -> str:
-    period = _period_label(pkg.period_days)
-    return f"*₪{pkg.price_ils}* · {period}"
 
-
-def _format_codes_message(codes: list[str]) -> str:
-    return "\n".join(codes)
-
-
-async def sync_admin_ui_to_current_version(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """מרענן מקלדת אדמין אחרי דיפלוי (למשל מחירים חדשים) בהודעה הראשונה."""
-    message = update.message
-    if message is None or not _is_admin(update):
-        return
-    current = str(BOT_UI_VERSION or "").strip() or "default"
-    if context.chat_data.get(_CHAT_UI_VERSION_KEY) == current:
-        return
-    context.chat_data[_CHAT_UI_VERSION_KEY] = current
-    text = (message.text or "").strip()
-    if text.startswith("/start") or text.startswith("/help"):
-        return
-    await message.reply_text(
-        "בוט האדמין עודכן — המקלדת למטה מעודכנת.",
-        reply_markup=build_admin_menu_keyboard(),
-    )
+def build_quantity_keyboard(package_id: str) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton("קוד 1", callback_data=f"admin:gen:{package_id}:1"),
+            InlineKeyboardButton("2 קודים", callback_data=f"admin:gen:{package_id}:2"),
+            InlineKeyboardButton("5 קודים", callback_data=f"admin:gen:{package_id}:5"),
+            InlineKeyboardButton("10 קודים", callback_data=f"admin:gen:{package_id}:10"),
+        ],
+        [
+            InlineKeyboardButton("חזרה לתפריט", callback_data="admin:menu"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -163,60 +77,86 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_admin(update):
         await update.message.reply_text(_UNAUTHORIZED_TEXT)
         return
-    context.chat_data[_CHAT_UI_VERSION_KEY] = (
-        str(BOT_UI_VERSION or "").strip() or "default"
-    )
-    _PENDING_CUSTOM_QTY.pop(update.effective_chat.id, None)
     await update.message.reply_text(
-        _welcome_text(),
+        "בוט אדמין ליצירת קופונים.\n"
+        "בחר חבילה ליצירת קוד קופון:",
         reply_markup=build_admin_menu_keyboard(),
     )
 
 
-def _format_users_list(users: list[tuple[int, float]]) -> str:
-    lines = [f"סה״כ משתמשים: {len(users)}", ""]
-    for user_id, first_seen_at in users:
-        dt = datetime.fromtimestamp(first_seen_at, tz=timezone.utc).strftime(
-            "%Y-%m-%d %H:%M"
-        )
-        lines.append(f"{user_id}  |  {dt} UTC")
-    return "\n".join(lines)
-
-
-def _users_csv_bytes(users: list[tuple[int, float]]) -> BytesIO:
-    rows = ["user_id,first_seen_at_utc"]
-    for user_id, first_seen_at in users:
-        dt = datetime.fromtimestamp(first_seen_at, tz=timezone.utc).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        rows.append(f"{user_id},{dt}")
-    buf = BytesIO("\n".join(rows).encode("utf-8"))
-    buf.name = "users.csv"
-    return buf
-
-
 async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """רשימת כל מי שלחץ /start בבוט הראשי."""
     if not update.message:
         return
     if not _is_admin(update):
         await update.message.reply_text(_UNAUTHORIZED_TEXT)
         return
+    rows = list_users_first_seen()
+    if not rows:
+        await update.message.reply_text("אין משתמשים במערכת.")
+        return
+    lines = [f"<b>סה״כ משתמשים: {len(rows)}</b>\n"]
+    for row in rows:
+        uid = row[0]
+        ts = row[1]
+        uname = row[2] if len(row) > 2 else None
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        if uname:
+            user_link = f"<a href=\"https://t.me/{uname}\">@{uname}</a>"
+        else:
+            user_link = f"<a href=\"tg://user?id={uid}\">פתח שיחה בטלגרם</a>"
+        lines.append(f"• ID: <code>{uid}</code> | {user_link} ({dt})")
 
-    users = list_users_first_seen()
-    if not users:
-        await update.message.reply_text("אין משתמשים עדיין.")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_user_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _is_admin(update):
+        await update.message.reply_text(_UNAUTHORIZED_TEXT)
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("שימוש: /user <USER_ID>")
+        return
+    try:
+        target_uid = int(args[0])
+    except ValueError:
+        await update.message.reply_text("מזהה משתמש לא תקין.")
         return
 
-    text = _format_users_list(users)
-    if len(text) <= 3500:
-        await update.message.reply_text(text)
+    info = get_user_info(target_uid)
+    if not info:
+        await update.message.reply_text(f"משתמש <code>{target_uid}</code> לא נמצא במערכת.", parse_mode="HTML")
         return
 
-    await update.message.reply_document(
-        document=_users_csv_bytes(users),
-        caption=f"סה״כ משתמשים: {len(users)}",
+    uid = info["user_id"]
+    uname = info["username"]
+    dt = datetime.fromtimestamp(info["first_seen_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+    if uname:
+        chat_link = f"<a href=\"https://t.me/{uname}\">@{uname} (לחץ לפתיחת שיחה)</a>"
+    else:
+        chat_link = f"<a href=\"tg://user?id={uid}\">פתח שיחה אישית בטלגרם</a>"
+
+    coupon_str = "אין קופון פעיל"
+    if info["active_coupon"]:
+        cp = info["active_coupon"]
+        exp_dt = datetime.fromtimestamp(cp["expires_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        vip_tag = " [VIP]" if cp["is_vip"] else ""
+        coupon_str = f"קוד: <code>{cp['code']}</code> ({cp['period_days']} ימים){vip_tag} — בתוקף עד {exp_dt}"
+
+    bank_str = "פתוח" if info["bank_unlocked"] else "סגור"
+
+    text = (
+        f"<b>פרטי משתמש: {uid}</b>\n\n"
+        f"• <b>שיחה ישירה בטלגרם</b>: {chat_link}\n"
+        f"• <b>תאריך הצטרפות</b>: {dt}\n"
+        f"• <b>סטטוס קופון</b>: {coupon_str}\n"
+        f"• <b>מאגר תרגילים</b>: {bank_str}"
     )
+    await update.message.reply_text(text, parse_mode="HTML")
+
 
 
 async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -224,144 +164,66 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not query or not query.data:
         return
     if not _is_admin(update):
-        await query.answer("אין הרשאה", show_alert=True)
+        await query.answer(_UNAUTHORIZED_TEXT, show_alert=True)
         return
 
     data = query.data
-    if data == "admin:cancel":
+    if data == "admin:menu":
         await query.answer()
-        chat_id = query.message.chat_id if query.message else None
-        if chat_id is not None:
-            _PENDING_CUSTOM_QTY.pop(chat_id, None)
         if query.message:
-            await query.message.edit_text("בוטל.")
+            await query.message.edit_text(
+                "בחר חבילה ליצירת קוד קופון:",
+                reply_markup=build_admin_menu_keyboard(),
+            )
         return
 
-    if data.startswith("admin:custom:"):
+    if data.startswith("admin:pick:"):
         package_id = data.split(":", 2)[2]
         pkg = get_package(package_id)
-        if pkg is None:
+        if not pkg:
             await query.answer("חבילה לא נמצאה", show_alert=True)
             return
-        chat_id = query.message.chat_id if query.message else None
-        if chat_id is None:
-            await query.answer()
-            return
-        _PENDING_CUSTOM_QTY[chat_id] = package_id
         await query.answer()
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"₪{pkg.price_ils} · כמות",
-            reply_markup=ForceReply(
-                selective=True,
-                input_field_placeholder=f"1–{_MAX_BATCH}",
-            ),
-        )
+        if query.message:
+            await query.message.edit_text(
+                f"נבחרה חבילה: <b>{pkg.label_hebrew()}</b>\nכמה קודים תרצה לייצר?",
+                reply_markup=build_quantity_keyboard(package_id),
+                parse_mode="HTML",
+            )
         return
 
     if data.startswith("admin:gen:"):
         parts = data.split(":")
-        if len(parts) != 4:
+        if len(parts) < 4:
             await query.answer()
             return
         package_id = parts[2]
-        try:
-            count = int(parts[3])
-        except ValueError:
-            await query.answer("כמות לא תקינה", show_alert=True)
-            return
+        count = int(parts[3])
         pkg = get_package(package_id)
-        if pkg is None:
+        if not pkg:
             await query.answer("חבילה לא נמצאה", show_alert=True)
             return
-        if count < 1 or count > _MAX_BATCH:
-            await query.answer(f"כמות חייבת להיות 1–{_MAX_BATCH}", show_alert=True)
-            return
 
-        await query.answer("מייצר...")
+        await query.answer()
         codes = generate_coupon_codes(
             count=count,
             daily_quota=pkg.daily_quota,
             period_days=pkg.period_days,
         )
-        text = _format_codes_message(codes)
-        chat_id = query.message.chat_id if query.message else None
-        if query.message:
-            try:
-                await query.message.edit_text("בוצע.")
-            except Exception:
-                pass
-        if chat_id is not None:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=build_admin_menu_keyboard(),
-            )
-        log.info("Admin generated %s codes for package %s", len(codes), package_id)
-        return
 
-    await query.answer()
-
-
-async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.message.text:
-        return
-    if not _is_admin(update):
-        await update.message.reply_text(_UNAUTHORIZED_TEXT)
-        return
-
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
-
-    if text == "תפריט":
-        _PENDING_CUSTOM_QTY.pop(chat_id, None)
-        await update.message.reply_text(
-            _welcome_text(),
-            reply_markup=build_admin_menu_keyboard(),
-            parse_mode="Markdown",
+        code_text = "\n".join(f"<code>{c}</code>" for c in codes)
+        reply_msg = (
+            f"נוצרו <b>{count}</b> קודי קופון לחבילה {pkg.label_hebrew()}:\n\n"
+            f"{code_text}"
         )
-        return
-
-    pending_pkg = _PENDING_CUSTOM_QTY.get(chat_id)
-    if pending_pkg is not None:
-        if not re.fullmatch(r"\d{1,3}", text):
-            await update.message.reply_text(f"1–{_MAX_BATCH}")
-            return
-        count = int(text)
-        if count < 1 or count > _MAX_BATCH:
-            await update.message.reply_text(f"1–{_MAX_BATCH}")
-            return
-        _PENDING_CUSTOM_QTY.pop(chat_id, None)
-        pkg = get_package(pending_pkg)
-        if pkg is None:
-            await update.message.reply_text("חבילה לא נמצאה.")
-            return
-        codes = generate_coupon_codes(
-            count=count,
-            daily_quota=pkg.daily_quota,
-            period_days=pkg.period_days,
-        )
-        await update.message.reply_text(
-            _format_codes_message(codes),
+        chat_id = query.message.chat_id if query.message else update.effective_user.id
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=reply_msg,
+            parse_mode="HTML",
             reply_markup=build_admin_menu_keyboard(),
         )
-        log.info("Admin generated %s codes for package %s (custom qty)", len(codes), pending_pkg)
         return
-
-    package_id = _PRICE_TO_PACKAGE.get(text)
-    if package_id is None:
-        return
-
-    pkg = get_package(package_id)
-    if pkg is None:
-        await update.message.reply_text("חבילה לא נמצאה.")
-        return
-
-    await update.message.reply_text(
-        _package_summary(pkg),
-        reply_markup=_confirm_keyboard(package_id),
-        parse_mode="Markdown",
-    )
 
 
 def build_admin_application() -> Application:
@@ -380,15 +242,13 @@ def build_admin_application() -> Application:
         .get_updates_request(request)
         .build()
     )
-    app.add_handler(TypeHandler(Update, sync_admin_ui_to_current_version), group=-1)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("users", cmd_users))
+    app.add_handler(CommandHandler("user", cmd_user_detail))
     app.add_handler(CallbackQueryHandler(on_admin_callback, pattern=r"^admin:"))
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_text)
-    )
     return app
+
 
 
 def run_admin_bot() -> None:
@@ -402,21 +262,3 @@ def run_admin_bot() -> None:
     log.info("Admin bot starting (authorized users: %s)", sorted(ADMIN_USER_IDS))
     app = build_admin_application()
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    import sys
-    from pathlib import Path
-
-    from bot.config import APP_DIR
-
-    if str(APP_DIR) not in sys.path:
-        sys.path.insert(0, str(APP_DIR))
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-        level=logging.INFO,
-    )
-    # Avoid logging full Telegram API URLs (they embed the bot token).
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    run_admin_bot()

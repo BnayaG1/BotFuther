@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""קופונים, מצבי משתמש ומגבלות שימוש (SQLite)."""
+"""מצבי משתמש ומגבלות שימוש (SQLite)."""
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import threading
 import time
@@ -12,7 +11,7 @@ from enum import Enum
 from pathlib import Path
 
 from bot.config import (
-    COUPON_DB_PATH,
+    APP_DIR,
     FREE_TRIAL_IMAGES,
     IMAGE_COOLDOWN_SEC,
     IMAGE_GUEST_COOLDOWN_SEC,
@@ -21,51 +20,35 @@ from bot.config import (
 
 log = logging.getLogger("beam_telegram_bot")
 
-_COUPON_CODE_RE = re.compile(r"^[A-Z0-9]{8,16}$")
 _db_lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
-VALID_DAILY_QUOTAS = frozenset({6, 999})
-VALID_PERIOD_DAYS = frozenset({30, 120})
-# VIP — בלי cooldown על פתרון/תרגול + פותח מאגר תרגילים בלי cooldown של המאגר.
-VIP_UNLIMITED_DAILY_QUOTA = 999
-# תאימות לאחור (ערכי קופון ב־DB)
-VALID_TIERS = VALID_DAILY_QUOTAS
-_QUOTA_SQL_LIST = ", ".join(str(q) for q in sorted(VALID_DAILY_QUOTAS))
-_PERIOD_SQL_LIST = ", ".join(str(d) for d in sorted(VALID_PERIOD_DAYS))
+DB_PATH = (APP_DIR / "access.db").resolve()
+
 # חלון מועדף: 24 שעות מ־first_seen_at (/start ראשון).
 FORMULAS_FREE_WINDOW_SEC = 24 * 3600
-# המתנה מינימלית בין שימושים בפתרון (חשב) ובתרגול — לכל המצבים.
+# המתנה מינימלית בין שימושים בפתרון (חשב) ובתרגול.
 FEATURE_COOLDOWN_SEC = float(IMAGE_COOLDOWN_SEC) if IMAGE_COOLDOWN_SEC > 0 else 600.0
-# בלי קופון ואחרי חלון 24ש': פעם אחת לכל יכולת בחלון זה.
+# אחרי חלון 24ש': פעם אחת לכל יכולת בחלון זה.
 FEATURE_DAILY_LIMIT_SEC = 24 * 3600.0
-
-
-class RedeemStatus(Enum):
-    OK = "ok"
-    BANK_UNLOCK_OK = "bank_unlock_ok"
-    NOT_FOUND = "not_found"
-    ALREADY_USED = "already_used"
-    USED_BY_OTHER = "used_by_other"
-    INVALID_TIER = "invalid_tier"
 
 
 class UserAccessPhase(Enum):
     """מצב הרשאות כללי של המשתמש."""
 
-    PRIVILEGED = "privileged"  # 24ש' ראשונות או קופון פעיל
-    RESTRICTED = "restricted"  # אחרי 24ש' ובלי קופון
+    PRIVILEGED = "privileged"  # 24ש' ראשונות
+    RESTRICTED = "restricted"  # אחרי 24ש'
 
 
 class FeatureKind(Enum):
-    SOLVE = "solve"  # לחיצה על «חשב» בטיוטה (שליפת נתונים / פתרון)
+    SOLVE = "solve"  # לחיצה על «חשב» בטיוטה
     PRACTICE = "practice"  # תרגול
 
 
 class ImageAccessStatus(Enum):
     OK = "ok"
     NO_ENTITLEMENT = "no_entitlement"
-    QUOTA_EXCEEDED = "quota_exceeded"  # תאימות — ממופה ל־DAILY_LIMIT
+    QUOTA_EXCEEDED = "quota_exceeded"
     TRIAL_EXHAUSTED = "trial_exhausted"
     ACCESS_EXPIRED = "access_expired"
     COOLDOWN = "cooldown"
@@ -74,23 +57,30 @@ class ImageAccessStatus(Enum):
 
 class AccessSource(Enum):
     FREE_WINDOW = "free_window"
-    COUPON = "coupon"
     RESTRICTED = "restricted"
-    TRIAL = "trial"  # תאימות לאחור
-    GUEST = "guest"  # תאימות לאחור ≈ RESTRICTED
+    TRIAL = "trial"
+    GUEST = "guest"
+
+
+class RedeemStatus(Enum):
+    OK = "ok"
+    INVALID_CODE = "invalid_code"
+    ALREADY_REDEEMED = "already_redeemed"
+    EXPIRED = "expired"
 
 
 @dataclass(frozen=True)
 class RedeemResult:
     status: RedeemStatus
-    tier: int | None = None
+    code: str
     period_days: int | None = None
     period_expires_at: float | None = None
 
 
 @dataclass(frozen=True)
 class ImageAccessResult:
-    """תוצאת שער ליכולת (solve/practice) — שם היסטורי Image* לתאימות."""
+
+    """תוצאת שער ליכולת (solve/practice)."""
 
     status: ImageAccessStatus
     tier_limit: int = 0
@@ -105,357 +95,58 @@ class ImageAccessResult:
     phase: UserAccessPhase | None = None
 
 
-def normalize_coupon_code(text: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]", "", (text or "").strip()).upper()
-
-
-def looks_like_coupon_code(text: str) -> bool:
-    raw = (text or "").strip()
-    if not raw or " " in raw:
-        return False
-    if not re.fullmatch(r"[A-Z0-9]+", raw):
-        return False
-    return bool(_COUPON_CODE_RE.fullmatch(raw))
-
-
 def _init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
-        f"""
+        """
+        CREATE TABLE IF NOT EXISTS user_bank_unlock (
+            user_id INTEGER PRIMARY KEY,
+            unlocked_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS user_first_seen (
+            user_id INTEGER PRIMARY KEY,
+            first_seen_at REAL NOT NULL,
+            username TEXT
+        );
+        CREATE TABLE IF NOT EXISTS user_feature_usage (
+            user_id INTEGER NOT NULL,
+            feature TEXT NOT NULL,
+            last_used_at REAL NOT NULL,
+            PRIMARY KEY (user_id, feature)
+        );
         CREATE TABLE IF NOT EXISTS coupons (
             code TEXT PRIMARY KEY,
-            daily_quota INTEGER NOT NULL CHECK (daily_quota IN ({_QUOTA_SQL_LIST})),
-            period_days INTEGER NOT NULL CHECK (period_days IN ({_PERIOD_SQL_LIST})),
-            redeemed_by INTEGER,
-            redeemed_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS user_access (
-            user_id INTEGER PRIMARY KEY,
-            tier_limit INTEGER NOT NULL CHECK (tier_limit IN ({_QUOTA_SQL_LIST})),
-            period_expires_at REAL NOT NULL,
-            window_start REAL,
-            images_used INTEGER NOT NULL DEFAULT 0,
-            last_image_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS user_trial (
-            user_id INTEGER PRIMARY KEY,
-            images_used INTEGER NOT NULL DEFAULT 0,
-            last_image_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS purchase_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            chat_id INTEGER NOT NULL,
             daily_quota INTEGER NOT NULL,
             period_days INTEGER NOT NULL,
-            price_ils INTEGER NOT NULL,
-            package_label TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS bank_unlock_coupons (
-            code TEXT PRIMARY KEY,
+            created_at REAL NOT NULL,
             redeemed_by INTEGER,
-            redeemed_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS user_bank_unlock (
-            user_id INTEGER PRIMARY KEY,
-            unlocked_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS user_first_seen (
-            user_id INTEGER PRIMARY KEY,
-            first_seen_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS user_feature_usage (
-            user_id INTEGER NOT NULL,
-            feature TEXT NOT NULL,
-            last_used_at REAL NOT NULL,
-            PRIMARY KEY (user_id, feature)
+            redeemed_at REAL,
+            expires_at REAL
         );
         """
     )
-    conn.commit()
-    _migrate_coupon_period_schema(conn)
-    _migrate_coupon_quota_constraints(conn)
-    _migrate_last_image_at_columns(conn)
-    _migrate_bank_unlock_tables(conn)
-    _migrate_user_first_seen_table(conn)
-    _migrate_user_feature_usage_table(conn)
-
-
-def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {str(row[1]) for row in rows}
-
-
-def _migrate_bank_unlock_tables(conn: sqlite3.Connection) -> None:
-    """יוצר טבלאות פטור מ-cooldown של מאגר התרגילים אם חסרות."""
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS bank_unlock_coupons (
-            code TEXT PRIMARY KEY,
-            redeemed_by INTEGER,
-            redeemed_at REAL
-        );
-        CREATE TABLE IF NOT EXISTS user_bank_unlock (
-            user_id INTEGER PRIMARY KEY,
-            unlocked_at REAL NOT NULL
-        );
-        """
-    )
+    try:
+        conn.execute("ALTER TABLE user_first_seen ADD COLUMN username TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
-
-def _migrate_user_first_seen_table(conn: sqlite3.Connection) -> None:
-    """יוצר טבלת first_seen (תחילת חלון 24ש' מועדף) אם חסרה."""
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS user_first_seen (
-            user_id INTEGER PRIMARY KEY,
-            first_seen_at REAL NOT NULL
-        );
-        """
-    )
-    conn.commit()
-
-
-def _migrate_user_feature_usage_table(conn: sqlite3.Connection) -> None:
-    """יוצר טבלת שימוש אחרון לפתרון/תרגול אם חסרה."""
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS user_feature_usage (
-            user_id INTEGER NOT NULL,
-            feature TEXT NOT NULL,
-            last_used_at REAL NOT NULL,
-            PRIMARY KEY (user_id, feature)
-        );
-        """
-    )
-    conn.commit()
-
-
-def _migrate_last_image_at_columns(conn: sqlite3.Connection) -> None:
-    """מוסיף last_image_at לטבלאות קיימות שלא נבנו איתו."""
-    access_cols = _table_columns(conn, "user_access")
-    if access_cols and "last_image_at" not in access_cols:
-        with _db_lock:
-            conn.execute("ALTER TABLE user_access ADD COLUMN last_image_at REAL")
-            conn.commit()
-            log.info("user_access migrated with last_image_at")
-    trial_cols = _table_columns(conn, "user_trial")
-    if trial_cols and "last_image_at" not in trial_cols:
-        with _db_lock:
-            conn.execute("ALTER TABLE user_trial ADD COLUMN last_image_at REAL")
-            conn.commit()
-            log.info("user_trial migrated with last_image_at")
-
-
-def _migrate_coupon_period_schema(conn: sqlite3.Connection) -> None:
-    """מעבר מסכימת tier בלבד לסכימה עם daily_quota + period_days + תפוגה."""
-    coupon_cols = _table_columns(conn, "coupons")
-    if coupon_cols and "period_days" not in coupon_cols:
-        with _db_lock:
-            conn.executescript(
-                f"""
-                CREATE TABLE coupons_new (
-                    code TEXT PRIMARY KEY,
-                    daily_quota INTEGER NOT NULL CHECK (daily_quota IN ({_QUOTA_SQL_LIST})),
-                    period_days INTEGER NOT NULL CHECK (period_days IN ({_PERIOD_SQL_LIST})),
-                    redeemed_by INTEGER,
-                    redeemed_at REAL
-                );
-                INSERT INTO coupons_new (code, daily_quota, period_days, redeemed_by, redeemed_at)
-                SELECT code,
-                       CASE WHEN tier IN (2, 5, 10) THEN tier ELSE 2 END,
-                       30,
-                       redeemed_by,
-                       redeemed_at
-                FROM coupons;
-                DROP TABLE coupons;
-                ALTER TABLE coupons_new RENAME TO coupons;
-                """
-            )
-            conn.commit()
-            log.info("Coupons table migrated to daily_quota + period_days")
-
-    access_cols = _table_columns(conn, "user_access")
-    if access_cols and "period_expires_at" not in access_cols:
-        with _db_lock:
-            far_future = time.time() + 30 * 86400
-            conn.execute(
-                "ALTER TABLE user_access ADD COLUMN period_expires_at REAL"
-            )
-            conn.execute(
-                "UPDATE user_access SET period_expires_at = ? "
-                "WHERE period_expires_at IS NULL",
-                (far_future,),
-            )
-            conn.commit()
-            log.info("user_access migrated with period_expires_at")
-
-
-def _quota_check_satisfied(ddl: str) -> bool:
-    normalized = ddl.replace(" ", "")
-    return all(f"{q}" in normalized for q in sorted(VALID_DAILY_QUOTAS))
-
-
-def _period_check_satisfied(ddl: str) -> bool:
-    normalized = ddl.replace(" ", "")
-    return all(f"{d}" in normalized for d in sorted(VALID_PERIOD_DAYS))
-
-
-def _migrate_coupon_quota_constraints(conn: sqlite3.Connection) -> None:
-    """מרחיב CHECK constraints לטבלאות coupons/user_access כשמתווספות מכסות/תקופות."""
-    coupon_cols = _table_columns(conn, "coupons")
-    access_cols = _table_columns(conn, "user_access")
-    if not coupon_cols or not access_cols:
-        return
-
-    coupon_ddl_row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='coupons'"
-    ).fetchone()
-    access_ddl_row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_access'"
-    ).fetchone()
-    coupon_ddl = str(coupon_ddl_row[0] or "") if coupon_ddl_row is not None else ""
-    access_ddl = str(access_ddl_row[0] or "") if access_ddl_row is not None else ""
-
-    coupon_ok = _quota_check_satisfied(coupon_ddl) and _period_check_satisfied(coupon_ddl)
-    access_ok = _quota_check_satisfied(access_ddl)
-    if coupon_ok and access_ok:
-        return
-
-    with _db_lock:
-        access_has_last = "last_image_at" in access_cols
-        last_select = "last_image_at" if access_has_last else "NULL"
-        conn.executescript(
-            f"""
-            CREATE TABLE coupons_new (
-                code TEXT PRIMARY KEY,
-                daily_quota INTEGER NOT NULL CHECK (daily_quota IN ({_QUOTA_SQL_LIST})),
-                period_days INTEGER NOT NULL CHECK (period_days IN ({_PERIOD_SQL_LIST})),
-                redeemed_by INTEGER,
-                redeemed_at REAL
-            );
-            INSERT INTO coupons_new (code, daily_quota, period_days, redeemed_by, redeemed_at)
-            SELECT code, daily_quota, period_days, redeemed_by, redeemed_at
-            FROM coupons
-            WHERE daily_quota IN ({_QUOTA_SQL_LIST})
-              AND period_days IN ({_PERIOD_SQL_LIST});
-            DROP TABLE coupons;
-            ALTER TABLE coupons_new RENAME TO coupons;
-
-            CREATE TABLE user_access_new (
-                user_id INTEGER PRIMARY KEY,
-                tier_limit INTEGER NOT NULL CHECK (tier_limit IN ({_QUOTA_SQL_LIST})),
-                period_expires_at REAL NOT NULL,
-                window_start REAL,
-                images_used INTEGER NOT NULL DEFAULT 0,
-                last_image_at REAL
-            );
-            INSERT INTO user_access_new (
-                user_id, tier_limit, period_expires_at, window_start, images_used, last_image_at
-            )
-            SELECT user_id, tier_limit, period_expires_at, window_start, images_used, {last_select}
-            FROM user_access
-            WHERE tier_limit IN ({_QUOTA_SQL_LIST});
-            DROP TABLE user_access;
-            ALTER TABLE user_access_new RENAME TO user_access;
-            """
-        )
-        conn.commit()
-        log.info("Coupons/user_access constraints migrated (quota/period expanded)")
-
-
-def _migrate_tier_schema(conn: sqlite3.Connection) -> None:
-    """Legacy no-op — נשמר לתאימות קריאות ישנות."""
-    _migrate_coupon_period_schema(conn)
-
-
-@dataclass(frozen=True)
-class PurchaseRequest:
-    id: int
-    user_id: int
-    chat_id: int
-    daily_quota: int
-    period_days: int
-    price_ils: int
-    package_label: str
-    status: str
-    created_at: float
-
-
-def create_purchase_request(
-    *,
-    user_id: int,
-    chat_id: int,
-    daily_quota: int,
-    period_days: int,
-    price_ils: int,
-    package_label: str,
-) -> PurchaseRequest:
-    if daily_quota not in VALID_DAILY_QUOTAS:
-        raise ValueError(f"daily_quota must be one of {sorted(VALID_DAILY_QUOTAS)}")
-    conn = _connect()
-    now = time.time()
-    with _db_lock:
-        cur = conn.execute(
-            """
-            INSERT INTO purchase_requests (
-                user_id, chat_id, daily_quota, period_days, price_ils,
-                package_label, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-            """,
-            (
-                int(user_id),
-                int(chat_id),
-                int(daily_quota),
-                int(period_days),
-                int(price_ils),
-                package_label,
-                now,
-            ),
-        )
-        conn.commit()
-        row_id = int(cur.lastrowid)
-    log.info(
-        "Purchase request #%s user=%s quota=%s days=%s price=%s",
-        row_id,
-        user_id,
-        daily_quota,
-        period_days,
-        price_ils,
-    )
-    return PurchaseRequest(
-        id=row_id,
-        user_id=int(user_id),
-        chat_id=int(chat_id),
-        daily_quota=int(daily_quota),
-        period_days=int(period_days),
-        price_ils=int(price_ils),
-        package_label=package_label,
-        status="pending",
-        created_at=now,
-    )
 
 
 def _connect() -> sqlite3.Connection:
     global _conn
     if _conn is None:
-        path = Path(COUPON_DB_PATH)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _conn = sqlite3.connect(str(path), check_same_thread=False)
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _init_schema(_conn)
     return _conn
 
 
 def init_access_db() -> None:
-    """אתחול DB בהפעלת הבוט — מבטיח שהטבלאות קיימות."""
     _connect()
 
 
 def close_access_db() -> None:
-    """סגירת חיבור DB — לשימוש בטסטים בלבד."""
     global _conn
     if _conn is not None:
         _conn.close()
@@ -463,281 +154,26 @@ def close_access_db() -> None:
 
 
 def access_status_summary() -> str:
-    from bot.config import COUPON_ACCESS_ENABLED, COUPON_DB_PATH, COUPON_GATE_VERSION
-
     conn = _connect()
     with _db_lock:
-        coupon_count = int(conn.execute("SELECT COUNT(*) FROM coupons").fetchone()[0])
         active_users = int(
-            conn.execute("SELECT COUNT(*) FROM user_access").fetchone()[0]
+            conn.execute("SELECT COUNT(*) FROM user_first_seen").fetchone()[0]
         )
-    enabled = "on" if COUPON_ACCESS_ENABLED else "off"
-    return (
-        f"pong | coupon_gate={COUPON_GATE_VERSION} {enabled} | "
-        f"db={COUPON_DB_PATH.name} | codes={coupon_count} | users={active_users}"
-    )
+    return f"pong | db={DB_PATH.name} | users={active_users}"
 
 
 def ping_reply_hebrew() -> str:
-    """תשובה ידידותית ל-/ping (לא דיבוג טכני)."""
-    from bot.config import COUPON_ACCESS_ENABLED
-
-    if COUPON_ACCESS_ENABLED:
-        return (
-            "הבוט פעיל.\n"
-            "שלח/י תמונה של תרגיל — בלי קופון יש המתנה בין תמונות.\n"
-            "לבדיקת מכסה: /quota"
-        )
     return "הבוט פעיל."
 
 
-def insert_coupon_codes(
-    codes: list[str],
-    *,
-    daily_quota: int,
-    period_days: int,
-) -> int:
-    """מוסיף קודים חדשים. מחזיר כמה נוספו בפועל."""
-    if daily_quota not in VALID_DAILY_QUOTAS:
-        raise ValueError(
-            f"daily_quota must be one of {sorted(VALID_DAILY_QUOTAS)}, got {daily_quota}"
-        )
-    if period_days not in VALID_PERIOD_DAYS:
-        raise ValueError(
-            f"period_days must be one of {sorted(VALID_PERIOD_DAYS)}, got {period_days}"
-        )
-    conn = _connect()
-    added = 0
-    with _db_lock:
-        for raw in codes:
-            code = normalize_coupon_code(raw)
-            if not _COUPON_CODE_RE.fullmatch(code):
-                continue
-            try:
-                conn.execute(
-                    "INSERT INTO coupons (code, daily_quota, period_days) VALUES (?, ?, ?)",
-                    (code, int(daily_quota), int(period_days)),
-                )
-                added += 1
-            except sqlite3.IntegrityError:
-                pass
-        conn.commit()
-    return added
-
-
-def insert_bank_unlock_codes(codes: list[str]) -> int:
-    """מוסיף קודי פטור מ-cooldown של מאגר התרגילים. מחזיר כמה נוספו."""
-    conn = _connect()
-    added = 0
-    with _db_lock:
-        for raw in codes:
-            code = normalize_coupon_code(raw)
-            if not _COUPON_CODE_RE.fullmatch(code):
-                continue
-            exists = conn.execute(
-                "SELECT 1 FROM coupons WHERE code = ?", (code,)
-            ).fetchone()
-            if exists is not None:
-                continue
-            try:
-                conn.execute(
-                    "INSERT INTO bank_unlock_coupons (code) VALUES (?)",
-                    (code,),
-                )
-                added += 1
-            except sqlite3.IntegrityError:
-                pass
-        conn.commit()
-    return added
-
-
 def user_has_bank_unlock(user_id: int) -> bool:
-    """True אם למשתמש פטור מ-cooldown של מאגר התרגילים."""
     conn = _connect()
     with _db_lock:
         row = conn.execute(
             "SELECT 1 FROM user_bank_unlock WHERE user_id = ?",
             (int(user_id),),
         ).fetchone()
-    return row is not None
-
-
-def _redeem_bank_unlock_coupon(
-    conn: sqlite3.Connection, code: str, user_id: int
-) -> RedeemResult:
-    row = conn.execute(
-        "SELECT code, redeemed_by FROM bank_unlock_coupons WHERE code = ?",
-        (code,),
-    ).fetchone()
-    if row is None:
-        return RedeemResult(RedeemStatus.NOT_FOUND)
-
-    redeemed_by = row["redeemed_by"]
-    if redeemed_by is not None:
-        if int(redeemed_by) == int(user_id):
-            return RedeemResult(RedeemStatus.ALREADY_USED)
-        return RedeemResult(RedeemStatus.USED_BY_OTHER)
-
-    now = time.time()
-    conn.execute(
-        "UPDATE bank_unlock_coupons SET redeemed_by = ?, redeemed_at = ? WHERE code = ?",
-        (int(user_id), now, code),
-    )
-    conn.execute(
-        """
-        INSERT INTO user_bank_unlock (user_id, unlocked_at) VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET unlocked_at = excluded.unlocked_at
-        """,
-        (int(user_id), now),
-    )
-    conn.commit()
-    log.info("Bank-unlock coupon %s redeemed by user %s", code, user_id)
-    return RedeemResult(RedeemStatus.BANK_UNLOCK_OK)
-
-
-def _period_seconds(period_days: int) -> float:
-    return float(int(period_days) * 86400)
-
-
-def _format_duration_hebrew(seconds: float) -> str:
-    secs = max(0, int(seconds))
-    days = secs // 86400
-    if days >= 2:
-        return f"{days} ימים"
-    if days == 1:
-        return "יום אחד"
-    hours = secs // 3600
-    if hours >= 2:
-        return f"{hours} שעות"
-    if hours == 1:
-        return "שעה אחת"
-    mins = max(1, secs // 60)
-    if mins == 1:
-        return "דקה אחת"
-    return f"{mins} דקות"
-
-
-def _period_label_hebrew(period_days: int) -> str:
-    from bot.purchase import _period_label
-
-    return _period_label(period_days)
-
-
-def _clear_expired_access_unlocked(
-    conn: sqlite3.Connection, user_id: int, period_expires_at: float | None, now: float
-) -> bool:
-    if period_expires_at is None:
-        return False
-    if now < float(period_expires_at):
-        return False
-    conn.execute("DELETE FROM user_access WHERE user_id = ?", (int(user_id),))
-    return True
-
-
-def redeem_coupon(code: str, user_id: int) -> RedeemResult:
-    normalized = normalize_coupon_code(code)
-    if not _COUPON_CODE_RE.fullmatch(normalized):
-        return RedeemResult(RedeemStatus.NOT_FOUND)
-
-    conn = _connect()
-    now = time.time()
-    with _db_lock:
-        row = conn.execute(
-            "SELECT code, daily_quota, period_days, redeemed_by FROM coupons WHERE code = ?",
-            (normalized,),
-        ).fetchone()
-        if row is None:
-            return _redeem_bank_unlock_coupon(conn, normalized, user_id)
-
-        daily_quota = int(row["daily_quota"])
-        period_days = int(row["period_days"])
-        if daily_quota not in VALID_DAILY_QUOTAS:
-            return RedeemResult(RedeemStatus.INVALID_TIER)
-        if period_days not in VALID_PERIOD_DAYS:
-            return RedeemResult(RedeemStatus.INVALID_TIER)
-
-        redeemed_by = row["redeemed_by"]
-        if redeemed_by is not None:
-            if int(redeemed_by) == int(user_id):
-                access = conn.execute(
-                    "SELECT period_expires_at FROM user_access WHERE user_id = ?",
-                    (int(user_id),),
-                ).fetchone()
-                expires = (
-                    float(access["period_expires_at"])
-                    if access is not None
-                    else None
-                )
-                return RedeemResult(
-                    RedeemStatus.ALREADY_USED,
-                    tier=daily_quota,
-                    period_days=period_days,
-                    period_expires_at=expires,
-                )
-            return RedeemResult(
-                RedeemStatus.USED_BY_OTHER,
-                tier=daily_quota,
-                period_days=period_days,
-            )
-
-        period_expires_at = now + _period_seconds(period_days)
-        conn.execute(
-            "UPDATE coupons SET redeemed_by = ?, redeemed_at = ? WHERE code = ?",
-            (int(user_id), now, normalized),
-        )
-        conn.execute(
-            """
-            INSERT INTO user_access (
-                user_id, tier_limit, period_expires_at, window_start, images_used
-            ) VALUES (?, ?, ?, NULL, 0)
-            ON CONFLICT(user_id) DO UPDATE SET
-                tier_limit = excluded.tier_limit,
-                period_expires_at = excluded.period_expires_at,
-                window_start = NULL,
-                images_used = 0
-            """,
-            (int(user_id), daily_quota, period_expires_at),
-        )
-        if daily_quota == VIP_UNLIMITED_DAILY_QUOTA:
-            conn.execute(
-                """
-                INSERT INTO user_bank_unlock (user_id, unlocked_at) VALUES (?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET unlocked_at = excluded.unlocked_at
-                """,
-                (int(user_id), now),
-            )
-        conn.commit()
-        log.info(
-            "Coupon %s redeemed by user %s (quota=%s days=%s expires=%s)",
-            normalized,
-            user_id,
-            daily_quota,
-            period_days,
-            period_expires_at,
-        )
-        return RedeemResult(
-            RedeemStatus.OK,
-            tier=daily_quota,
-            period_days=period_days,
-            period_expires_at=period_expires_at,
-        )
-
-
-def _load_coupon_access_unlocked(
-    conn: sqlite3.Connection, user_id: int, now: float
-) -> sqlite3.Row | None:
-    row = conn.execute(
-        "SELECT tier_limit, period_expires_at, window_start, images_used, last_image_at "
-        "FROM user_access WHERE user_id = ?",
-        (int(user_id),),
-    ).fetchone()
-    if row is None:
-        return None
-    if _clear_expired_access_unlocked(
-        conn, user_id, row["period_expires_at"], now
-    ):
-        return None
-    return row
+        return row is not None
 
 
 def _cooldown_remaining_sec(
@@ -752,44 +188,30 @@ def _cooldown_remaining_sec(
     return remaining if remaining > 0 else None
 
 
-def _period_left_for_user(
-    conn: sqlite3.Connection, user_id: int, now: float
-) -> tuple[float | None, int | None]:
-    row = _load_coupon_access_unlocked(conn, int(user_id), now)
-    if row is None:
-        return None, None
-    period_expires_at = float(row["period_expires_at"])
-    period_expires_sec = max(0.0, period_expires_at - now)
-    period_days = (
-        max(1, int(round(period_expires_sec / 86400))) if period_expires_sec > 0 else None
-    )
-    return period_expires_sec, period_days
-
-
-def _access_source_for_phase(
-    phase: UserAccessPhase, *, has_coupon: bool
-) -> AccessSource:
-    if phase == UserAccessPhase.PRIVILEGED:
-        return AccessSource.COUPON if has_coupon else AccessSource.FREE_WINDOW
-    return AccessSource.RESTRICTED
-
-
 def _ensure_user_first_seen_unlocked(
-    conn: sqlite3.Connection, user_id: int, now: float
+    conn: sqlite3.Connection, user_id: int, now: float, username: str | None = None
 ) -> float:
     uid = int(user_id)
+    clean_username = username.strip().lstrip("@") if username else None
     row = conn.execute(
-        "SELECT first_seen_at FROM user_first_seen WHERE user_id = ?",
+        "SELECT first_seen_at, username FROM user_first_seen WHERE user_id = ?",
         (uid,),
     ).fetchone()
     if row is not None:
+        if clean_username and row["username"] != clean_username:
+            conn.execute(
+                "UPDATE user_first_seen SET username = ? WHERE user_id = ?",
+                (clean_username, uid),
+            )
+            conn.commit()
         return float(row["first_seen_at"])
     conn.execute(
-        "INSERT INTO user_first_seen (user_id, first_seen_at) VALUES (?, ?)",
-        (uid, now),
+        "INSERT INTO user_first_seen (user_id, first_seen_at, username) VALUES (?, ?, ?)",
+        (uid, now, clean_username),
     )
     conn.commit()
     return float(now)
+
 
 
 def _has_free_window_unlocked(
@@ -799,21 +221,38 @@ def _has_free_window_unlocked(
     return (now - first_seen) < FORMULAS_FREE_WINDOW_SEC
 
 
+VIP_UNLIMITED_DAILY_QUOTA = 999999
+
+
+def _has_active_coupon_access_unlocked(
+    conn: sqlite3.Connection, user_id: int, now: float
+) -> tuple[bool, float | None, int | None, bool]:
+    row = conn.execute(
+        "SELECT expires_at, period_days, daily_quota FROM coupons "
+        "WHERE redeemed_by = ? AND expires_at > ? "
+        "ORDER BY expires_at DESC LIMIT 1",
+        (int(user_id), now),
+    ).fetchone()
+    if row is None or row["expires_at"] is None:
+        return False, None, None, False
+    is_vip = int(row["daily_quota"]) >= 999
+    return True, float(row["expires_at"]), int(row["period_days"]), is_vip
+
+
 def _phase_unlocked(
     conn: sqlite3.Connection, user_id: int, now: float
-) -> tuple[UserAccessPhase, bool]:
-    has_coupon = _load_coupon_access_unlocked(conn, int(user_id), now) is not None
+) -> tuple[UserAccessPhase, bool, bool]:
+    has_coupon, _, _, is_vip = _has_active_coupon_access_unlocked(conn, int(user_id), now)
     if has_coupon or _has_free_window_unlocked(conn, int(user_id), now):
-        return UserAccessPhase.PRIVILEGED, has_coupon
-    return UserAccessPhase.RESTRICTED, False
+        return UserAccessPhase.PRIVILEGED, has_coupon, is_vip
+    return UserAccessPhase.RESTRICTED, False, False
 
 
 def get_user_access_phase(user_id: int, *, now: float | None = None) -> UserAccessPhase:
-    """PRIVILEGED = קופון פעיל או חלון 24ש'; אחרת RESTRICTED."""
     ts = time.time() if now is None else float(now)
     conn = _connect()
     with _db_lock:
-        phase, _ = _phase_unlocked(conn, int(user_id), ts)
+        phase, _, _ = _phase_unlocked(conn, int(user_id), ts)
         return phase
 
 
@@ -848,22 +287,22 @@ def _evaluate_feature_access(
     last_used_at: float | None,
     now: float,
     access_source: AccessSource,
-    period_expires_sec: float | None,
-    period_days: int | None,
     feature: str,
-    tier_limit: int = 0,
-    skip_feature_cooldown: bool = False,
+    is_vip: bool = False,
 ) -> ImageAccessResult:
     base = dict(
-        tier_limit=int(tier_limit),
+        tier_limit=0,
         images_used=0,
         images_remaining=0,
-        period_expires_sec=period_expires_sec,
-        period_days=period_days,
+        period_expires_sec=None,
+        period_days=None,
         access_source=access_source,
         feature=feature,
         phase=phase,
     )
+    if is_vip:
+        return ImageAccessResult(status=ImageAccessStatus.OK, **base)
+
     if last_used_at is not None and phase == UserAccessPhase.RESTRICTED:
         daily_left = _cooldown_remaining_sec(
             last_used_at, now, cooldown_sec=FEATURE_DAILY_LIMIT_SEC
@@ -875,28 +314,16 @@ def _evaluate_feature_access(
                 cooldown_remaining_sec=daily_left,
                 **base,
             )
-    if not skip_feature_cooldown:
-        cool = _cooldown_remaining_sec(
-            last_used_at, now, cooldown_sec=FEATURE_COOLDOWN_SEC
+    cool = _cooldown_remaining_sec(
+        last_used_at, now, cooldown_sec=FEATURE_COOLDOWN_SEC
+    )
+    if cool is not None:
+        return ImageAccessResult(
+            status=ImageAccessStatus.COOLDOWN,
+            cooldown_remaining_sec=cool,
+            **base,
         )
-        if cool is not None:
-            return ImageAccessResult(
-                status=ImageAccessStatus.COOLDOWN,
-                cooldown_remaining_sec=cool,
-                **base,
-            )
     return ImageAccessResult(status=ImageAccessStatus.OK, **base)
-
-
-def _feature_gate_inputs(
-    conn: sqlite3.Connection, user_id: int, now: float
-) -> tuple[UserAccessPhase, bool, float | None, int | None, int, bool]:
-    phase, has_coupon = _phase_unlocked(conn, int(user_id), now)
-    period_expires_sec, period_days = _period_left_for_user(conn, int(user_id), now)
-    access_row = _load_coupon_access_unlocked(conn, int(user_id), now)
-    tier_limit = int(access_row["tier_limit"]) if access_row is not None else 0
-    skip_cooldown = tier_limit == VIP_UNLIMITED_DAILY_QUOTA
-    return phase, has_coupon, period_expires_sec, period_days, tier_limit, skip_cooldown
 
 
 def check_feature_access(
@@ -905,25 +332,20 @@ def check_feature_access(
     *,
     now: float | None = None,
 ) -> ImageAccessResult:
-    """בודק מגבלות ליכולת בלי לצרוך."""
     key = _feature_key(feature)
     ts = time.time() if now is None else float(now)
     conn = _connect()
     with _db_lock:
-        phase, has_coupon, period_expires_sec, period_days, tier_limit, skip_cd = (
-            _feature_gate_inputs(conn, int(user_id), ts)
-        )
+        phase, _, is_vip = _phase_unlocked(conn, int(user_id), ts)
         last_used = _load_feature_last_used_unlocked(conn, int(user_id), key)
+        source = AccessSource.FREE_WINDOW if phase == UserAccessPhase.PRIVILEGED else AccessSource.RESTRICTED
         return _evaluate_feature_access(
             phase=phase,
             last_used_at=last_used,
             now=ts,
-            access_source=_access_source_for_phase(phase, has_coupon=has_coupon),
-            period_expires_sec=period_expires_sec,
-            period_days=period_days,
+            access_source=source,
             feature=key,
-            tier_limit=tier_limit,
-            skip_feature_cooldown=skip_cd,
+            is_vip=is_vip,
         )
 
 
@@ -933,25 +355,20 @@ def consume_feature_slot(
     *,
     now: float | None = None,
 ) -> ImageAccessResult:
-    """מאשר שימוש ומעדכן last_used_at ליכולת."""
     key = _feature_key(feature)
     ts = time.time() if now is None else float(now)
     conn = _connect()
     with _db_lock:
-        phase, has_coupon, period_expires_sec, period_days, tier_limit, skip_cd = (
-            _feature_gate_inputs(conn, int(user_id), ts)
-        )
+        phase, _, is_vip = _phase_unlocked(conn, int(user_id), ts)
         last_used = _load_feature_last_used_unlocked(conn, int(user_id), key)
+        source = AccessSource.FREE_WINDOW if phase == UserAccessPhase.PRIVILEGED else AccessSource.RESTRICTED
         result = _evaluate_feature_access(
             phase=phase,
             last_used_at=last_used,
             now=ts,
-            access_source=_access_source_for_phase(phase, has_coupon=has_coupon),
-            period_expires_sec=period_expires_sec,
-            period_days=period_days,
+            access_source=source,
             feature=key,
-            tier_limit=tier_limit,
-            skip_feature_cooldown=skip_cd,
+            is_vip=is_vip,
         )
         if result.status != ImageAccessStatus.OK:
             return result
@@ -971,7 +388,6 @@ def consume_feature_slot(
 
 
 def check_image_access(user_id: int) -> ImageAccessResult:
-    """תאימות: שער פתרון (בלי צריכה)."""
     return check_feature_access(user_id, FeatureKind.SOLVE)
 
 
@@ -984,7 +400,6 @@ def check_practice_feature_access(user_id: int) -> ImageAccessResult:
 
 
 def consume_image_slot(user_id: int) -> ImageAccessResult:
-    """תאימות: צריכת פתרון — עדיף לקרוא בלחיצת «חשב»."""
     return consume_feature_slot(user_id, FeatureKind.SOLVE)
 
 
@@ -996,40 +411,75 @@ def consume_practice_slot(user_id: int) -> ImageAccessResult:
     return consume_feature_slot(user_id, FeatureKind.PRACTICE)
 
 
-def has_active_coupon_access(user_id: int) -> bool:
-    """True אם למשתמש יש חבילה/קופון פעיל."""
-    conn = _connect()
-    now = time.time()
-    with _db_lock:
-        row = _load_coupon_access_unlocked(conn, int(user_id), now)
-        return row is not None
-
-
-def ensure_user_first_seen(user_id: int, *, now: float | None = None) -> float:
-    """
-    מחזיר first_seen_at קבוע למשתמש; יוצר רשומה בפעם הראשונה.
-
-    שעון חלון 24ש' המועדף מתחיל באינטראקציה הראשונה (בדרך כלל /start).
-    """
+def ensure_user_first_seen(
+    user_id: int, username: str | None = None, *, now: float | None = None
+) -> float:
     conn = _connect()
     ts = time.time() if now is None else float(now)
     with _db_lock:
-        return _ensure_user_first_seen_unlocked(conn, int(user_id), ts)
+        return _ensure_user_first_seen_unlocked(conn, int(user_id), ts, username=username)
 
 
-def list_users_first_seen() -> list[tuple[int, float]]:
-    """כל משתמשי /start: (user_id, first_seen_at) לפי סדר הופעה."""
+def list_users_first_seen() -> list[tuple[int, float, str | None]]:
     conn = _connect()
     with _db_lock:
         rows = conn.execute(
-            "SELECT user_id, first_seen_at FROM user_first_seen "
+            "SELECT user_id, first_seen_at, username FROM user_first_seen "
             "ORDER BY first_seen_at ASC, user_id ASC"
         ).fetchall()
-        return [(int(r["user_id"]), float(r["first_seen_at"])) for r in rows]
+        return [
+            (
+                int(r["user_id"]),
+                float(r["first_seen_at"]),
+                r["username"] if "username" in r.keys() else None,
+            )
+            for r in rows
+        ]
+
+
+def get_user_info(user_id: int) -> dict | None:
+    uid = int(user_id)
+    conn = _connect()
+    now = time.time()
+    with _db_lock:
+        row = conn.execute(
+            "SELECT user_id, first_seen_at, username FROM user_first_seen WHERE user_id = ?",
+            (uid,),
+        ).fetchone()
+        if row is None:
+            return None
+        first_seen = float(row["first_seen_at"])
+        username = row["username"] if "username" in row.keys() else None
+
+        coupon_row = conn.execute(
+            "SELECT code, period_days, expires_at, daily_quota FROM coupons "
+            "WHERE redeemed_by = ? AND expires_at > ? "
+            "ORDER BY expires_at DESC LIMIT 1",
+            (uid, now),
+        ).fetchone()
+        coupon_info = None
+        if coupon_row:
+            coupon_info = {
+                "code": coupon_row["code"],
+                "period_days": int(coupon_row["period_days"]),
+                "expires_at": float(coupon_row["expires_at"]),
+                "is_vip": int(coupon_row["daily_quota"]) >= 999,
+            }
+        bank_unlocked = conn.execute(
+            "SELECT 1 FROM user_bank_unlock WHERE user_id = ?", (uid,)
+        ).fetchone() is not None
+
+        return {
+            "user_id": uid,
+            "first_seen_at": first_seen,
+            "username": username,
+            "active_coupon": coupon_info,
+            "bank_unlocked": bank_unlocked,
+        }
+
 
 
 def has_formulas_free_window(user_id: int, *, now: float | None = None) -> bool:
-    """True בתוך 24 השעות הראשונות מ־first_seen_at."""
     ts = time.time() if now is None else float(now)
     conn = _connect()
     with _db_lock:
@@ -1037,68 +487,14 @@ def has_formulas_free_window(user_id: int, *, now: float | None = None) -> bool:
 
 
 def has_formulas_access(user_id: int) -> bool:
-    """נוסחאות פתוחות תמיד."""
     return True
 
 
 def has_practice_access(user_id: int) -> bool:
-    """True אם מותר להתחיל תרגול עכשיו (בלי לצרוך)."""
     return (
         check_feature_access(user_id, FeatureKind.PRACTICE).status
         == ImageAccessStatus.OK
     )
-
-
-def redeem_reply_hebrew(result: RedeemResult) -> str:
-    tier = result.tier or 0
-    period_days = result.period_days or 0
-    period_label = _period_label_hebrew(period_days) if period_days else ""
-    if result.status == RedeemStatus.BANK_UNLOCK_OK:
-        return (
-            "הקוד הופעל.\n"
-            "מאגר התרגילים פתוח לך בלי הגבלת זמן בין תרגילים."
-        )
-    if result.status == RedeemStatus.OK:
-        period_timer = ""
-        if result.period_expires_at is not None:
-            left = max(0.0, float(result.period_expires_at) - time.time())
-            period_timer = (
-                f"\nהמנוי פעיל לעוד *{_format_duration_hebrew(left)}* ({period_label})."
-            )
-        if tier == VIP_UNLIMITED_DAILY_QUOTA:
-            body = (
-                f"הקופון הופעל.\n"
-                f"גישה חופשית לפתרון ותרגול למשך {period_label} "
-                f"(בלי המתנה בין שימושים)."
-                f"{period_timer}\n"
-                "מאגר התרגילים פתוח לך בלי הגבלת זמן בין תרגילים.\n"
-                "שלח/י עכשיו תמונה של התרגיל."
-            )
-        else:
-            body = (
-                f"הקופון הופעל.\n"
-                f"גישה מועדפת לפתרון ותרגול למשך {period_label} "
-                f"(המתנה של 10 דקות בין שימושים)."
-                f"{period_timer}\n"
-                "שלח/י עכשיו תמונה של התרגיל."
-            )
-        return body
-    if result.status == RedeemStatus.ALREADY_USED:
-        if result.tier is None and result.period_days is None:
-            return "קוד זה כבר מופעל בחשבון שלך (מאגר תרגילים ללא הגבלה)."
-        timer = ""
-        if result.period_expires_at is not None:
-            left = max(0.0, float(result.period_expires_at) - time.time())
-            if left > 0:
-                timer = f" המנוי פעיל עוד {_format_duration_hebrew(left)}."
-        return f"קוד זה כבר מופעל בחשבון שלך.{timer}"
-    if result.status == RedeemStatus.USED_BY_OTHER:
-        return "קוד הקופון כבר נוצל בחשבון אחר."
-    if result.status == RedeemStatus.INVALID_TIER:
-        return "קוד הקופון לא תקין או לא זמין."
-    if result.status == RedeemStatus.NOT_FOUND:
-        return "קוד הקופון לא תקין או לא זמין."
-    return "קוד הקופון לא תקין או לא זמין."
 
 
 def _feature_label_hebrew(feature: str | None) -> str:
@@ -1127,27 +523,8 @@ def image_access_reply_hebrew(result: ImageAccessResult) -> str:
         ImageAccessStatus.TRIAL_EXHAUSTED,
         ImageAccessStatus.NO_ENTITLEMENT,
     ):
-        return (
-            "בשביל להמשיך אתה צריך לרכוש חבילה.\n"
-            "לרכישת חבילה:"
-        )
+        return "הגעת למגבלת השימוש היומית."
     return ""
-
-
-def coupon_prompt_text_hebrew() -> str:
-    return (
-        "*הזנת קוד קופון*\n\n"
-        "שלח/י את הקוד בטקסט (8–16 תווים, אותיות ומספרים בלבד).\n"
-        "כל קוד פותח גישה מועדפת לפתרון ותרגול לתקופת המנוי "
-        "(המתנה של 10 דקות בין שימושים).\n\n"
-        "לבדיקת סטטוס: /quota"
-    )
-
-
-def _period_timer_line(result: ImageAccessResult) -> str:
-    if result.period_expires_sec is None or result.period_expires_sec <= 0:
-        return ""
-    return f"המנוי פעיל לעוד {_format_duration_hebrew(result.period_expires_sec)}."
 
 
 def _status_line_hebrew(label: str, res: ImageAccessResult) -> str:
@@ -1166,39 +543,19 @@ def _status_line_hebrew(label: str, res: ImageAccessResult) -> str:
 
 
 def quota_status_reply_hebrew(result: ImageAccessResult) -> str:
-    """סטטוס לפי תוצאת שער פתרון (תאימות ל־/quota הישן)."""
-    phase = result.phase
-    if phase is None:
-        if result.access_source in (AccessSource.COUPON, AccessSource.FREE_WINDOW):
-            phase = UserAccessPhase.PRIVILEGED
-        else:
-            phase = UserAccessPhase.RESTRICTED
+    phase = result.phase or UserAccessPhase.RESTRICTED
     lines: list[str] = []
     if phase == UserAccessPhase.PRIVILEGED:
-        if result.access_source == AccessSource.COUPON:
-            lines.append("מצב: מנוי פעיל (גישה מועדפת).")
-            period_line = _period_timer_line(result)
-            if period_line:
-                lines.append(period_line)
-        else:
-            lines.append("מצב: 24 השעות הראשונות (גישה מועדפת).")
-        if result.tier_limit == VIP_UNLIMITED_DAILY_QUOTA:
-            lines.append("פתרון ותרגול: בלי המתנה בין שימושים.")
-        else:
-            lines.append("פתרון ותרגול: המתנה של 10 דקות בין שימושים.")
+        lines.append("מצב: 24 השעות הראשונות (גישה חופשית).")
+        lines.append("פתרון ותרגול: המתנה קצרה בין שימושים.")
     else:
-        lines.append("מצב: ללא קופון (אחרי 24 השעות הראשונות).")
-        lines.append(
-            "פתרון ותרגול: פעם אחת ביממה לכל יכולת, "
-            "ובנוסף המתנה של 10 דקות בין שימושים."
-        )
-        lines.append("לשדרוג — הפעיל/י קוד קופון: /coupon")
+        lines.append("מצב: גישה בסיסית.")
+        lines.append("פתרון ותרגול: פעם אחת ביממה לכל יכולת, עם המתנה בין שימושים.")
     lines.append(_status_line_hebrew("פתרון", result))
     return "\n".join(lines)
 
 
 def quota_status_for_user(user_id: int) -> str:
-    """סטטוס מלא למשתמש — פתרון + תרגול."""
     solve = check_feature_access(user_id, FeatureKind.SOLVE)
     practice = check_feature_access(user_id, FeatureKind.PRACTICE)
     base_lines = quota_status_reply_hebrew(solve).split("\n")
@@ -1206,3 +563,122 @@ def quota_status_for_user(user_id: int) -> str:
     lines.append(_status_line_hebrew("פתרון", solve))
     lines.append(_status_line_hebrew("תרגול", practice))
     return "\n".join(lines)
+
+
+def normalize_coupon_code(code: str) -> str:
+    return code.strip().upper().replace(" ", "").replace("-", "")
+
+
+def looks_like_coupon_code(text: str) -> bool:
+    cleaned = normalize_coupon_code(text)
+    return bool(cleaned and 6 <= len(cleaned) <= 24 and cleaned.isalnum())
+
+
+def insert_coupon_codes(
+    codes: list[str],
+    daily_quota: int = 6,
+    period_days: int = 30,
+) -> None:
+    conn = _connect()
+    now = time.time()
+    with _db_lock:
+        for raw in codes:
+            code = normalize_coupon_code(raw)
+            if not code:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO coupons (code, daily_quota, period_days, created_at) VALUES (?, ?, ?, ?)",
+                (code, int(daily_quota), int(period_days), now),
+            )
+        conn.commit()
+
+
+def redeem_coupon(code_text: str, user_id: int, *, now: float | None = None) -> RedeemResult:
+    ts = time.time() if now is None else float(now)
+    code = normalize_coupon_code(code_text)
+    if not code:
+        return RedeemResult(status=RedeemStatus.INVALID_CODE, code=code_text)
+
+    conn = _connect()
+    with _db_lock:
+        row = conn.execute(
+            "SELECT code, daily_quota, period_days, redeemed_by, expires_at FROM coupons WHERE code = ?",
+            (code,),
+        ).fetchone()
+
+        if row is None:
+            return RedeemResult(status=RedeemStatus.INVALID_CODE, code=code)
+
+        if row["redeemed_by"] is not None:
+            return RedeemResult(status=RedeemStatus.ALREADY_REDEEMED, code=code)
+
+        period_days = int(row["period_days"])
+        daily_quota = int(row["daily_quota"])
+        expires_at = ts + period_days * 86400.0
+
+        conn.execute(
+            "UPDATE coupons SET redeemed_by = ?, redeemed_at = ?, expires_at = ? WHERE code = ?",
+            (int(user_id), ts, expires_at, code),
+        )
+        if daily_quota >= 999:
+            conn.execute(
+                "INSERT OR IGNORE INTO user_bank_unlock (user_id, unlocked_at) VALUES (?, ?)",
+                (int(user_id), ts),
+            )
+        conn.commit()
+        log.info("Coupon redeemed user=%s code=%s days=%s quota=%s", user_id, code, period_days, daily_quota)
+
+
+        return RedeemResult(
+            status=RedeemStatus.OK,
+            code=code,
+            period_days=period_days,
+            period_expires_at=expires_at,
+        )
+
+
+def coupon_prompt_text_hebrew() -> str:
+    return "שלח/י את קוד הקופון שקיבלת:"
+
+
+def redeem_reply_hebrew(result: RedeemResult) -> str:
+    if result.status == RedeemStatus.OK:
+        days = result.period_days or 30
+        if days == 30:
+            period_str = "לחודש"
+        elif days == 60:
+            period_str = "לחודשיים"
+        elif days == 90:
+            period_str = "ל-3 חודשים"
+        elif days == 120:
+            period_str = "ל-4 חודשים"
+        else:
+            period_str = f"ל-{days} ימים"
+        return f"קוד הקופון נקלט בהצלחה!\nקיבלת גישה מועדפת {period_str}."
+
+    if result.status == RedeemStatus.ALREADY_REDEEMED:
+        return "קוד הקופון הזה כבר נפדה בעבר."
+
+    if result.status == RedeemStatus.EXPIRED:
+        return "קוד הקופון פג תוקף."
+
+    return "קוד הקופון לא תקין. ודא/י שהקלדת נכון."
+
+
+def has_intro_access(user_id: int, *, now: float | None = None) -> bool:
+    ts = time.time() if now is None else float(now)
+    conn = _connect()
+    with _db_lock:
+        has_coupon, _, _, is_vip = _has_active_coupon_access_unlocked(conn, int(user_id), ts)
+        if has_coupon or is_vip or _has_free_window_unlocked(conn, int(user_id), ts):
+            return True
+        return False
+
+
+def intro_access_blocked_hebrew() -> str:
+    return (
+        "הגישה לתכני הלימוד זמינה ב-24 השעות הראשונות או עם קוד קופון בתוקף.\n"
+        "לרכישת חבילה/קופון לחץ/י על 'רכישת חבילה' בתפריט הראשי."
+    )
+
+
