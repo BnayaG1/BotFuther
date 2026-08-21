@@ -94,6 +94,9 @@ def build_quantity_keyboard(package_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("10 קודים", callback_data=f"admin:gen:{package_id}:10"),
         ],
         [
+            InlineKeyboardButton("הזן כמות", callback_data=f"admin:custom:{package_id}"),
+        ],
+        [
             InlineKeyboardButton("חזרה לתפריט", callback_data="admin:menu"),
         ],
     ]
@@ -130,8 +133,30 @@ async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await cmd_users(update, context)
         return
 
+    # המתנה לכמות מותאמת
+    pending_pkg_id = context.user_data.get("admin_awaiting_custom_qty")
+    if pending_pkg_id:
+        if text.isdigit() and 1 <= int(text) <= 500:
+            count = int(text)
+            pkg = get_package(pending_pkg_id)
+            context.user_data.pop("admin_awaiting_custom_qty", None)
+            if not pkg:
+                await update.message.reply_text("חבילה לא נמצאה.")
+                return
+            codes = generate_coupon_codes(
+                count=count,
+                daily_quota=pkg.daily_quota,
+                period_days=pkg.period_days,
+            )
+            code_text = "\n".join(f"<code>{c}</code>" for c in codes)
+            await update.message.reply_text(code_text, parse_mode="HTML")
+            return
+        else:
+            await update.message.reply_text("אנא הכנס מספר תקין בין 1 ל-500.")
+            return
+
     for pkg in ADMIN_PACKAGE_CATALOG:
-        if text == pkg.label_hebrew() or pkg.package_id in text:
+        if text == pkg.label_hebrew() or text == pkg.label_admin_keyboard() or pkg.package_id in text:
             await update.message.reply_text(
                 f"נבחרה חבילה: <b>{pkg.label_hebrew()}</b>\nכמה קודים תרצה לייצר?",
                 reply_markup=build_quantity_keyboard(pkg.package_id),
@@ -285,11 +310,27 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not pkg:
             await query.answer("חבילה לא נמצאה", show_alert=True)
             return
+        context.user_data.pop("admin_awaiting_custom_qty", None)
         await query.answer()
         if query.message:
             await query.message.edit_text(
                 f"נבחרה חבילה: <b>{pkg.label_hebrew()}</b>\nכמה קודים תרצה לייצר?",
                 reply_markup=build_quantity_keyboard(package_id),
+                parse_mode="HTML",
+            )
+        return
+
+    if data.startswith("admin:custom:"):
+        package_id = data.split(":", 2)[2]
+        pkg = get_package(package_id)
+        if not pkg:
+            await query.answer("חבילה לא נמצאה", show_alert=True)
+            return
+        context.user_data["admin_awaiting_custom_qty"] = package_id
+        await query.answer()
+        if query.message:
+            await query.message.edit_text(
+                f"חבילה: <b>{pkg.label_hebrew()}</b>\nכתוב כמה קודים תרצה לייצר (1–500):",
                 parse_mode="HTML",
             )
         return
@@ -314,17 +355,8 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
 
         code_text = "\n".join(f"<code>{c}</code>" for c in codes)
-        reply_msg = (
-            f"נוצרו <b>{count}</b> קודי קופון לחבילה {pkg.label_hebrew()}:\n\n"
-            f"{code_text}"
-        )
         chat_id = query.message.chat_id if query.message else update.effective_user.id
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=reply_msg,
-            parse_mode="HTML",
-            reply_markup=build_admin_menu_keyboard(),
-        )
+        await context.bot.send_message(chat_id=chat_id, text=code_text, parse_mode="HTML")
         return
 
 

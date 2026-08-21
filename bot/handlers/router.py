@@ -328,6 +328,35 @@ async def _send_text_safe(
         return await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
 
+async def _send_denied_with_purchase(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    text: str,
+) -> None:
+    """שולח הודעת דחיה עם התפריט הקבוע ואחריה כפתור רכישת חבילה."""
+    await _send_text_safe(context, chat_id, text)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="לרכישת חבילה:",
+        reply_markup=build_upgrade_options_keyboard(),
+    )
+
+
+async def _reply_denied_with_purchase(
+    message,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    text: str,
+) -> None:
+    """שולח הודעת דחיה (reply) עם התפריט הקבוע ואחריה כפתור רכישת חבילה."""
+    await _reply_text_safe(message, text)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="לרכישת חבילה:",
+        reply_markup=build_upgrade_options_keyboard(),
+    )
+
+
 async def _deliver_approved_solve(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -1057,7 +1086,7 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not has_intro_access(user_id):
             await query.answer("נדרשת חבילה/קופון בתוקף לגישה לשיעורים.", show_alert=True)
             chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-            await _send_text_safe(
+            await _send_denied_with_purchase(
                 context,
                 chat_id,
                 intro_access_blocked_hebrew(),
@@ -1959,7 +1988,7 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.answer()
         access = consume_solve_slot(telegram_user_id(update))
         if access.status != ImageAccessStatus.OK:
-            await _send_text_safe(
+            await _send_denied_with_purchase(
                 context,
                 chat_id,
                 image_access_reply_hebrew(access),
@@ -2020,7 +2049,7 @@ async def _deliver_generated_exercise(
         if access.status != ImageAccessStatus.OK:
             await cleanup_practice_chat(context, chat_id)
             await _leave_formulas_chat_if_needed(context, chat_id)
-            await _send_text_safe(
+            await _send_denied_with_purchase(
                 context,
                 chat_id,
                 image_access_reply_hebrew(access),
@@ -2271,8 +2300,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _leave_formulas_chat_if_needed(context, chat_id)
         access = check_solve_access(telegram_user_id(update))
         if access.status != ImageAccessStatus.OK:
-            await _reply_text_safe(
+            await _reply_denied_with_purchase(
                 update.message,
+                context,
+                chat_id,
                 image_access_reply_hebrew(access),
             )
             return
@@ -2404,8 +2435,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if draft_result.handled and draft_result.approved:
                 access = consume_solve_slot(telegram_user_id(update))
                 if access.status != ImageAccessStatus.OK:
-                    await _reply_text_safe(
+                    await _reply_denied_with_purchase(
                         update.message,
+                        context,
+                        chat_id,
                         image_access_reply_hebrew(access),
                     )
                     return
@@ -2565,8 +2598,10 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 user_id,
                 access.status.value,
             )
-            await _reply_text_safe(
+            await _reply_denied_with_purchase(
                 update.message,
+                context,
+                chat_id,
                 image_access_reply_hebrew(access),
             )
             return
