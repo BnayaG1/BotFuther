@@ -49,9 +49,9 @@ def _is_admin(update: Update) -> bool:
 
 def build_admin_persistent_reply_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
-        [pkg.label_hebrew() for pkg in ADMIN_PACKAGE_CATALOG[:2]],
-        [pkg.label_hebrew() for pkg in ADMIN_PACKAGE_CATALOG[2:4]],
-        [ADMIN_PACKAGE_CATALOG[4].label_hebrew(), "👥 רשימת משתמשים"],
+        [pkg.label_admin_keyboard() for pkg in ADMIN_PACKAGE_CATALOG[:2]],
+        [pkg.label_admin_keyboard() for pkg in ADMIN_PACKAGE_CATALOG[2:4]],
+        [ADMIN_PACKAGE_CATALOG[4].label_admin_keyboard(), "רשימת משתמשים"],
     ]
     return ReplyKeyboardMarkup(
         buttons,
@@ -163,7 +163,7 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     total = len(rows)
     lines = [
-        f"👥 <b>רשימת משתמשים במערכת</b> (סה״כ: {total})\n"
+        f"<b>רשימת משתמשים במערכת</b> (סה״כ: {total})\n"
     ]
 
     for idx, row in enumerate(rows, 1):
@@ -181,8 +181,8 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         lines.append(
             f"<b>{idx}. {user_str}</b>\n"
-            f"   • 👤 שם משתמש: {user_field}\n"
-            f"   • 📅 הצטרפ/ה: {dt}\n"
+            f"   • שם משתמש: {user_field}\n"
+            f"   • הצטרפ/ה: {dt}\n"
         )
 
     await update.message.reply_text("\n".join(lines).strip(), parse_mode="HTML")

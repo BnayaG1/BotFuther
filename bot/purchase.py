@@ -28,6 +28,12 @@ class PackageOption:
         period = _period_label(self.period_days)
         return f"{period} · ₪{self.price_ils}"
 
+    def label_admin_keyboard(self) -> str:
+        """תווית למקלדת הקבועה של האדמין — רק מחיר בשקלים."""
+        if self.daily_quota >= 999:
+            return "VIP"
+        return f"₪{self.price_ils}"
+
     def summary_hebrew(self) -> str:
         if self.daily_quota >= 999:
             return (
