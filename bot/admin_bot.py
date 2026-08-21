@@ -155,8 +155,8 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_admin(update):
         await update.message.reply_text(_UNAUTHORIZED_TEXT)
         return
-    admin_ids = ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids()
-    rows = list_users_first_seen(exclude_admin_ids=admin_ids)
+    admin_ids = set(ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids())
+    rows = list_users_first_seen()  # ללא סינון — כולל אדמינים
     if not rows:
         await update.message.reply_text("אין משתמשים במערכת.")
         return
@@ -171,6 +171,7 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ts = row[1]
         uname = row[2] if len(row) > 2 else None
         dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d/%m/%Y %H:%M")
+        is_admin_user = uid in admin_ids
 
         if uname:
             user_str = f'<a href="https://t.me/{uname}">@{uname}</a>'
@@ -179,13 +180,35 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             user_str = f'<a href="tg://user?id={uid}">פרופיל ({uid})</a>'
             user_field = f"ללא שם משתמש (ID: <code>{uid}</code>)"
 
+        admin_tag = " [אדמין]" if is_admin_user else ""
         lines.append(
-            f"<b>{idx}. {user_str}</b>\n"
+            f"<b>{idx}. {user_str}{admin_tag}</b>\n"
             f"   • שם משתמש: {user_field}\n"
             f"   • הצטרפ/ה: {dt}\n"
         )
 
     await update.message.reply_text("\n".join(lines).strip(), parse_mode="HTML")
+
+
+async def cmd_dbpath(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """פקודת אבחון — מציגה את נתיב ה-DB הפעיל."""
+    if not update.message:
+        return
+    if not _is_admin(update):
+        await update.message.reply_text(_UNAUTHORIZED_TEXT)
+        return
+    from bot.access import DB_PATH
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        count = conn.execute("SELECT COUNT(*) FROM user_first_seen").fetchone()[0]
+        conn.close()
+        await update.message.reply_text(
+            f"DB path: <code>{DB_PATH}</code>\nמשתמשים בטבלה: <b>{count}</b>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"שגיאה: <code>{e}</code>\nנתיב: <code>{DB_PATH}</code>", parse_mode="HTML")
 
 
 async def cmd_user_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -328,6 +351,7 @@ def build_admin_application(token: str | None = None) -> Application:
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("users", cmd_users))
     app.add_handler(CommandHandler("user", cmd_user_detail))
+    app.add_handler(CommandHandler("dbpath", cmd_dbpath))
     app.add_handler(CallbackQueryHandler(on_admin_callback, pattern=r"^admin:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_text))
     return app
