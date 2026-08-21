@@ -29,7 +29,7 @@ _raw_access_db = (
     os.getenv("ACCESS_DB_PATH", "").strip()
     or os.getenv("DB_PATH", "").strip()
 )
-DB_PATH = Path(_raw_access_db).resolve() if _raw_access_db else (APP_DIR / "data" / "access.db").resolve()
+DB_PATH = Path(_raw_access_db).resolve() if _raw_access_db else (APP_DIR / "access.db").resolve()
 
 # חלון מועדף: 24 שעות מ־first_seen_at (/start ראשון).
 FORMULAS_FREE_WINDOW_SEC = 24 * 3600
