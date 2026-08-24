@@ -39,6 +39,7 @@ from bot.config import (
     VISION_OVERLOAD_FALLBACK,
     VISION_TOTAL_BUDGET_SEC,
     VISION_MAX_OUTPUT_TOKENS,
+    VISION_THINKING_BUDGET,
 )
 from bot.prompt_loader import (
     STEP_1_KEY,
@@ -187,7 +188,7 @@ def extract_exercise_from_image(
         config_kwargs["response_mime_type"] = "application/json"
     norm_model = normalize_model_id(model)
     if norm_model.startswith("gemini-2.5-"):
-        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=VISION_THINKING_BUDGET)
     contents = [
         types.Content(
             role="user",
@@ -2218,72 +2219,9 @@ def _promote_diagonal_point_loads(loads: list[dict]) -> list[dict]:
 
 
 def _fix_paired_cd_inclined_loads(beam: dict, loads: list[dict]) -> list[dict]:
-    """מתקן כיוון של אלכסוני קיים ב-D ליד אלכסוני ב-C — לא הופך אנכי לאלכסוני.
-
-    בעבר המיר point אנכי ב-D ל-inclined; זה פגע בתרגילים עם אנכי אמיתי ליד אלכסוני.
-    """
-    labeled = _labeled_points_map(beam)
-    c_x = labeled.get("C", 1.0)
-    d_x = labeled.get("D", 2.0)
-
-    c_ref: dict | None = None
-    for ld in loads:
-        if str(ld.get("type", "")).lower() != "inclined":
-            continue
-        try:
-            x = float(ld.get("x", 0))
-        except (TypeError, ValueError):
-            continue
-        if abs(x - c_x) > 0.35:
-            continue
-        mag, _ = _inclined_mag_and_dir(ld)
-        if 2.0 <= mag <= 8.0:
-            c_ref = ld
-            break
-    if c_ref is None:
-        return loads
-
-    c_mag, _ = _inclined_mag_and_dir(c_ref)
-    try:
-        angle = float(c_ref.get("angle_deg", 30.0))
-    except (TypeError, ValueError):
-        angle = 30.0
-
-    for i, ld in enumerate(loads):
-        if not isinstance(ld, dict):
-            continue
-        if ld.get("_user_mag") or _load_position_user_locked(ld):
-            continue
-        t = str(ld.get("type", "")).lower()
-        # לא להמיר point אנכי → inclined
-        if t != "inclined":
-            continue
-        lbl = str(ld.get("label_at", "")).strip().upper()
-        try:
-            x = float(ld.get("x", 0))
-        except (TypeError, ValueError):
-            continue
-        at_d = lbl == "D" or abs(x - d_x) < 0.35
-        if not at_d:
-            continue
-
-        mag, incl_dir = _inclined_mag_and_dir(ld)
-        if incl_dir == "dl" and abs(mag - c_mag) < 2.5:
-            continue
-        if abs(mag - c_mag) > 2.5 and abs(mag - 5) > 2.5:
-            continue
-        fx_c, fy_c = _recompute_inclined_components(mag, angle, incl_dir="dl")
-        ld = dict(ld)
-        ld["x"] = d_x
-        ld["Fx"] = fx_c
-        ld["Fy"] = fy_c
-        ld["angle_deg"] = angle
-        ld["incl_dir"] = "dl"
-        ld["magnitude_ton"] = mag
-        ld["label_at"] = "D"
-        loads[i] = ld
-        log.info("Fixed D inclined %s → dl at x=%s", incl_dir or "?", d_x)
+    """לא מוחלף כיוון בכוח — שומר על הכיוון הוויזואלי שנשלף מהתמונה."""
     return loads
+
 
 
 def _demote_near_vertical_inclined_loads(loads: list[dict]) -> list[dict]:
@@ -4616,13 +4554,36 @@ def _apply_support_hatch_evidence(beam: dict) -> None:
             sup["type"] = derived
 
 
-def _ensure_simply_supported_pin_roller_pair(supports: list[dict]) -> None:
+def _ensure_simply_supported_pin_roller_pair(supports: list[dict], beam: dict | None = None) -> None:
     """שני סמכים מאותו סוג (או שני fixed) — חייבים צמד pin+roller.
 
-    עדיפות: תוויות A/B (A=קבוע, B=נייד); אחרת שמאלי=pin, ימני=roller.
+    עדיפות: pin_support_label / roller_support_label מפורשים, אחרת תוויות A/B (A=קבוע, B=נייד); אחרת שמאלי=pin, ימני=roller.
     """
     if len(supports) != 2 or not all(isinstance(s, dict) for s in supports):
         return
+    if beam and isinstance(beam, dict):
+        pin_lbl = str(beam.get("pin_support_label") or "").strip().upper()
+        roller_lbl = str(beam.get("roller_support_label") or "").strip().upper()
+        by_lbl = {
+            str(s.get("label", "")).strip().upper(): s for s in supports
+        }
+        if pin_lbl and pin_lbl in by_lbl and roller_lbl and roller_lbl in by_lbl and by_lbl[pin_lbl] is not by_lbl[roller_lbl]:
+            by_lbl[pin_lbl]["type"] = "pin"
+            by_lbl[roller_lbl]["type"] = "roller"
+            return
+        if pin_lbl and pin_lbl in by_lbl:
+            by_lbl[pin_lbl]["type"] = "pin"
+            other = [s for s in supports if s is not by_lbl[pin_lbl]]
+            if other:
+                other[0]["type"] = "roller"
+            return
+        if roller_lbl and roller_lbl in by_lbl:
+            by_lbl[roller_lbl]["type"] = "roller"
+            other = [s for s in supports if s is not by_lbl[roller_lbl]]
+            if other:
+                other[0]["type"] = "pin"
+            return
+
     by_label = {
         str(s.get("label", "")).strip().upper(): s for s in supports
     }
@@ -4699,7 +4660,7 @@ def _normalize_support_types(beam: dict) -> None:
     unique = set(types)
     if unique == {"pin", "roller"}:
         return
-    _ensure_simply_supported_pin_roller_pair(supports)
+    _ensure_simply_supported_pin_roller_pair(supports, beam)
 
 
 def normalize_beam_model(

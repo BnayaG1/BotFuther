@@ -195,11 +195,11 @@ def _term_rotation_about_wall_hebrew(
     term: _MaFixedTerm, wall_pos: float
 ) -> tuple[str, str]:
     if term.kind == "moment":
-        # מומנט טהור: סימן כמו בשרטוט (עם שעון → + ; נגד שעון → −).
+        # מומנט טהור: סימן הפוך לכיוון בשרטוט (עם שעון → − ; נגד שעון → +).
         # תואם statics_calculator כי המשוואה נכתבת Ma+Σ=0 (לא −Ma+Σ=0).
         clockwise = bool(term.is_cw_moment)
         rot_he = "עם" if clockwise else "נגד"
-        sign = "+" if clockwise else "-"
+        sign = "-" if clockwise else "+"
         # #region agent log
         try:
             import json as _json, time as _time

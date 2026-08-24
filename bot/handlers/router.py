@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import logging
 import math
 import shutil
@@ -119,11 +120,16 @@ from bot.draft_editor import (
 )
 from bot.draft_keyboard import (
     DRAFT_INSTRUCTION_TEXT,
+    build_add_load_wizard_dir_keyboard,
+    build_add_load_wizard_type_keyboard,
     build_draft_approve_keyboard,
+    build_draft_keyboard,
     build_load_dir_prompt_keyboard,
+    draft_display_text,
     edit_prompt,
     parse_draft_callback,
 )
+from bot.draft_format import _inclined_mag
 from bot.draft_nl_edit import apply_nl_draft_edit
 from bot.draft_preview import (
     refresh_draft_after_correction,
@@ -180,6 +186,7 @@ from bot.draft_session import (
     get_draft_error_message_id,
     get_draft_edit,
     get_draft_edit_prompt_id,
+    get_draft_menu_view,
     get_draft_message_ref,
     get_draft_type_picker_idx,
     get_stored_vision_extracted,
@@ -188,9 +195,13 @@ from bot.draft_session import (
     set_draft_error_message_id,
     set_draft_edit,
     set_draft_edit_prompt_id,
+    set_draft_menu_view,
     set_draft_pending,
     set_draft_source_user_message_id,
     set_draft_type_picker_idx,
+    get_add_load_wizard_state,
+    set_add_load_wizard_state,
+    pop_draft_cleanup_ids,
 )
 from bot.vision import (
     finalize_beam_extraction,
@@ -382,8 +393,7 @@ async def _deliver_approved_solve(
 
     if reply:
         sent = await _send_text_safe(context, chat_id, reply)
-        if track_practice:
-            _track_sent_message(chat_id, sent)
+        _track_sent_message(chat_id, sent)
         if not has_result:
             try:
                 set_draft_error_message_id(chat_id, int(getattr(sent, "message_id", 0)))
@@ -812,13 +822,14 @@ async def cleanup_practice_chat(
     clear_progress: bool = True,
     keep_exercise_image: bool = False,
 ) -> None:
-    """מוחק מהצ'אט את כל הודעות התרגול הנוכחי (תמונה/מצב/מחברת/מדריך)."""
-    from bot.draft_session import clear_vision_context, get_draft_source_user_message_id
+    from bot.draft_session import clear_vision_context, get_draft_source_user_message_id, get_draft_cleanup_message_ids
 
     ex_img_id = get_exercise_image_message_id(chat_id)
     user_src_id = get_draft_source_user_message_id(chat_id)
     ids = pop_practice_chat_message_ids(chat_id)
     ids.extend(pop_assistant_message_ids(chat_id))
+    draft_ids = get_draft_cleanup_message_ids(chat_id, keep_user_source=keep_exercise_image)
+    ids.extend(draft_ids)
     if ex_img_id is not None and not keep_exercise_image and int(ex_img_id) not in ids:
         ids.append(int(ex_img_id))
     if user_src_id is not None and not keep_exercise_image and int(user_src_id) not in ids:
@@ -1772,16 +1783,20 @@ async def _edit_draft_message_safe(
     edit: dict | None = None,
     errors: list[str] | None = None,
 ) -> None:
-    del extracted, edit, errors  # הודעת הטיוטה היא הסבר קבוע + אישור
-    text = DRAFT_INSTRUCTION_TEXT
-    keyboard = build_draft_approve_keyboard()
+    menu_view = get_draft_menu_view(chat_id)
+    keyboard = build_draft_keyboard(
+        extracted,
+        menu_view=menu_view,
+        type_picker_idx=get_draft_type_picker_idx(chat_id),
+    )
     try:
-        await context.bot.edit_message_text(
-            text,
+        res = context.bot.edit_message_reply_markup(
             chat_id=chat_id,
             message_id=message_id,
             reply_markup=keyboard,
         )
+        if inspect.isawaitable(res):
+            await res
     except BadRequest as exc:
         err = str(exc).lower()
         if "message is not modified" in err:
@@ -1872,14 +1887,11 @@ async def _apply_pending_edit(
         return True
 
     await _dismiss_edit_prompt(context, chat_id)
-    await _dismiss_user_message(context, chat_id, user_message_id)
     set_draft_edit(chat_id, None)
     persist_draft(chat_id, updated)
-    if ref:
-        try:
-            await _edit_draft_message_safe(context, ref[0], ref[1], updated)
-        except BadRequest as exc:
-            log.warning("Draft message edit failed: %s", exc)
+    await refresh_draft_after_correction(
+        context, chat_id, updated, user_message_id=user_message_id
+    )
     return True
 
 
@@ -1943,7 +1955,6 @@ async def _start_draft_edit(
             sent = await context.bot.send_message(
                 chat_id=chat_id,
                 text=prompt_text,
-                reply_markup=_FORCE_REPLY,
                 parse_mode="Markdown",
             )
     except BadRequest as exc:
@@ -1959,7 +1970,6 @@ async def _start_draft_edit(
             sent = await context.bot.send_message(
                 chat_id=chat_id,
                 text=prompt_text,
-                reply_markup=_FORCE_REPLY,
             )
     set_draft_edit_prompt_id(chat_id, sent.message_id)
     log.info("Edit prompt sent chat=%s kind=%s msg=%s", chat_id, kind, sent.message_id)
@@ -2016,6 +2026,18 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await wipe_draft_conversation(
                 context, chat_id, message_ids=cleanup_ids
             )
+            await _dismiss_edit_prompt(context, chat_id)
+            set_draft_edit(chat_id, None)
+            set_draft_type_picker_idx(chat_id, None)
+            set_draft_menu_view(chat_id, "main")
+            set_pending_bank_exercise(chat_id, _GENERATED_EXERCISE_ID, extracted)
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text="איך תרצה/י לפתור את התרגיל?",
+                reply_markup=build_bank_solve_mode_keyboard(),
+            )
+            _track_sent_message(chat_id, sent)
+            return
         await deliver_after_draft_approve(
             context,
             chat_id,
@@ -2030,11 +2052,321 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await _dismiss_edit_prompt(context, chat_id)
         set_draft_edit(chat_id, None)
         set_draft_type_picker_idx(chat_id, None)
+        set_draft_menu_view(chat_id, "main")
         return
 
-    # מקלדת הטיוטה החדשה היא אישור בלבד — מתעלמים משאר d:* ישנים.
+    if cb.action == "menu_edit":
+        await query.answer()
+        set_draft_menu_view(chat_id, "edit")
+        if msg_id:
+            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
+        return
+
+    if cb.action == "menu_main":
+        await query.answer()
+        set_draft_menu_view(chat_id, "main")
+        if msg_id:
+            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
+        return
+
+    if cb.action == "menu_load":
+        await query.answer()
+        set_draft_menu_view(chat_id, f"load_{cb.index}")
+        if msg_id:
+            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
+        return
+
+    if cb.action == "cancel_edit":
+        await query.answer()
+        await _dismiss_edit_prompt(context, chat_id)
+        set_draft_edit(chat_id, None)
+        set_draft_type_picker_idx(chat_id, None)
+        if msg_id:
+            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
+        return
+
+    if cb.action == "set_load_dir_direct":
+        await query.answer()
+        beam = dict(extracted.get("beam") or {})
+        loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+        idx = cb.index - 1
+        if 0 <= idx < len(loads):
+            ld = loads[idx]
+            t = str(ld.get("type", "point")).lower().strip()
+
+            def _get_num(d: dict, *keys: str, default: float) -> float:
+                for k in keys:
+                    v = d.get(k)
+                    if v is not None:
+                        try:
+                            return float(v)
+                        except (TypeError, ValueError):
+                            pass
+                return default
+
+            if t == "moment":
+                raw_m = abs(_get_num(ld, "M", "m", default=10.0))
+                if raw_m < 1e-9:
+                    raw_m = 10.0
+                ld["M"] = -raw_m if cb.dir == "l" else raw_m
+            elif t == "inclined":
+                mag = _inclined_mag(ld)
+                if mag < 1e-9:
+                    mag = 5.0
+                angle = _get_num(ld, "angle_deg", default=30.0)
+                ld["angle_deg"] = angle
+                ld["incl_dir"] = "dl" if cb.dir == "l" else "dr"
+                rad = math.radians(angle)
+                fx_sign = -1.0 if cb.dir == "l" else 1.0
+                ld["Fx"] = fx_sign * mag * math.cos(rad)
+                ld["Fy"] = mag * math.sin(rad)
+            elif t == "distributed":
+                raw_w = abs(_get_num(ld, "w", "q", default=2.0))
+                if raw_w < 1e-9:
+                    raw_w = 2.0
+                ld["w"] = -raw_w if cb.dir == "l" else raw_w
+            elif is_axial_point_load(ld):
+                raw_fx = abs(_get_num(ld, "Fx", "fx", default=5.0))
+                if raw_fx < 1e-9:
+                    raw_fx = 5.0
+                ld["Fx"] = -raw_fx if cb.dir == "l" else raw_fx
+                ld["Fy"] = 0.0
+            else:
+                raw_fy = abs(_get_num(ld, "Fy", "fy", default=5.0))
+                if raw_fy < 1e-9:
+                    raw_fy = 5.0
+                ld["Fy"] = -raw_fy if cb.dir == "l" else raw_fy
+                ld["Fx"] = 0.0
+            beam["loads"] = loads
+            extracted = dict(extracted)
+            extracted["beam"] = beam
+            extracted = finalize_beam_extraction(extracted, merge_nearby_point_loads=False)
+            persist_draft(chat_id, extracted)
+            await refresh_draft_after_correction(context, chat_id, extracted)
+        return
+
+    if cb.action == "set_support_side":
+        await query.answer()
+        beam = dict(extracted.get("beam") or {})
+        supports = [dict(s) for s in (beam.get("supports") or []) if isinstance(s, dict)]
+        idx = cb.index - 1
+        if 0 <= idx < len(supports):
+            L_val = float(beam.get("L", 10.0) or 10.0)
+            target_x = 0.0 if cb.dir == "l" else L_val
+            target_label = "A" if cb.dir == "l" else "B"
+            supports[idx]["x"] = target_x
+            supports[idx]["label"] = target_label
+            supports[idx]["type"] = "fixed"
+            beam["supports"] = supports
+            beam["support_mode"] = "cantilever"
+            extracted = dict(extracted)
+            extracted["beam"] = beam
+            set_draft_menu_view(chat_id, "main")
+            extracted = finalize_beam_extraction(extracted, merge_nearby_point_loads=False)
+            persist_draft(chat_id, extracted)
+            await refresh_draft_after_correction(context, chat_id, extracted)
+        return
+
+    if cb.action == "menu_support":
+        await query.answer()
+        set_draft_menu_view(chat_id, f"support_{cb.index}")
+        if msg_id:
+            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
+        return
+
+    if cb.action == "swap_supports":
+        await query.answer("הסמכים הוחלפו.")
+        from bot.draft_editor import swap_supports
+        extracted = swap_supports(extracted)
+        set_draft_menu_view(chat_id, "main")
+        persist_draft(chat_id, extracted)
+        await refresh_draft_after_correction(context, chat_id, extracted)
+        return
+
+    if cb.action in ("edit_L", "edit_support", "edit_load", "edit_load_mag", "edit_load_x", "edit_load_angle"):
+        edit_dict = {"kind": cb.action.replace("edit_", "")}
+        if cb.index:
+            edit_dict["index"] = cb.index
+        await _start_draft_edit(context, query, chat_id, edit_dict, extracted)
+        return
+
+    if cb.action == "delete_load":
+        await query.answer()
+        beam = dict(extracted.get("beam") or {})
+        loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+        idx = cb.index - 1
+        if 0 <= idx < len(loads):
+            loads.pop(idx)
+            beam["loads"] = loads
+            extracted = dict(extracted)
+            extracted["beam"] = beam
+            set_draft_menu_view(chat_id, "edit")
+            extracted = finalize_beam_extraction(extracted, merge_nearby_point_loads=False)
+            persist_draft(chat_id, extracted)
+            await refresh_draft_after_correction(context, chat_id, extracted)
+        return
+
+    if cb.action == "add_load":
+        await query.answer()
+        if msg_id:
+            try:
+                await context.bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
+            except Exception:
+                pass
+        set_add_load_wizard_state(chat_id, {"step": "type"})
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text="איזה עומס תרצה להוסיף?",
+            reply_markup=build_add_load_wizard_type_keyboard(),
+        )
+        set_draft_edit_prompt_id(chat_id, sent.message_id)
+        return
+
+    if cb.action == "wizard_cancel":
+        await query.answer("הוספת עומס בוטלה.")
+        set_add_load_wizard_state(chat_id, None)
+        
+        cleanup_mids = pop_draft_cleanup_ids(chat_id)
+        prompt_id = get_draft_edit_prompt_id(chat_id)
+        if prompt_id and prompt_id not in cleanup_mids:
+            cleanup_mids.append(prompt_id)
+            
+        for mid in cleanup_mids:
+            try:
+                await context.bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
+        
+        photo_mid = get_draft_photo_message_id(chat_id)
+        if photo_mid:
+            await _edit_draft_message_safe(context, chat_id, photo_mid, extracted)
+        return
+
+    if cb.action == "wizard_type":
+        await query.answer()
+        state = get_add_load_wizard_state(chat_id) or {}
+        ltype = cb.dir
+        state["type"] = ltype
+        prompt_id = get_draft_edit_prompt_id(chat_id)
+        if ltype == "distributed":
+            state["step"] = "bounds"
+            set_add_load_wizard_state(chat_id, state)
+            if prompt_id:
+                try:
+                    await context.bot.delete_message(chat_id, prompt_id)
+                except Exception:
+                    pass
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text="מה המרחקים של איפה שהעומס מתחיל ונגמר לפי הקצה השמאלי של הקורה? תרשום כמספרים עם פסיק בניהם",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ביטול הוספה", callback_data="d:wC")]])
+            )
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+        else:
+            state["step"] = "dir"
+            set_add_load_wizard_state(chat_id, state)
+            if prompt_id:
+                try:
+                    await context.bot.edit_message_text(
+                        "בחר את כיוון העומס:",
+                        chat_id=chat_id,
+                        message_id=prompt_id,
+                        reply_markup=build_add_load_wizard_dir_keyboard(ltype)
+                    )
+                except Exception:
+                    pass
+        return
+
+    if cb.action == "wizard_dir":
+        await query.answer()
+        state = get_add_load_wizard_state(chat_id) or {}
+        state["dir"] = cb.dir
+        state["step"] = "mag"
+        set_add_load_wizard_state(chat_id, state)
+        prompt_id = get_draft_edit_prompt_id(chat_id)
+        if prompt_id:
+            try:
+                await context.bot.delete_message(chat_id, prompt_id)
+            except Exception:
+                pass
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text="מה המשקל של העומס?",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ביטול הוספה", callback_data="d:wC")]])
+        )
+        set_draft_edit_prompt_id(chat_id, sent.message_id)
+        return
+
+    if cb.action == "pick_load_type":
+        await query.answer()
+        set_draft_type_picker_idx(chat_id, cb.index)
+        if msg_id:
+            await _edit_draft_message_safe(context, chat_id, msg_id, extracted)
+        return
+
+    if cb.action == "set_load_type":
+        await query.answer()
+        beam = dict(extracted.get("beam") or {})
+        loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+        idx = cb.index - 1
+        if 0 <= idx < len(loads):
+            target_type = cb.dir
+            x = float(loads[idx].get("x", 0) or 0)
+            if target_type == "point":
+                loads[idx] = {"type": "point", "x": x, "Fy": 5.0, "Fx": 0.0, "_user_x": True, "_user_mag": True}
+            elif target_type == "axial":
+                loads[idx] = {"type": "point", "x": x, "Fy": 0.0, "Fx": 5.0, "_user_x": True, "_user_mag": True}
+            elif target_type == "moment":
+                loads[idx] = {"type": "moment", "x": x, "M": 10.0, "_user_x": True, "_user_mag": True}
+            elif target_type == "distributed":
+                L = float(beam.get("L", 10.0) or 10.0)
+                x1 = max(0.0, x - 1.0)
+                x2 = min(L, x + 1.0)
+                loads[idx] = {"type": "distributed", "x1": x1, "x2": x2, "w": 3.0, "shape": "rectangular", "_user_span": True, "_user_mag": True}
+            elif target_type == "inclined":
+                loads[idx] = {"type": "inclined", "x": x, "magnitude_ton": 5.0, "angle_deg": 30.0, "incl_dir": "dr", "_user_x": True, "_user_mag": True}
+                from bot.draft_format import _sync_inclined_components
+                loads[idx] = _sync_inclined_components(loads[idx])
+            beam["loads"] = loads
+            extracted = dict(extracted)
+            extracted["beam"] = beam
+            set_draft_type_picker_idx(chat_id, None)
+            extracted = finalize_beam_extraction(extracted, merge_nearby_point_loads=False)
+            persist_draft(chat_id, extracted)
+            await refresh_draft_after_correction(context, chat_id, extracted)
+        return
+
+    if cb.action in ("toggle_dir", "set_load_dir"):
+        await query.answer()
+        beam = dict(extracted.get("beam") or {})
+        loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+        idx = cb.index - 1
+        if 0 <= idx < len(loads):
+            ld = loads[idx]
+            t = str(ld.get("type", "")).lower()
+            if t == "inclined":
+                from bot.draft_editor import toggle_load_direction
+                extracted = toggle_load_direction(extracted, cb.index)
+            elif t == "point":
+                fy = float(ld.get("Fy", 0) or 0)
+                fx = float(ld.get("Fx", 0) or 0)
+                if abs(fy) >= 1e-9:
+                    ld["Fy"] = -fy
+                elif abs(fx) >= 1e-9:
+                    ld["Fx"] = -fx
+            elif t == "moment":
+                m = float(ld.get("M", 0) or 0)
+                ld["M"] = -m
+            elif t == "distributed":
+                w = float(ld.get("w", 0) or 0)
+                ld["w"] = -w
+            set_draft_type_picker_idx(chat_id, None)
+            extracted = finalize_beam_extraction(extracted, merge_nearby_point_loads=False)
+            persist_draft(chat_id, extracted)
+            await refresh_draft_after_correction(context, chat_id, extracted)
+        return
+
     await query.answer()
-    return
 
 
 async def _deliver_generated_exercise(
@@ -2101,6 +2433,148 @@ async def _deliver_generated_exercise(
     )
     _track_sent_message(chat_id, sent)
 
+
+async def _apply_add_load_wizard_text(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    text: str,
+    wizard_state: dict,
+    user_message_id: int | None,
+) -> bool:
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    from bot.draft_session import set_add_load_wizard_state, get_draft_edit_prompt_id, set_draft_edit_prompt_id, get_stored_vision_extracted
+    from bot.draft_editor import _parse_edit_number, persist_draft
+    step = wizard_state.get("step")
+    ltype = wizard_state.get("type", "point")
+    
+    prompt_id = get_draft_edit_prompt_id(chat_id)
+    if prompt_id:
+        try:
+            await context.bot.delete_message(chat_id, prompt_id)
+        except Exception:
+            pass
+            
+    async def _send_err(msg: str):
+        return await context.bot.send_message(chat_id, msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ביטול הוספה", callback_data="d:wC")]]))
+        
+    if step == "bounds":
+        parts = text.replace(" ", "").split(",")
+        if len(parts) != 2:
+            sent = await _send_err("פורמט לא תקין. אנא הקלד 2 מספרים עם פסיק ביניהם (למשל 2,5)")
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+            return True
+        try:
+            x1, x2 = float(parts[0]), float(parts[1])
+        except ValueError:
+            sent = await _send_err("ערכים לא תקינים, אנא נסה שוב.")
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+            return True
+        wizard_state["bounds"] = (x1, x2)
+        wizard_state["step"] = "mag"
+        set_add_load_wizard_state(chat_id, wizard_state)
+        sent = await context.bot.send_message(chat_id, "מה המשקל של העומס?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ביטול הוספה", callback_data="d:wC")]]))
+        set_draft_edit_prompt_id(chat_id, sent.message_id)
+        return True
+        
+    if step == "mag":
+        val = _parse_edit_number(text)
+        if val is None or val > 99:
+            sent = await _send_err("אנא הזן מספר תקין (עד 99)")
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+            return True
+        wizard_state["mag"] = val
+        if ltype == "distributed":
+            wizard_state["step"] = "finish"
+        elif ltype == "inclined":
+            wizard_state["step"] = "angle"
+            set_add_load_wizard_state(chat_id, wizard_state)
+            sent = await context.bot.send_message(chat_id, "מה הזווית של העומס?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ביטול הוספה", callback_data="d:wC")]]))
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+            return True
+        else:
+            wizard_state["step"] = "pos"
+            set_add_load_wizard_state(chat_id, wizard_state)
+            sent = await context.bot.send_message(chat_id, "מה המרחק של העומס מהקצה השמאלי של הקורה?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ביטול הוספה", callback_data="d:wC")]]))
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+            return True
+            
+    if step == "angle":
+        val = _parse_edit_number(text)
+        if val is None or val < 1 or val > 90:
+            sent = await _send_err("זווית צריכה להיות מספר בין 1 ל-90, נסה שוב:")
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+            return True
+        wizard_state["angle"] = val
+        wizard_state["step"] = "pos"
+        set_add_load_wizard_state(chat_id, wizard_state)
+        sent = await context.bot.send_message(chat_id, "מה המרחק של העומס מהקצה השמאלי של הקורה?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ביטול הוספה", callback_data="d:wC")]]))
+        set_draft_edit_prompt_id(chat_id, sent.message_id)
+        return True
+        
+    if step == "pos":
+        val = _parse_edit_number(text)
+        if val is None:
+            sent = await _send_err("מרחק לא תקין, אנא הקלד מספר.")
+            set_draft_edit_prompt_id(chat_id, sent.message_id)
+            return True
+        wizard_state["pos"] = val
+        wizard_state["step"] = "finish"
+
+    if wizard_state.get("step") == "finish":
+        from bot.vision import finalize_beam_extraction
+        from bot.draft_session import set_draft_menu_view
+        extracted = get_stored_vision_extracted(chat_id) or {}
+        beam = dict(extracted.get("beam") or {})
+        loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+        
+        ltype = wizard_state["type"]
+        new_ld = {"type": ltype, "_user_mag": True, "_draft_new": True}
+        if ltype == "distributed":
+            x1, x2 = wizard_state["bounds"]
+            new_ld["x1"] = x1
+            new_ld["x2"] = x2
+            new_ld["w"] = wizard_state["mag"]
+            new_ld["shape"] = "rectangular"
+            new_ld["_user_span"] = True
+        else:
+            new_ld["x"] = wizard_state["pos"]
+            new_ld["_user_x"] = True
+            wdir = wizard_state.get("dir", "down")
+            mag = wizard_state["mag"]
+            if ltype == "point":
+                new_ld["Fx"] = 0.0
+                new_ld["Fy"] = mag if wdir == "down" else -mag
+            elif ltype == "axial":
+                new_ld["Fy"] = 0.0
+                new_ld["Fx"] = mag if wdir == "right" else -mag
+            elif ltype == "moment":
+                new_ld["M"] = mag if wdir == "cw" else -mag
+            elif ltype == "inclined":
+                new_ld["angle_deg"] = wizard_state["angle"]
+                new_ld["magnitude_ton"] = mag
+                new_ld["incl_dir"] = wdir
+                from bot.draft_format import _sync_inclined_components
+                new_ld = _sync_inclined_components(new_ld)
+
+        loads.append(new_ld)
+        beam["loads"] = loads
+        extracted["beam"] = beam
+        new_idx = len(loads)
+        set_draft_menu_view(chat_id, f"load_{new_idx}")
+        extracted = finalize_beam_extraction(extracted, merge_nearby_point_loads=False)
+        persist_draft(chat_id, extracted)
+        set_add_load_wizard_state(chat_id, None)
+        await refresh_draft_after_correction(context, chat_id, extracted)
+        
+        from bot.draft_session import pop_draft_cleanup_ids
+        for mid in pop_draft_cleanup_ids(chat_id):
+            try:
+                await context.bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
+        return True
+        
+    return False
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
@@ -2405,20 +2879,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await cmd_quota(update, context)
         return
 
-    if COUPON_ACCESS_ENABLED:
-        in_coupon_prompt = chat_id in _coupon_prompt_chats
-        if in_coupon_prompt or looks_like_coupon_code(text):
-            if in_coupon_prompt:
-                _coupon_prompt_chats.discard(chat_id)
-            result = redeem_coupon(text, telegram_user_id(update))
-            await _reply_text_safe(
-                update.message,
-                redeem_reply_hebrew(result),
-            )
-            return
-
-
     if is_draft_pending(chat_id):
+        from bot.draft_session import get_add_load_wizard_state, register_draft_cleanup_id
+        wizard_state = get_add_load_wizard_state(chat_id)
+        if wizard_state:
+            user_mid = int(update.message.message_id) if update.message else None
+            if user_mid:
+                register_draft_cleanup_id(chat_id, user_mid)
+            handled = await _apply_add_load_wizard_text(
+                context, chat_id, text, wizard_state, user_mid
+            )
+            if handled:
+                return
+
         if is_approval_message(text):
             # לפני approve — ids למחיקה (בלי תמונת מקור של המשתמש)
             ref = get_draft_message_ref(chat_id)
@@ -2447,23 +2920,33 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     await wipe_draft_conversation(
                         context, chat_id, message_ids=cleanup_ids
                     )
-                await deliver_after_draft_approve(
-                    context,
-                    chat_id,
-                    extracted=extracted,
-                    reply=draft_result.reply,
-                    solved=draft_result.solved or {},
-                    draft_msg_id=msg_id,
-                    deliver_notebook=_deliver_approved_solve,
-                    send_text=_send_text_safe,
-                    edit_draft_message=_edit_draft_message_safe,
-                )
-                set_draft_edit(chat_id, None)
+                    set_draft_edit(chat_id, None)
+                    set_pending_bank_exercise(chat_id, _GENERATED_EXERCISE_ID, extracted)
+                    sent = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="איך תרצה/י לפתור את התרגיל?",
+                        reply_markup=build_bank_solve_mode_keyboard(),
+                    )
+                    _track_sent_message(chat_id, sent)
+                    return
             return
 
         extracted = get_stored_vision_extracted(chat_id) or {}
         user_mid = int(update.message.message_id) if update.message else None
         register_draft_cleanup_id(chat_id, user_mid)
+
+        edit = get_draft_edit(chat_id)
+        if edit:
+            handled = await _apply_pending_edit(
+                context,
+                chat_id,
+                text,
+                pending_edit=edit,
+                user_message_id=user_mid,
+            )
+            if handled:
+                return
+
         updated, errors = apply_nl_draft_edit(extracted, text)
         if errors or updated is None:
             err_msg = await _reply_text_safe(
@@ -2489,6 +2972,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 register_draft_cleanup_id(chat_id, getattr(err_msg, "message_id", None))
             return
         return
+
+    if COUPON_ACCESS_ENABLED:
+        in_coupon_prompt = chat_id in _coupon_prompt_chats
+        if in_coupon_prompt or looks_like_coupon_code(text):
+            if in_coupon_prompt:
+                _coupon_prompt_chats.discard(chat_id)
+            result = redeem_coupon(text, telegram_user_id(update))
+            await _reply_text_safe(
+                update.message,
+                redeem_reply_hebrew(result),
+            )
+            return
 
     await _reply_text_safe(
         update.message,

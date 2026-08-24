@@ -51,7 +51,7 @@ def test_draft_display_ignores_type_picker_prompt():
 
 def test_draft_display_empty_load_is_label_only():
     text = draft_display_text(EXTRACTED)
-    assert "2. חדש" in text
+    assert "נקודתי" in text
     assert "לחץ" not in text
     assert "מלא כיוון" not in text
 
@@ -106,11 +106,11 @@ def test_draft_message_and_keyboard_show_same_load_distance():
     summary = _load_summary_he(beam, 1, ld)
     buttons = _build_load_row_buttons(beam, 1, ld)
     dist_btn = buttons[2].text.replace(" ", "")
-    assert "x = 4" in summary
+    assert "נקודתי 5t ↓" in summary
     assert "4" in dist_btn
 
     text = draft_display_text(extracted)
-    assert "x = 4" in text
+    assert "נקודתי 5t ↓" in text
     # וידוא שלא «תיקנו» שקטה ל-x אחר בטקסט בלבד.
     assert "x = 3.5" not in text
 
@@ -124,3 +124,43 @@ def test_draft_data_only_includes_structural_fields():
     assert "אורך הקורה" in text
     assert "סמכים" in text
     assert "עומסים" in text
+
+
+def test_draft_display_fixed_support_formatting():
+    extracted = {
+        "beam": {
+            "L": 6.0,
+            "support_mode": "cantilever",
+            "supports": [
+                {"label": "A", "type": "fixed", "x": 0.0},
+            ],
+            "loads": [],
+        }
+    }
+    text = draft_data_only_text(extracted)
+    assert "ריתום  ·  שמאל" in text
+    assert "קיבוע" not in text
+    assert "A  ·" not in text
+    assert "x =" not in text
+
+
+def test_fixed_support_side_picker_buttons():
+    from bot.draft_keyboard import build_draft_keyboard, parse_draft_callback
+
+    extracted = {
+        "beam": {
+            "L": 6.0,
+            "support_mode": "cantilever",
+            "supports": [
+                {"label": "A", "type": "fixed", "x": 0.0},
+            ],
+            "loads": [],
+        }
+    }
+    kb = build_draft_keyboard(extracted, menu_view="support_1")
+    buttons = [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row]
+    labels = [b[0] for b in buttons]
+    assert labels == ["שינוי מיקום", "חזור"]
+
+    cb_es = parse_draft_callback("d:eS1")
+    assert cb_es is not None and cb_es.action == "edit_support" and cb_es.index == 1

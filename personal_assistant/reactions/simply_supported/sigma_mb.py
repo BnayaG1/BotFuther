@@ -205,7 +205,10 @@ def _term_rotation_about_b_hebrew(
         # אלא נכנסת בכיוון ההפוך לכיוון שהוגדר לו (בהתאם לסימן M שהוזן).
         clockwise = bool(term.is_cw_moment)
         rot_he = "עם" if clockwise else "נגד"
-        sign = "-" if clockwise else "+"
+        if _MB_CLOCKWISE_POSITIVE:
+            sign = "+" if clockwise else "-"
+        else:
+            sign = "-" if clockwise else "+"
         return rot_he, sign
     return _moment_rotation_about_b_hebrew(
         rb_pos, term.x, vertical_down=term.vertical_down

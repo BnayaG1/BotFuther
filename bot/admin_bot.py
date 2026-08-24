@@ -95,9 +95,7 @@ def build_quantity_keyboard(package_id: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("הזן כמות", callback_data=f"admin:custom:{package_id}"),
-        ],
-        [
-            InlineKeyboardButton("חזרה לתפריט", callback_data="admin:menu"),
+            InlineKeyboardButton("ביטול", callback_data="admin:cancel"),
         ],
     ]
     return InlineKeyboardMarkup(rows)
@@ -295,13 +293,20 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     data = query.data
-    if data == "admin:menu":
+    if data == "admin:cancel":
+        context.user_data.pop("admin_awaiting_custom_qty", None)
         await query.answer()
         if query.message:
-            await query.message.edit_text(
-                "בחר חבילה ליצירת קוד קופון:",
-                reply_markup=build_admin_menu_keyboard(),
-            )
+            user_msg = query.message.reply_to_message
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            if user_msg:
+                try:
+                    await user_msg.delete()
+                except Exception:
+                    pass
         return
 
     if data.startswith("admin:pick:"):

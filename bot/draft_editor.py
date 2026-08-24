@@ -170,9 +170,21 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
 
     if kind == "support":
         idx = int(edit.get("index", 1)) - 1
-        val = _parse_edit_number(text)
-        if val is None:
-            return extracted, ["x לא תקין — שלח מספר"]
+        raw = text.strip()
+        # בדיקה האם יש תווים שאינם מספרים (מתירים נקודה עשרונית יחידה)
+        clean_raw = raw.replace(".", "", 1)
+        if not clean_raw.isdigit():
+            return extracted, ["אנא הזן מספר תקין של המרחק של הסמך מהקצה השמאלי של הקורה"]
+        try:
+            val = float(raw)
+        except ValueError:
+            return extracted, ["אנא הזן מספר תקין של המרחק של הסמך מהקצה השמאלי של הקורה"]
+
+        if val > 25.0:
+            return extracted, ["מספר לא תקין, אנא הזן שוב."]
+        if val < 0:
+            return extracted, ["אנא הזן מספר תקין של המרחק של הסמך מהקצה השמאלי של הקורה"]
+
         beam = dict(extracted.get("beam") or {})
         supports = [dict(s) for s in (beam.get("supports") or []) if isinstance(s, dict)]
         if idx < 0 or idx >= len(supports):
@@ -882,3 +894,46 @@ def handle_draft_text(chat_id: int, text: str) -> DraftHandleResult:
         extracted=updated,
         errors=errors or None,
     )
+
+
+def swap_supports(extracted: dict) -> dict:
+    """מחליף סוגים ומיקומים בין 2 הסמכים בקורה (קבוע ↔ נייד)."""
+    import copy
+
+    out = copy.deepcopy(extracted) if isinstance(extracted, dict) else {}
+    beam = out.get("beam")
+    if not isinstance(beam, dict):
+        return out
+    supports = [dict(s) for s in (beam.get("supports") or []) if isinstance(s, dict)]
+    if len(supports) != 2:
+        return out
+
+    t0 = str(supports[0].get("type", "pin")).lower().strip()
+    t1 = str(supports[1].get("type", "roller")).lower().strip()
+
+    # החלפת סוגי הסמכים (pin ↔ roller)
+    if t0 == t1:
+        supports[0]["type"] = "roller" if t0 == "pin" else "pin"
+        supports[1]["type"] = "pin" if t1 == "roller" else "roller"
+    else:
+        supports[0]["type"] = t1
+        supports[1]["type"] = t0
+
+    # הסרת ראיות ויזואליות כדי שהמנרמל לא יהפוך חזרה את בחירת המשתמש
+    for sup in supports:
+        sup.pop("hatch_count", None)
+        sup.pop("has_full_wall_hatch", None)
+
+    # עדכון pin_support_label / roller_support_label
+    for sup in supports:
+        lbl = str(sup.get("label", "")).strip().upper()
+        st = str(sup.get("type", "")).lower().strip()
+        if lbl:
+            if st == "pin":
+                beam["pin_support_label"] = lbl
+            elif st == "roller":
+                beam["roller_support_label"] = lbl
+
+    beam["supports"] = supports
+    out["beam"] = beam
+    return _finalize_draft(out)

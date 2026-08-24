@@ -49,16 +49,15 @@ async def test_refresh_draft_after_correction_sends_fixed_with_approve():
 
     assert ok is True
     assert err is None
-    context.bot.send_message.assert_awaited()
-    kwargs = context.bot.send_message.await_args.kwargs
-    assert kwargs["text"] == DRAFT_FIXED_TEXT
+    context.bot.send_photo.assert_awaited()
+    kwargs = context.bot.send_photo.await_args.kwargs
     assert kwargs["reply_markup"] is not None
     buttons = [
         btn.callback_data
         for row in kwargs["reply_markup"].inline_keyboard
         for btn in row
     ]
-    assert buttons == ["d:a"]
+    assert "d:a" in buttons
 
     deleted = {
         call.kwargs.get("message_id") or call.args[1]
@@ -70,7 +69,7 @@ async def test_refresh_draft_after_correction_sends_fixed_with_approve():
     assert 99 in deleted
 
     ref = get_draft_message_ref(chat_id)
-    assert ref == (chat_id, 202)
+    assert ref == (chat_id, 201)
     stored = get_stored_vision_extracted(chat_id)
     assert stored is not None
     clear_vision_context(chat_id)

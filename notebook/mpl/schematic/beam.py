@@ -38,12 +38,8 @@ def _draw_beam_schematic(
     if abs(ra_pos - rb_pos) < 1e-9:
         draw_pin_support_fn(ax, ra_pos)
     else:
-        if ra_pos <= rb_pos:
-            draw_pin_support_fn(ax, ra_pos)
-            draw_roller_support_fn(ax, rb_pos)
-        else:
-            draw_pin_support_fn(ax, rb_pos)
-            draw_roller_support_fn(ax, ra_pos)
+        draw_pin_support_fn(ax, ra_pos)
+        draw_roller_support_fn(ax, rb_pos)
 
     load_scale = max(0.28, 0.05 * max(abs(ra_y), abs(rb_y), 8.0))
     draw_loads_like_canvas_fn(ax, loads, load_scale, show_values=show_values)

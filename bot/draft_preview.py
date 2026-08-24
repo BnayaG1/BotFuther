@@ -12,6 +12,8 @@ from bot.draft_keyboard import (
     DRAFT_FIXED_TEXT,
     DRAFT_INSTRUCTION_TEXT,
     build_draft_approve_keyboard,
+    build_draft_keyboard,
+    draft_display_text,
 )
 from bot.draft_session import (
     clear_draft_cleanup_state,
@@ -56,53 +58,40 @@ async def send_draft_preview(
     *,
     reply_to_message=None,
 ) -> bool:
-    """שולח תמונת שרטוט ואז הודעת הסבר עם אישור. True אם נשלח בהצלחה."""
+    """שולח תמונת שרטוט עם כפתורי עריכה ואישור. True אם נשלח בהצלחה."""
     png = render_exercise_problem_png_bytes(extracted)
     if not png:
         log.warning("Draft preview render failed chat=%s", chat_id)
         return False
 
-    keyboard = build_draft_approve_keyboard()
+    keyboard = build_draft_keyboard(extracted)
     photo_msg = None
     try:
         bio = BytesIO(png)
         bio.name = "draft_preview.png"
         if reply_to_message is not None:
-            photo_msg = await reply_to_message.reply_photo(photo=bio)
+            photo_msg = await reply_to_message.reply_photo(
+                photo=bio,
+                reply_markup=keyboard,
+            )
         else:
-            photo_msg = await context.bot.send_photo(chat_id=chat_id, photo=bio)
+            photo_msg = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=bio,
+                reply_markup=keyboard,
+            )
     except Exception as exc:
         log.warning("Draft preview photo send failed chat=%s: %s", chat_id, exc)
-        return False
-
-    try:
-        if reply_to_message is not None:
-            instruct = await reply_to_message.reply_text(
-                DRAFT_INSTRUCTION_TEXT,
-                reply_markup=keyboard,
-            )
-        else:
-            instruct = await context.bot.send_message(
-                chat_id=chat_id,
-                text=DRAFT_INSTRUCTION_TEXT,
-                reply_markup=keyboard,
-            )
-    except Exception as exc:
-        log.warning("Draft instruction send failed chat=%s: %s", chat_id, exc)
-        if photo_msg is not None:
-            await _delete_message_silent(context, chat_id, photo_msg.message_id)
         return False
 
     set_draft_pending(
         chat_id,
         extracted,
-        DRAFT_INSTRUCTION_TEXT,
-        message_id=instruct.message_id,
+        "",
+        message_id=photo_msg.message_id,
         photo_message_id=photo_msg.message_id,
         clear_edit=True,
     )
-    register_draft_cleanup_id(chat_id, photo_msg.message_id)
-    register_draft_cleanup_id(chat_id, instruct.message_id)
     return True
 
 
@@ -117,16 +106,20 @@ async def replace_draft_preview_photo(
         return False, "לא הצלחתי לרנדר את השרטוט אחרי העדכון."
 
     old_photo_id = get_draft_photo_message_id(chat_id)
+    keyboard = build_draft_keyboard(extracted)
     try:
         bio = BytesIO(png)
         bio.name = "draft_preview.png"
-        sent = await context.bot.send_photo(chat_id=chat_id, photo=bio)
+        sent = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=bio,
+            reply_markup=keyboard,
+        )
     except Exception as exc:
         log.warning("Draft preview re-send failed chat=%s: %s", chat_id, exc)
         return False, "לא הצלחתי לשלוח את השרטוט המעודכן."
 
     set_draft_photo_message_id(chat_id, sent.message_id)
-    register_draft_cleanup_id(chat_id, sent.message_id)
 
     if old_photo_id is not None and old_photo_id != sent.message_id:
         await _delete_message_silent(context, chat_id, old_photo_id)
@@ -140,41 +133,42 @@ async def refresh_draft_after_correction(
     *,
     user_message_id: int | None = None,
 ) -> tuple[bool, str | None]:
-    """אחרי תיקון NL: מוחק הודעת משתמש + הודעת טיוטה ישנה, שולח שרטוט + «תיקנתי» עם אישור."""
+    """אחרי תיקון: מוחק הודעת משתמש + תמונת טיוטה ישנה, שולח שרטוט מעודכן עם כפתורים."""
+    old_photo_id = get_draft_photo_message_id(chat_id)
     old_ref = get_draft_message_ref(chat_id)
     old_instruct_id = old_ref[1] if old_ref else None
 
-    ok, render_err = await replace_draft_preview_photo(context, chat_id, extracted)
-    if not ok:
-        return False, render_err
+    png = render_exercise_problem_png_bytes(extracted)
+    if not png:
+        return False, "לא הצלחתי לרנדר את השרטוט אחרי העדכון."
 
-    keyboard = build_draft_approve_keyboard()
+    keyboard = build_draft_keyboard(extracted)
     try:
-        instruct = await context.bot.send_message(
+        bio = BytesIO(png)
+        bio.name = "draft_preview.png"
+        sent = await context.bot.send_photo(
             chat_id=chat_id,
-            text=DRAFT_FIXED_TEXT,
+            photo=bio,
             reply_markup=keyboard,
         )
     except Exception as exc:
         log.warning("Draft fixed text send failed chat=%s: %s", chat_id, exc)
-        return False, "השרטוט עודכן, אבל שליחת הודעת האישור נכשלה."
+        return False, "השרטוט עודכן, אבל שליחתו נכשלה."
 
-    photo_id = get_draft_photo_message_id(chat_id)
     set_draft_pending(
         chat_id,
         extracted,
-        DRAFT_FIXED_TEXT,
-        message_id=instruct.message_id,
-        photo_message_id=photo_id,
+        "",
+        message_id=sent.message_id,
+        photo_message_id=sent.message_id,
         clear_edit=True,
     )
-    register_draft_cleanup_id(chat_id, instruct.message_id)
-    if photo_id is not None:
-        register_draft_cleanup_id(chat_id, photo_id)
 
     # מחיקות אחרי שליחה מוצלחת — כדי שלא נישאר בלי טיוטה אם משהו נכשל באמצע
     await _delete_message_silent(context, chat_id, user_message_id)
-    if old_instruct_id is not None and old_instruct_id != instruct.message_id:
+    if old_photo_id is not None and old_photo_id != sent.message_id:
+        await _delete_message_silent(context, chat_id, old_photo_id)
+    if old_instruct_id is not None and old_instruct_id != sent.message_id and old_instruct_id != old_photo_id:
         await _delete_message_silent(context, chat_id, old_instruct_id)
     return True, None
 

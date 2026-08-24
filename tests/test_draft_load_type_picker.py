@@ -234,7 +234,7 @@ def test_axial_load_mag_edit_keeps_axial_not_vertical_point():
     assert is_axial_point_load(ld)
     text = draft_display_text(updated)
     assert "צירי" in text
-    assert "→ 6" in text
+    assert "צירי 6t →" in text
 
 
 def test_axial_mag_edit_preserves_left_direction():
@@ -266,4 +266,4 @@ def test_draft_display_labels_axial_load():
     }
     text = draft_display_text(extracted)
     assert "צירי" in text
-    assert "→ 7" in text
+    assert "צירי 7t →" in text

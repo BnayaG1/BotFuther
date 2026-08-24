@@ -55,8 +55,8 @@ def _beam_with_load(load: dict) -> dict:
 
 
 @pytest.mark.anyio
-async def test_legacy_direction_callback_is_ignored_in_approve_only_draft():
-    """מקלדת הטיוטה החדשה היא אישור בלבד — d:td לא משנה את המודל."""
+async def test_direction_callback_opens_type_picker_in_draft():
+    """מקלדת הטיוטה היא אינטראקטיבית — d:td פותח תפריט סוג עומס."""
     chat_id = 77001
     reset_user_session(chat_id)
     set_draft_pending(chat_id, EXTRACTED, DRAFT_INSTRUCTION_TEXT, message_id=101)
@@ -69,13 +69,11 @@ async def test_legacy_direction_callback_is_ignored_in_approve_only_draft():
     await handlers.on_draft_callback(update, context)
 
     query.answer.assert_awaited()
-    stored = get_stored_vision_extracted(chat_id)
-    assert float(stored["beam"]["loads"][0]["Fy"]) == 3.0
-    assert get_draft_type_picker_idx(chat_id) is None
+    assert get_draft_type_picker_idx(chat_id) == 1
 
 
 @pytest.mark.anyio
-async def test_legacy_direction_on_new_load_does_not_open_type_picker():
+async def test_direction_on_new_load_opens_type_picker():
     chat_id = 77002
     reset_user_session(chat_id)
     extracted_with_new_load = {
@@ -103,7 +101,7 @@ async def test_legacy_direction_on_new_load_does_not_open_type_picker():
 
     await handlers.on_draft_callback(update, context)
 
-    assert get_draft_type_picker_idx(chat_id) is None
+    assert get_draft_type_picker_idx(chat_id) == 2
 
 
 def test_toggle_direction_on_vertical_point_load_flips_fy():

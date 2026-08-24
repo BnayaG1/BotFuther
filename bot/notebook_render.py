@@ -25,7 +25,7 @@ def _prepare_extracted_for_render(extracted: dict) -> dict:
     skip = bool(meta.get("skip_vision_normalize")) or meta.get("source") == "exercise_generator"
     if skip:
         return data
-    return finalize_beam_extraction(data)
+    return finalize_beam_extraction(data, merge_nearby_point_loads=False)
 
 
 def _solver_loads_from_extracted(extracted: dict) -> list[dict]:

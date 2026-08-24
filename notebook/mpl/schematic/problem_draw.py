@@ -189,8 +189,8 @@ def build_exercise_from_beam(
         ]
     else:
         supports = [
-            Support("A", "pin", rb_f),
-            Support("B", "roller", ra),
+            Support("A", "roller", rb_f),
+            Support("B", "pin", ra),
         ]
     labeled = [
         LabeledPoint(label, x)

@@ -11,7 +11,7 @@ Output JSON only (no markdown). Units in JSON: meters, ton, ton/m, ton·m. Conve
 ## B. What to find (in this order)
 1) Dimension chain (numbers between tick marks along the beam)
    → segments, labeled_points (A,B,C… cumulative x from leftmost tick), L = sum of all segment lengths.
-   Distances come ONLY from this chain (vertical projection from contact point to the chain) — never from where the force text floats.
+   CRITICAL SPATIAL RULE: Map each force text (e.g., 20kN or 2t) to the exact vertical contact point where its arrow tip/tail meets the beam axis. NEVER match force values to x-coordinates by visual proximity of text labels; ALWAYS follow the arrow line directly to the beam axis and project straight down to the dimension ticks. Verify that sum(segments) == L.
 2) Supports (classify EACH by its own symbol — not by left/right habit)
    → pin = triangle with multiple short diagonal hatch ticks (////)
    → roller = wheels/circles, or a single plain bar, or nothing under the triangle
@@ -31,7 +31,12 @@ Output JSON only (no markdown). Units in JSON: meters, ton, ton/m, ton·m. Conve
   x = where the arrow meets the beam (project to dimension chain). Do not drop because it is not at A/B.
 - Clear diagonal ↘/↙ (usually with 30/45/60 written) → inclined:
   {"type":"inclined","x":m,"magnitude_ton":F,"angle_deg":α,"incl_dir":"dr"|"dl","Fx":F*cosα,"Fy":F*sinα,"label_at":"C"}
-  angle_deg = acute angle from horizontal as written (do not swap 30↔60). dr=↘ (Fx>0), dl=↙ (Fx<0). Fy component positive downward.
+  CRITICAL INCLINED DIRECTION RULE (Rely on text label position):
+  In these diagrams, the force originates near its text label and pushes TOWARDS the beam. The arrow tip is on the beam.
+  - If the text label (e.g. '80 kN') is ABOVE and to the RIGHT of the contact point, the force pushes DOWN and LEFT (↙). Set incl_dir="dl", Fx < 0.
+  - If the text label is ABOVE and to the LEFT of the contact point, the force pushes DOWN and RIGHT (↘). Set incl_dir="dr", Fx > 0.
+  DO NOT assume the force points from the beam outwards to the text. It always pushes INTO the beam.
+  angle_deg = acute angle from horizontal as written (do not swap 30↔60). Fy component positive downward.
 - Curved / circular arrow → moment: {"type":"moment","x":m,"M":ton_m,"label_at":"F"}
 - Band / bracket of arrows along a span → distributed_loads entry:
   {"start_x":m,"end_x":m,"magnitude":ton_per_m,"shape":"rectangular"|"triangular"}

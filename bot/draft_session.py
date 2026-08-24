@@ -156,6 +156,17 @@ def get_draft_cleanup_message_ids(
     return ids
 
 
+def pop_draft_cleanup_ids(chat_id: int) -> list[int]:
+    """מחזיר ומוחק את רשימת מזהי ההודעות לניקוי (הודעות טקסט של המשתמש ושגיאות צד)."""
+    bundle = _vision_bundle_by_chat.get(chat_id)
+    if not bundle:
+        return []
+    ids = bundle.pop("draft_cleanup_ids", [])
+    if isinstance(ids, list):
+        return [int(x) for x in ids if isinstance(x, (int, str)) and str(x).isdigit()]
+    return []
+
+
 def clear_draft_cleanup_state(chat_id: int) -> None:
     bundle = _vision_bundle_by_chat.get(chat_id)
     if not bundle:
@@ -233,6 +244,24 @@ def get_draft_edit(chat_id: int) -> dict | None:
     return edit if isinstance(edit, dict) else None
 
 
+def set_add_load_wizard_state(chat_id: int, state: dict | None) -> None:
+    """שומר/מנקה את המצב של אשף הוספת העומס."""
+    bundle = _vision_bundle_by_chat.get(chat_id)
+    if not bundle:
+        return
+    if state is None:
+        bundle.pop("add_load_wizard", None)
+    else:
+        bundle["add_load_wizard"] = state
+
+
+def get_add_load_wizard_state(chat_id: int) -> dict | None:
+    """מחזיר את המצב הנוכחי של אשף הוספת העומס (אם פעיל)."""
+    bundle = _vision_bundle_by_chat.get(chat_id) or {}
+    state = bundle.get("add_load_wizard")
+    return state if isinstance(state, dict) else None
+
+
 def set_draft_type_picker_idx(chat_id: int, idx: int | None) -> None:
     """אינדקס עומס (1-based) שתפריט בחירת הסוג פתוח עבורו — נפרד מעריכת שדה."""
     bundle = _vision_bundle_by_chat.get(chat_id)
@@ -264,6 +293,22 @@ def set_draft_edit_prompt_id(chat_id: int, message_id: int | None) -> None:
         bundle.pop("draft_edit_prompt_id", None)
     else:
         bundle["draft_edit_prompt_id"] = int(message_id)
+        register_draft_cleanup_id(chat_id, int(message_id))
+
+
+def set_draft_menu_view(chat_id: int, menu_view: str | None) -> None:
+    bundle = _vision_bundle_by_chat.get(chat_id)
+    if not bundle:
+        return
+    if menu_view is None:
+        bundle.pop("draft_menu_view", None)
+    else:
+        bundle["draft_menu_view"] = str(menu_view)
+
+
+def get_draft_menu_view(chat_id: int) -> str:
+    bundle = _vision_bundle_by_chat.get(chat_id) or {}
+    return str(bundle.get("draft_menu_view") or "main")
 
 
 def is_draft_pending(chat_id: int) -> bool:

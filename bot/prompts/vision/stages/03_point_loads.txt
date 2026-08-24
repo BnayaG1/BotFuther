@@ -18,7 +18,9 @@ CRITICAL rules:
   • type MUST be "inclined" — never "point" with only Fy when truly slanted.
   • REQUIRED: magnitude_ton, angle_deg, incl_dir, plus Fx, Fy.
   • α from horizontal as written — do not swap 30°↔60°.
-  • Fx=F·cos(α), Fy=F·sin(α); dl⇒Fx<0; dr⇒Fx>0. Arrow TIP on beam = x.
+  • incl_dir="dr" (↘, Fx>0): line slants from top-left to bottom-right, arrow tip pushes right.
+  • incl_dir="dl" (↙, Fx<0): line slants from top-right to bottom-left, arrow tip pushes left.
+  • Fx=F·cos(α), Fy=F·sin(α). Arrow TIP on beam = x.
 - Moment: center of curved arrow on beam. If the arc is at B / on the roller, keep x at B; if at F, keep F.
 - At one label (e.g. C): BOTH moment AND inclined allowed at same x.
 - Horizontal ← at end is Fx negative, Fy=0.
