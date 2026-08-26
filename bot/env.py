@@ -128,12 +128,7 @@ def log_startup_config(env_files: list[Path]) -> None:
 
     tg = env(*TELEGRAM_KEY_NAMES)
     vision = env(*GEMINI_VISION_KEY_NAMES)
-    admin_tg = os.getenv("ADMIN_BOT_TOKEN", "").strip()
     log.info("Telegram token: %s", "OK (" + mask_secret(tg) + ")" if tg else "MISSING")
-    log.info(
-        "Admin bot token: %s",
-        "OK (" + mask_secret(admin_tg) + ")" if admin_tg else "MISSING",
-    )
     log.info(
         "Gemini vision key: %s",
         "OK (" + mask_secret(vision) + ")" if vision else "MISSING",

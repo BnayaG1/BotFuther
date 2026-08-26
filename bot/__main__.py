@@ -19,7 +19,6 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from bot.config import (
-    ADMIN_BOT_TOKEN,
     ADMIN_USER_IDS,
     APP_DIR,
     TELEGRAM_KEY_NAMES,
@@ -89,31 +88,13 @@ async def _post_init_set_commands(application: Application) -> None:
     log.info("Telegram bot commands menu set (%s)", [c.command for c in _BOT_COMMANDS])
 
 
-async def _run_both_bots(main_app: Application, admin_app: Application) -> None:
-    """שני בוטים ב-asyncio על main thread — run_polling ב-thread נופל ב-Linux."""
-    async with main_app, admin_app:
-        await main_app.start()
-        await admin_app.start()
-        await main_app.updater.start_polling(**_POLLING_KW)
-        await admin_app.updater.start_polling(**_POLLING_KW)
-        log.info("Both bots polling started")
-        try:
-            await asyncio.Event().wait()
-        finally:
-            await main_app.updater.stop()
-            await admin_app.updater.stop()
-            await main_app.stop()
-            await admin_app.stop()
-
-
 def main() -> None:
     env_files = load_env_files()
     log_startup_config(env_files)
     acquire_bot_instance_lock()
 
-    # Read tokens AFTER env is loaded
+    # Read token AFTER env is loaded
     main_token = require_env(*TELEGRAM_KEY_NAMES, label="Telegram bot token")
-    admin_token = os.getenv("ADMIN_BOT_TOKEN", "").strip()
 
     gemini_runtime()
     init_access_db()
@@ -164,15 +145,7 @@ def main() -> None:
     port = int(os.environ.get("PORT", 8080))
     threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
 
-    if admin_token:
-        from bot.admin_bot import build_admin_application
-        admin_ids = get_admin_user_ids()
-        log.info("Admin bot starting (authorized users: %s)", sorted(admin_ids) if admin_ids else "ALL")
-        admin_app = build_admin_application(admin_token)
-        asyncio.run(_run_both_bots(app_bot, admin_app))
-    else:
-        log.info("Admin bot disabled — ADMIN_BOT_TOKEN not set")
-        app_bot.run_polling(**_POLLING_KW)
+    app_bot.run_polling(**_POLLING_KW)
 
 
 if __name__ == "__main__":

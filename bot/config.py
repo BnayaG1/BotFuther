@@ -341,9 +341,6 @@ PAYMENT_CONFIRM_WHATSAPP_URL = (
 )
 ADMIN_CHAT_ID = _env_int("ADMIN_CHAT_ID", 0)
 
-ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "").strip()
-
-
 def get_admin_user_ids() -> frozenset[int]:
     ids: set[int] = set()
     for var_name in ("ADMIN_USER_IDS", "ADMIN_TELEGRAM_ID", "ADMIN_ID", "ADMIN_IDS"):
@@ -360,14 +357,12 @@ def get_admin_user_ids() -> frozenset[int]:
     return frozenset(ids)
 
 
-
 def _parse_admin_user_ids() -> frozenset[int]:
     return get_admin_user_ids()
 
 
 def reload_admin_user_ids() -> frozenset[int]:
-    global ADMIN_USER_IDS, ADMIN_BOT_TOKEN
-    ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "").strip()
+    global ADMIN_USER_IDS
     ADMIN_USER_IDS = get_admin_user_ids()
     return ADMIN_USER_IDS
 

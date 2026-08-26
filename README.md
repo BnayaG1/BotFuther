@@ -75,10 +75,9 @@ git push -u origin master
 
 | משתנה | חובה | הערה |
 |--------|------|------|
-| `TELEGRAM_BOT_TOKEN` | כן | בוט משתמשים |
+| `TELEGRAM_BOT_TOKEN` | כן | בוט ראשי |
 | `GEMINI_VISION_API_KEY` | כן | Vision API |
-| `ADMIN_BOT_TOKEN` | לא | בוט אדמין |
-| `ADMIN_USER_IDS` | לא | מספר user ID |
+| `ADMIN_USER_IDS` | לא | מזהי מנהלים בטלגרם |
 | `COUPON_DB_PATH` | כן | `/data/coupons.db` |
 | `BIT_PHONE` | לא | תשלום בביט |
 | `PAYMENT_CONFIRM_WHATSAPP_URL` | לא | וואטסאפ |
@@ -88,7 +87,6 @@ git push -u origin master
 
 4. Deploy — ב-Logs אמור להופיע:
    - `Bot is running. Starting Flask and Polling...`
-   - `Admin bot thread started` (אם הוגדר אדמין)
 5. URL ציבורי → `Bot is running!`
 
 `railway.toml` מגדיר `numReplicas = 1` (חובה לטלגרם polling).

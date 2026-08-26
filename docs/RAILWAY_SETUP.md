@@ -28,7 +28,6 @@ Copy from local `.env` into Railway **Variables** (never commit `.env`).
 | `COUPON_DB_PATH` | Yes | `/data/coupons.db` |
 | `EXERCISE_BANK_DB_PATH` | No | Default `/data/exercises.db` on cloud |
 | `EXERCISE_BANK_IMAGES_DIR` | No | Default `/data/exercise_bank` on cloud |
-| `ADMIN_BOT_TOKEN` | No | Admin coupon bot |
 | `ADMIN_USER_IDS` | No | e.g. `843647241` |
 | `BIT_PHONE` | No | Bit payment phone |
 | `PAYMENT_CONFIRM_WHATSAPP_URL` | No | WhatsApp confirm link |

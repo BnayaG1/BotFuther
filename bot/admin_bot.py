@@ -6,29 +6,21 @@ import logging
 from datetime import datetime, timezone
 
 from telegram import (
-    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     ReplyKeyboardMarkup,
     Update,
 )
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
-from telegram.request import HTTPXRequest
+from telegram.ext import ContextTypes
 
 from bot.access import get_user_info, init_access_db, list_users_first_seen
-from bot.config import ADMIN_BOT_TOKEN, ADMIN_USER_IDS, get_admin_user_ids
+from bot.config import ADMIN_USER_IDS, get_admin_user_ids, is_admin_user
 from bot.generate_coupons import generate_coupon_codes
 from bot.purchase import ADMIN_PACKAGE_CATALOG, PACKAGE_CATALOG, PackageOption, get_package
 
 
-log = logging.getLogger("beam_admin_bot")
+log = logging.getLogger("beam_admin")
 
 _UNAUTHORIZED_TEXT = "גישה נדחתה."
 
@@ -39,8 +31,10 @@ def _is_admin(update: Update) -> bool:
         return False
     admin_ids = ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids()
     if not admin_ids:
-        return True
+        return False
     return int(user.id) in admin_ids
+
+
 
 
 
@@ -59,18 +53,6 @@ def build_admin_persistent_reply_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         is_persistent=True,
     )
-
-
-_ADMIN_BOT_COMMANDS = [
-    BotCommand("start", "תפריט אדמין ליצירת קופונים"),
-    BotCommand("users", "רשימת משתמשים וקישורים"),
-    BotCommand("user", "פרטי משתמש לפי ID (/user <ID>)"),
-    BotCommand("help", "עזרה ותפריט"),
-]
-
-
-async def _post_init_set_admin_commands(application: Application) -> None:
-    await application.bot.set_my_commands(_ADMIN_BOT_COMMANDS)
 
 
 def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
@@ -365,47 +347,4 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await context.bot.send_message(chat_id=chat_id, text=code_text, parse_mode="HTML")
         return
 
-
-def build_admin_application(token: str | None = None) -> Application:
-    import os as _os
-    resolved_token = token or _os.getenv("ADMIN_BOT_TOKEN", "").strip() or ADMIN_BOT_TOKEN
-    if not resolved_token:
-        raise RuntimeError("ADMIN_BOT_TOKEN is not set")
-    request = HTTPXRequest(
-        connect_timeout=30.0,
-        read_timeout=90.0,
-        write_timeout=90.0,
-        pool_timeout=30.0,
-    )
-    app = (
-        Application.builder()
-        .token(resolved_token)
-        .request(request)
-        .get_updates_request(request)
-        .post_init(_post_init_set_admin_commands)
-        .build()
-    )
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_start))
-    app.add_handler(CommandHandler("users", cmd_users))
-    app.add_handler(CommandHandler("user", cmd_user_detail))
-    app.add_handler(CommandHandler("dbpath", cmd_dbpath))
-    app.add_handler(CallbackQueryHandler(on_admin_callback, pattern=r"^admin:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_admin_text))
-    return app
-
-
-
-
-def run_admin_bot() -> None:
-    import os
-    token = os.getenv("ADMIN_BOT_TOKEN", "").strip() or ADMIN_BOT_TOKEN
-    if not token:
-        log.info("Admin bot disabled — ADMIN_BOT_TOKEN not set")
-        return
-    admin_ids = get_admin_user_ids() or ADMIN_USER_IDS
-    init_access_db()
-    log.info("Admin bot starting (authorized users: %s)", sorted(admin_ids) if admin_ids else "ALL")
-    app = build_admin_application()
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 

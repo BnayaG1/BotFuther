@@ -24,7 +24,6 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from bot.config import (
-    ADMIN_BOT_TOKEN,
     ADMIN_CHAT_ID,
     ADMIN_USER_IDS,
     BOT_DISPLAY_NAME,
@@ -452,7 +451,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await cleanup_practice_chat(context, chat_id)
     await _leave_formulas_chat_if_needed(context, chat_id)
     text = build_start_welcome_text()
-    keyboard = build_start_keyboard()
+    keyboard = build_start_keyboard(user_id=uid)
     try:
         # שולחים את המקלדת הקבועה (התפריט הזמין תמיד) עם הודעת הפתיחה.
         welcome = await update.message.reply_text(
@@ -492,7 +491,12 @@ def _purchase_cta_markup(access: ImageAccessResult) -> InlineKeyboardMarkup | No
     return build_upgrade_options_keyboard()
 
 
-def build_start_keyboard() -> InlineKeyboardMarkup:
+def build_start_keyboard(
+    user_id: int | None = None,
+    is_admin: bool | None = None,
+) -> InlineKeyboardMarkup:
+    if is_admin is None and user_id is not None:
+        is_admin = is_admin_user(user_id)
     rows: list[list[InlineKeyboardButton]] = []
     if INTRO_AVAILABLE:
         rows.append(
@@ -514,7 +518,12 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")],
         ]
     )
+    if is_admin:
+        rows.append(
+            [InlineKeyboardButton("🛠 מנהל", callback_data="menu:admin")]
+        )
     return InlineKeyboardMarkup(rows)
+
 
 
 
@@ -596,23 +605,44 @@ async def sync_chat_ui_to_current_version(
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """מעבר למערכת ניהול אדמין."""
-    if not update.message:
+    if not update.message and not update.callback_query:
         return
     uid = telegram_user_id(update)
     if not is_admin_user(uid):
-        await update.message.reply_text("גישה נדחתה.")
+        if update.callback_query:
+            await update.callback_query.answer("גישה נדחתה.", show_alert=True)
+        elif update.message:
+            await update.message.reply_text("גישה נדחתה.")
         return
     from bot.admin_bot import build_admin_menu_keyboard, build_admin_persistent_reply_keyboard
-    await update.message.reply_text(
-        "🛠 <b>מערכת ניהול אדמין</b>\n\n"
-        "בחר חבילה ליצירת קוד קופון:",
-        reply_markup=build_admin_menu_keyboard(),
-        parse_mode="HTML",
-    )
-    await update.message.reply_text(
-        "מקלדת ניהול פעילה בתחתית המסך. לחץ על «למהנדס» בכל שלב כדי לחזור לתפריט הראשי.",
-        reply_markup=build_admin_persistent_reply_keyboard(),
-    )
+    chat_id = telegram_chat_id(update)
+    if update.message:
+        await update.message.reply_text(
+            "🛠 <b>מערכת ניהול אדמין</b>\n\n"
+            "בחר חבילה ליצירת קוד קופון:",
+            reply_markup=build_admin_menu_keyboard(),
+            parse_mode="HTML",
+        )
+        await update.message.reply_text(
+            "מקלדת ניהול פעילה בתחתית המסך. לחץ על «למהנדס» בכל שלב כדי לחזור לתפריט הראשי.",
+            reply_markup=build_admin_persistent_reply_keyboard(),
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "🛠 <b>מערכת ניהול אדמין</b>\n\n"
+                "בחר חבילה ליצירת קוד קופון:"
+            ),
+            reply_markup=build_admin_menu_keyboard(),
+            parse_mode="HTML",
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="מקלדת ניהול פעילה בתחתית המסך. לחץ על «למהנדס» בכל שלב כדי לחזור לתפריט הראשי.",
+            reply_markup=build_admin_persistent_reply_keyboard(),
+        )
+
 
 
 async def cmd_engineer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -662,7 +692,7 @@ async def _forward_bug_report_via_admin_bot(
     *,
     fallback_bot=None,
 ) -> bool:
-    """שולח דיווח לכל מנהלי המערכת ישירות דרך הבוט הראשי (ו/או בוט אדמין אם קיים)."""
+    """שולח דיווח לכל מנהלי המערכת ישירות דרך הבוט הראשי."""
     admin_ids = ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids()
     sent_any = False
 
@@ -675,27 +705,7 @@ async def _forward_bug_report_via_admin_bot(
             except Exception as exc:
                 log.warning("Main bot bug report failed to admin_id=%s: %s", admin_id, exc)
 
-    # 2. אם יש ADMIN_BOT_TOKEN נפרד וטרם נשלח, נשלח דרכו כגיבוי
-    if ADMIN_BOT_TOKEN and admin_ids:
-        try:
-            from telegram import Bot
-            admin_bot = Bot(token=ADMIN_BOT_TOKEN)
-            for admin_id in sorted(admin_ids):
-                try:
-                    await admin_bot.send_message(chat_id=admin_id, text=text)
-                    sent_any = True
-                except Exception as exc:
-                    log.warning(
-                        "Admin-bot bug report failed admin_id=%s: %s",
-                        admin_id,
-                        exc,
-                    )
-            if sent_any:
-                return True
-        except Exception as exc:
-            log.warning("Admin-bot client failed for bug report: %s", exc)
-
-    # 3. Fallback ל־ADMIN_CHAT_ID במידת הצורך
+    # 2. Fallback ל־ADMIN_CHAT_ID במידת הצורך
     if not sent_any and fallback_bot is not None and ADMIN_CHAT_ID:
         try:
             await fallback_bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
@@ -704,6 +714,7 @@ async def _forward_bug_report_via_admin_bot(
             log.warning("Fallback bug report to ADMIN_CHAT_ID failed: %s", exc)
 
     return sent_any
+
 
 
 
@@ -985,10 +996,12 @@ async def _send_main_action_menu(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     *,
+    user_id: int | None = None,
     message=None,
 ) -> None:
     """תפריט ראשי בלבד — «בחר/י פעולה:» + כפתורים, בלי הודעת פתיחה."""
-    keyboard = build_start_keyboard()
+    uid = user_id if user_id is not None else chat_id
+    keyboard = build_start_keyboard(user_id=uid)
     text = "בחר/י פעולה:"
     if message is not None:
         await _reply_text_safe(message, text, reply_markup=keyboard)
@@ -1019,6 +1032,11 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     action = query.data.split(":", 1)[-1]
     chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+
+    if action == "admin":
+        await _delete_callback_message(query)
+        await cmd_admin(update, context)
+        return
 
     # יציאה מתרגול לנושא אחר — מוחקים את הודעות התרגיל מהצ'אט.
     if action in ("new", "formulas", "intro", "main") or action.startswith("mode:"):
@@ -2918,7 +2936,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id,
             through_message_id=int(through_mid) if through_mid is not None else None,
         )
-        await _send_main_action_menu(context, chat_id)
+        await _send_main_action_menu(context, chat_id, user_id=telegram_user_id(update))
         return
 
     if text == _START_INTRO_LABEL:
