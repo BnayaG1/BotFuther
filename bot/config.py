@@ -374,3 +374,14 @@ def reload_admin_user_ids() -> frozenset[int]:
 
 ADMIN_USER_IDS = _parse_admin_user_ids()
 
+
+def is_admin_user(user_id: int | None) -> bool:
+    """מחזיר True אם ה-user_id מוגדר כמנהל מערכת."""
+    if user_id is None:
+        return False
+    admin_ids = ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids()
+    if not admin_ids:
+        return False
+    return int(user_id) in admin_ids
+
+

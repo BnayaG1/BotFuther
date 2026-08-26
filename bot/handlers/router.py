@@ -33,6 +33,8 @@ from bot.config import (
     DRAFT_APPROVAL_MODE,
     IMAGE_ONLY_TEXT_REPLY,
     VISION_ASYNC_ENABLED,
+    get_admin_user_ids,
+    is_admin_user,
 )
 from bot.access import (
     ImageAccessResult,
@@ -130,7 +132,6 @@ from bot.draft_keyboard import (
     parse_draft_callback,
 )
 from bot.draft_format import _inclined_mag
-from bot.draft_nl_edit import apply_nl_draft_edit
 from bot.draft_preview import (
     refresh_draft_after_correction,
     send_draft_preview,
@@ -267,6 +268,8 @@ _PERSISTENT_FORMULAS_LABEL = "נוסחאות"
 _PERSISTENT_QUOTA_LABEL = "מכסה"
 _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
+_PERSISTENT_ADMIN_LABEL = "מנהל"
+_PERSISTENT_ENGINEER_LABEL = "למהנדס"
 _START_INTRO_LABEL = "לימוד בסיס"
 
 _START_SEND_IMAGE_LABEL = "פתרון לתרגיל"
@@ -307,7 +310,14 @@ async def _reply_text_safe(
 ):
     """שולח הודעה; אם Markdown נשבר — fallback לטקסט רגיל. מחזיר את ההודעה שנשלחה."""
     if reply_markup is None:
-        reply_markup = build_persistent_keyboard()
+        user_id = None
+        from_user = getattr(message, "from_user", None) or getattr(message, "chat", None)
+        if from_user and hasattr(from_user, "id"):
+            try:
+                user_id = int(from_user.id)
+            except (TypeError, ValueError):
+                user_id = None
+        reply_markup = build_persistent_keyboard(user_id=user_id)
     try:
         return await message.reply_text(
             text, parse_mode=parse_mode, reply_markup=reply_markup
@@ -328,7 +338,7 @@ async def _send_text_safe(
 ) -> object:
     """שולח הודעה חדשה לצ'אט (לא reply) עם fallback אם Markdown נשבר."""
     if reply_markup is None:
-        reply_markup = build_persistent_keyboard()
+        reply_markup = build_persistent_keyboard(user_id=chat_id)
     try:
         return await context.bot.send_message(
             chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup
@@ -337,6 +347,7 @@ async def _send_text_safe(
         if "parse entities" not in str(exc).lower():
             raise
         return await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+
 
 
 async def _send_denied_with_purchase(
@@ -429,6 +440,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     # מתחיל שעון 24ש' לנוסחאות (first_seen) — תואם להודעת ה-welcome.
     user = update.effective_user
+    uid = int(user.id) if user is not None else None
     if user is not None:
         ensure_user_first_seen(int(user.id))
     context.chat_data[_CHAT_UI_VERSION_KEY] = str(BOT_UI_VERSION or "").strip() or "default"
@@ -444,13 +456,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         # שולחים את המקלדת הקבועה (התפריט הזמין תמיד) עם הודעת הפתיחה.
         welcome = await update.message.reply_text(
-            text, reply_markup=build_persistent_keyboard(), parse_mode="Markdown"
+            text, reply_markup=build_persistent_keyboard(user_id=uid), parse_mode="Markdown"
         )
     except BadRequest as exc:
         if "parse entities" not in str(exc).lower():
             raise
         welcome = await update.message.reply_text(
-            text, reply_markup=build_persistent_keyboard()
+            text, reply_markup=build_persistent_keyboard(user_id=uid)
         )
     set_chat_anchor_message_id(chat_id, getattr(welcome, "message_id", None))
     # תפריט כפתורים Inline (לא "מקלדת למטה").
@@ -509,11 +521,22 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
 
 
 
-def build_persistent_keyboard() -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton(_PERSISTENT_MAIN_LABEL)],
-        [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_FORMULAS_LABEL)],
-    ]
+def build_persistent_keyboard(
+    user_id: int | None = None,
+    is_admin: bool | None = None,
+) -> ReplyKeyboardMarkup:
+    if is_admin is None and user_id is not None:
+        is_admin = is_admin_user(user_id)
+    if is_admin:
+        rows = [
+            [KeyboardButton(_PERSISTENT_MAIN_LABEL), KeyboardButton(_PERSISTENT_ADMIN_LABEL)],
+            [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_FORMULAS_LABEL)],
+        ]
+    else:
+        rows = [
+            [KeyboardButton(_PERSISTENT_MAIN_LABEL)],
+            [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_FORMULAS_LABEL)],
+        ]
     return ReplyKeyboardMarkup(
         rows,
         is_persistent=True,
@@ -544,9 +567,11 @@ async def sync_chat_ui_to_current_version(
     if message is None:
         return
     user = update.effective_user
+    uid = None
     if user:
+        uid = int(user.id)
         username = getattr(user, "username", None)
-        ensure_user_first_seen(int(user.id), username=username)
+        ensure_user_first_seen(uid, username=username)
 
     current = str(BOT_UI_VERSION or "").strip() or "default"
     if context.chat_data.get(_CHAT_UI_VERSION_KEY) == current:
@@ -561,12 +586,46 @@ async def sync_chat_ui_to_current_version(
     try:
         sent_msg = await message.reply_text(
             "הבוט עודכן אצלך לגרסה העדכנית.",
-            reply_markup=build_persistent_keyboard(),
+            reply_markup=build_persistent_keyboard(user_id=uid),
         )
         if sent_msg and hasattr(sent_msg, "message_id"):
             context.chat_data[_CHAT_UI_VERSION_NOTICE_MSG_ID_KEY] = sent_msg.message_id
     except BadRequest as exc:
         log.warning("UI sync reply failed chat=%s: %s", telegram_chat_id(update), exc)
+
+
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """מעבר למערכת ניהול אדמין."""
+    if not update.message:
+        return
+    uid = telegram_user_id(update)
+    if not is_admin_user(uid):
+        await update.message.reply_text("גישה נדחתה.")
+        return
+    from bot.admin_bot import build_admin_menu_keyboard, build_admin_persistent_reply_keyboard
+    await update.message.reply_text(
+        "🛠 <b>מערכת ניהול אדמין</b>\n\n"
+        "בחר חבילה ליצירת קוד קופון:",
+        reply_markup=build_admin_menu_keyboard(),
+        parse_mode="HTML",
+    )
+    await update.message.reply_text(
+        "מקלדת ניהול פעילה בתחתית המסך. לחץ על «למהנדס» בכל שלב כדי לחזור לתפריט הראשי.",
+        reply_markup=build_admin_persistent_reply_keyboard(),
+    )
+
+
+async def cmd_engineer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """חזרה למערכת הראשית של המהנדס."""
+    if not update.message:
+        return
+    context.user_data.pop("admin_awaiting_custom_qty", None)
+    uid = telegram_user_id(update)
+    await update.message.reply_text(
+        "חזרת למערכת הראשית.",
+        reply_markup=build_persistent_keyboard(user_id=uid),
+    )
+    await cmd_start(update, context)
 
 
 def build_bug_report_cancel_keyboard() -> ReplyKeyboardMarkup:
@@ -603,35 +662,49 @@ async def _forward_bug_report_via_admin_bot(
     *,
     fallback_bot=None,
 ) -> bool:
-    """שולח דיווח דרך בוט האדמין לכל ADMIN_USER_IDS. Fallback ל־ADMIN_CHAT_ID בבוט הראשי."""
-    if ADMIN_BOT_TOKEN and ADMIN_USER_IDS:
+    """שולח דיווח לכל מנהלי המערכת ישירות דרך הבוט הראשי (ו/או בוט אדמין אם קיים)."""
+    admin_ids = ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids()
+    sent_any = False
+
+    # 1. שליחה ישירה דרך הבוט הראשי לכל מנהל בצ'אט הישיר שלו עם הבוט
+    if fallback_bot is not None and admin_ids:
+        for admin_id in sorted(admin_ids):
+            try:
+                await fallback_bot.send_message(chat_id=admin_id, text=text)
+                sent_any = True
+            except Exception as exc:
+                log.warning("Main bot bug report failed to admin_id=%s: %s", admin_id, exc)
+
+    # 2. אם יש ADMIN_BOT_TOKEN נפרד וטרם נשלח, נשלח דרכו כגיבוי
+    if ADMIN_BOT_TOKEN and admin_ids:
         try:
             from telegram import Bot
-
             admin_bot = Bot(token=ADMIN_BOT_TOKEN)
-            ok_any = False
-            for admin_id in sorted(ADMIN_USER_IDS):
+            for admin_id in sorted(admin_ids):
                 try:
                     await admin_bot.send_message(chat_id=admin_id, text=text)
-                    ok_any = True
+                    sent_any = True
                 except Exception as exc:
                     log.warning(
                         "Admin-bot bug report failed admin_id=%s: %s",
                         admin_id,
                         exc,
                     )
-            if ok_any:
+            if sent_any:
                 return True
         except Exception as exc:
             log.warning("Admin-bot client failed for bug report: %s", exc)
 
-    if fallback_bot is not None and ADMIN_CHAT_ID:
+    # 3. Fallback ל־ADMIN_CHAT_ID במידת הצורך
+    if not sent_any and fallback_bot is not None and ADMIN_CHAT_ID:
         try:
             await fallback_bot.send_message(chat_id=ADMIN_CHAT_ID, text=text)
-            return True
+            sent_any = True
         except Exception as exc:
             log.warning("Fallback bug report to ADMIN_CHAT_ID failed: %s", exc)
-    return False
+
+    return sent_any
+
 
 
 async def _prompt_bug_report(message) -> None:
@@ -2786,6 +2859,58 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
 
+    if text in (_PERSISTENT_ADMIN_LABEL, "/admin", "מנהל"):
+        user_id = telegram_user_id(update)
+        if not is_admin_user(user_id):
+            await update.message.reply_text("גישה נדחתה.")
+            return
+        await cmd_admin(update, context)
+        return
+
+    if text in (_PERSISTENT_ENGINEER_LABEL, "/engineer", "למהנדס"):
+        await cmd_engineer(update, context)
+        return
+
+    if is_admin_user(telegram_user_id(update)):
+        if text in ("רשימת משתמשים", "משתמשים") or ("משתמשים" in text and len(text) < 20):
+            from bot.admin_bot import cmd_users
+            await cmd_users(update, context)
+            return
+
+        pending_pkg_id = context.user_data.get("admin_awaiting_custom_qty")
+        if pending_pkg_id:
+            if text.isdigit() and 1 <= int(text) <= 500:
+                count = int(text)
+                from bot.purchase import get_package
+                from bot.generate_coupons import generate_coupon_codes
+                pkg = get_package(pending_pkg_id)
+                context.user_data.pop("admin_awaiting_custom_qty", None)
+                if not pkg:
+                    await update.message.reply_text("חבילה לא נמצאה.")
+                    return
+                codes = generate_coupon_codes(
+                    count=count,
+                    daily_quota=pkg.daily_quota,
+                    period_days=pkg.period_days,
+                )
+                code_text = "\n".join(f"<code>{c}</code>" for c in codes)
+                await update.message.reply_text(code_text, parse_mode="HTML")
+                return
+            else:
+                await update.message.reply_text("אנא הכנס מספר תקין בין 1 ל-500.")
+                return
+
+        from bot.purchase import ADMIN_PACKAGE_CATALOG
+        from bot.admin_bot import build_quantity_keyboard
+        for pkg in ADMIN_PACKAGE_CATALOG:
+            if text == pkg.label_hebrew() or text == pkg.label_admin_keyboard() or text == f"₪{pkg.price_ils}" or pkg.package_id in text:
+                await update.message.reply_text(
+                    f"נבחרה חבילה: <b>{pkg.label_hebrew()}</b>\nכמה קודים תרצה לייצר?",
+                    reply_markup=build_quantity_keyboard(pkg.package_id),
+                    parse_mode="HTML",
+                )
+                return
+
     if text == _PERSISTENT_MAIN_LABEL:
         through_mid = getattr(update.message, "message_id", None)
         await wipe_chat_after_anchor(
@@ -2947,30 +3072,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if handled:
                 return
 
-        updated, errors = apply_nl_draft_edit(extracted, text)
-        if errors or updated is None:
-            err_msg = await _reply_text_safe(
-                update.message,
-                (errors[0] if errors else "לא הצלחתי לעדכן את הטיוטה."),
-            )
-            if err_msg is not None:
-                register_draft_cleanup_id(chat_id, getattr(err_msg, "message_id", None))
-            return
-        persist_draft(chat_id, updated)
-        ok, render_err = await refresh_draft_after_correction(
-            context,
-            chat_id,
-            updated,
-            user_message_id=user_mid,
+        err_msg = await _reply_text_safe(
+            update.message,
+            "כדי לערוך את הטיוטה השתמש/י בכפתורים שמתחתיה, או שלח/י תמונה חדשה.",
         )
-        if not ok:
-            err_msg = await _reply_text_safe(
-                update.message,
-                render_err or "הטיוטה עודכנה, אבל שליחת השרטוט נכשלה.",
-            )
-            if err_msg is not None:
-                register_draft_cleanup_id(chat_id, getattr(err_msg, "message_id", None))
-            return
+        if err_msg is not None:
+            register_draft_cleanup_id(chat_id, getattr(err_msg, "message_id", None))
         return
 
     if COUPON_ACCESS_ENABLED:

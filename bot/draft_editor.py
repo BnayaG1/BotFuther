@@ -9,11 +9,6 @@ from typing import Any
 
 from bot.draft_format import (
     _inclined_mag,
-    apply_patch_text,
-    build_extracted_from_draft,
-    extracted_to_draft_text,
-    looks_like_full_draft,
-    parse_draft_text,
     set_beam_L_user,
     set_distributed_span_user,
     set_load_x_user,
@@ -57,29 +52,6 @@ def is_approval_message(text: str) -> bool:
     return bool(_APPROVE_RE.match(text.strip()))
 
 
-def looks_like_draft_patch(text: str) -> bool:
-    """טקסט שנראה כמו תיקון טיוטה (לא צ'אט כללי)."""
-    raw = text.strip()
-    if not raw:
-        return False
-    if is_approval_message(raw):
-        return True
-    if looks_like_full_draft(raw):
-        return True
-    low = raw.lower()
-    return low.startswith(("l=", "load ", "support "))
-
-
-def prepare_draft_reply(extracted: dict) -> str:
-    """טיוטה לעריכה — ללא חישוב."""
-    return extracted_to_draft_text(extracted)
-
-
-def store_as_pending_draft(chat_id: int, extracted: dict) -> str:
-    """שומר טיוטה ממתינה ומחזיר טקסט לשליחה."""
-    draft_text = extracted_to_draft_text(extracted)
-    set_draft_pending(chat_id, extracted, draft_text)
-    return draft_text
 
 
 def _validate_for_solve(extracted: dict) -> list[str]:
@@ -151,9 +123,6 @@ def _parse_edit_number(text: str) -> float | None:
 
 
 def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list[str]]:
-    """מיישם עריכה של שדה בודד מהטיוטה."""
-    from bot.draft_format import apply_patch_text
-
     kind = edit.get("kind")
     text = text.strip()
     errors: list[str] = []
@@ -195,29 +164,6 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
         out = dict(extracted)
         out["beam"] = beam
         return out, errors
-
-    if kind == "load":
-        idx = int(edit.get("index", 1))
-        if text.lower().startswith("load"):
-            line = text
-        elif "=" in text:
-            line = f"load {idx} {text}"
-        else:
-            line = f"load {idx}: {text}"
-        updated, patch_errors = apply_patch_text(extracted, line)
-        return updated, patch_errors
-
-    if kind == "load_dir":
-        idx = int(edit.get("index", 1))
-        d = text.strip().lower()
-        if d in ("↙", "down-left", "down left", "left", "שמאל"):
-            d = "dl"
-        elif d in ("↘", "down-right", "down right", "right", "ימין"):
-            d = "dr"
-        if d not in ("dl", "dr"):
-            return extracted, ["שלח dl (↙) או dr (↘)"]
-        updated, patch_errors = apply_patch_text(extracted, f"load {idx} dir={d}")
-        return updated, patch_errors
 
     if kind == "load_x":
         idx = int(edit.get("index", 1))
@@ -284,39 +230,60 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
         val = _parse_edit_number(text)
         if val is None:
             return extracted, ["זווית לא תקינה — שלח מספר במעלות"]
-        updated, patch_errors = apply_patch_text(extracted, f"load {idx} angle={val}")
+        beam = dict(extracted.get("beam") or {})
+        loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+        i = idx - 1
+        if i < 0 or i >= len(loads):
+            return extracted, [f"אין עומס מספר {idx}"]
+        
+        if str(loads[i].get("type", "")).lower() == "inclined":
+            loads[i]["angle_deg"] = val
+            mag = float(loads[i].get("magnitude_ton", 0.0) or 0.0)
+            if mag >= 1e-9:
+                import math
+                rad = math.radians(val)
+                fx_mag = mag * math.cos(rad)
+                fy_mag = mag * math.sin(rad)
+                incl_dir = loads[i].get("incl_dir", "dr")
+                if incl_dir == "dl":
+                    loads[i]["Fx"], loads[i]["Fy"] = -abs(fx_mag), abs(fy_mag)
+                else:
+                    loads[i]["Fx"], loads[i]["Fy"] = abs(fx_mag), abs(fy_mag)
+        beam["loads"] = loads
+        out = dict(extracted)
+        out["beam"] = beam
         # זווית בלי כח — משאירים _draft_new כדי שהשורה לא תיראה «מאופסת».
-        return updated, patch_errors
+        return out, []
 
     if kind == "load_mag":
         idx = int(edit.get("index", 1))
         val = _parse_edit_number(text)
         if val is None:
             return extracted, ["ערך לא תקין — שלח מספר"]
-        beam = extracted.get("beam") if isinstance(extracted.get("beam"), dict) else {}
-        loads = beam.get("loads") or []
-        ld = loads[idx - 1] if isinstance(loads, list) and 0 <= idx - 1 < len(loads) else {}
-        if not isinstance(ld, dict):
-            ld = {}
+        beam = dict(extracted.get("beam") or {})
+        loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
+        i = idx - 1
+        if i < 0 or i >= len(loads):
+            return extracted, [f"אין עומס מספר {idx}"]
+        
+        ld = loads[i]
         t = str(ld.get("type", "point")).lower().strip()
+        
         # preserve current sign by writing signed values
         if t == "moment":
             cur = float(ld.get("M", ld.get("m", 0.0)) or 0.0)
             signed = abs(val) if cur >= 0 else -abs(val)
-            updated, patch_errors = apply_patch_text(extracted, f"load {idx} m={signed}")
-            loads_out = (updated.get("beam") or {}).get("loads") or []
-            if 0 <= idx - 1 < len(loads_out) and isinstance(loads_out[idx - 1], dict):
-                _mark_user_mag(loads_out[idx - 1])
-            _clear_draft_new_flag(loads_out, idx)
-            return updated, patch_errors
+            loads[i]["M"] = signed
+            _mark_user_mag(loads[i])
+            _clear_draft_new_flag(loads, idx)
+            beam["loads"] = loads
+            out = dict(extracted)
+            out["beam"] = beam
+            return out, []
+            
         if t == "distributed":
             cur = float(ld.get("w", ld.get("q", 0.0)) or 0.0)
             signed = abs(val) if cur >= 0 else -abs(val)
-            beam = dict(extracted.get("beam") or {})
-            loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
-            i = idx - 1
-            if i < 0 or i >= len(loads):
-                return extracted, [f"אין עומס מספר {idx}"]
             loads[i]["type"] = "distributed"
             loads[i]["w"] = signed
             _mark_user_mag(loads[i])
@@ -327,13 +294,27 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
             out = dict(extracted)
             out["beam"] = beam
             return out, []
+            
         if t == "inclined":
-            updated, patch_errors = apply_patch_text(extracted, f"load {idx} mag={abs(val)}")
-            loads_out = (updated.get("beam") or {}).get("loads") or []
-            if 0 <= idx - 1 < len(loads_out) and isinstance(loads_out[idx - 1], dict):
-                _mark_user_mag(loads_out[idx - 1])
-            _clear_draft_new_flag(loads_out, idx)
-            return updated, patch_errors
+            mag = abs(val)
+            loads[i]["magnitude_ton"] = mag
+            angle = float(loads[i].get("angle_deg", 45.0))
+            import math
+            rad = math.radians(angle)
+            fx_mag = mag * math.cos(rad)
+            fy_mag = mag * math.sin(rad)
+            incl_dir = loads[i].get("incl_dir", "dr")
+            if incl_dir == "dl":
+                loads[i]["Fx"], loads[i]["Fy"] = -abs(fx_mag), abs(fy_mag)
+            else:
+                loads[i]["Fx"], loads[i]["Fy"] = abs(fx_mag), abs(fy_mag)
+            _mark_user_mag(loads[i])
+            _clear_draft_new_flag(loads, idx)
+            beam["loads"] = loads
+            out = dict(extracted)
+            out["beam"] = beam
+            return out, []
+            
         # point / axial: צירי (Fx בלבד) לפני נקודתי אנכי
         fy = ld.get("Fy", ld.get("fy"))
         fx = ld.get("Fx", ld.get("fx"))
@@ -345,13 +326,9 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
             fx_v = float(fx) if fx is not None else 0.0
         except (TypeError, ValueError):
             fx_v = 0.0
+            
         if is_axial_point_load(ld):
             signed = _axial_signed_magnitude(ld, val)
-            beam = dict(extracted.get("beam") or {})
-            loads = [dict(x) for x in (beam.get("loads") or []) if isinstance(x, dict)]
-            i = idx - 1
-            if i < 0 or i >= len(loads):
-                return extracted, [f"אין עומס מספר {idx}"]
             loads[i]["type"] = "point"
             loads[i]["Fy"] = 0.0
             loads[i]["Fx"] = signed
@@ -364,29 +341,24 @@ def apply_field_edit(extracted: dict, edit: dict, text: str) -> tuple[dict, list
             out = dict(extracted)
             out["beam"] = beam
             return out, []
+            
+        # regular point load
         if abs(fy_v) >= 1e-9:
             signed = abs(val) if fy_v >= 0 else -abs(val)
-            updated, patch_errors = apply_patch_text(extracted, f"load {idx} fy={signed}")
-            loads_out = (updated.get("beam") or {}).get("loads") or []
-            if 0 <= idx - 1 < len(loads_out) and isinstance(loads_out[idx - 1], dict):
-                _mark_user_mag(loads_out[idx - 1])
-            _clear_draft_new_flag(loads_out, idx)
-            return updated, patch_errors
-        if abs(fx_v) >= 1e-9:
+            loads[i]["Fy"] = signed
+        elif abs(fx_v) >= 1e-9:
             signed = abs(val) if fx_v >= 0 else -abs(val)
-            updated, patch_errors = apply_patch_text(extracted, f"load {idx} fx={signed}")
-            loads_out = (updated.get("beam") or {}).get("loads") or []
-            if 0 <= idx - 1 < len(loads_out) and isinstance(loads_out[idx - 1], dict):
-                _mark_user_mag(loads_out[idx - 1])
-            _clear_draft_new_flag(loads_out, idx)
-            return updated, patch_errors
-        signed = abs(val) if fy_v >= 0 else -abs(val)
-        updated, patch_errors = apply_patch_text(extracted, f"load {idx} fy={signed}")
-        loads_out = (updated.get("beam") or {}).get("loads") or []
-        if 0 <= idx - 1 < len(loads_out) and isinstance(loads_out[idx - 1], dict):
-            _mark_user_mag(loads_out[idx - 1])
-        _clear_draft_new_flag(loads_out, idx)
-        return updated, patch_errors
+            loads[i]["Fx"] = signed
+        else:
+            signed = abs(val) if fy_v >= 0 else -abs(val)
+            loads[i]["Fy"] = signed
+            
+        _mark_user_mag(loads[i])
+        _clear_draft_new_flag(loads, idx)
+        beam["loads"] = loads
+        out = dict(extracted)
+        out["beam"] = beam
+        return out, []
 
     return extracted, ["שדה לא מוכר"]
 
@@ -829,41 +801,16 @@ def _clear_draft_new_flag(loads: list[dict], idx: int) -> None:
         loads[i].pop("_draft_new", None)
 
 
-def apply_user_edit(chat_id: int, text: str) -> tuple[dict, str, list[str]]:
-    """
-    מיישם עריכת משתמש על טיוטה שמורה.
-    Returns: (extracted מעודכן, טיוטה חדשה, שגיאות)
-    """
-    base = get_stored_vision_extracted(chat_id)
-    if not base:
-        raise ValueError("אין טיוטה פעילה — שלח תמונה קודם")
 
-    errors: list[str] = []
-    if looks_like_full_draft(text):
-        parsed = parse_draft_text(text)
-        if parsed is None:
-            errors.append("לא הצלחתי לקרוא את הטיוטה — בדוק פורמט")
-            updated = base
-        else:
-            updated = build_extracted_from_draft(parsed, base)
-    else:
-        updated, patch_errors = apply_patch_text(base, text)
-        errors.extend(patch_errors)
-
-    updated = _finalize_draft(updated)
-    draft = extracted_to_draft_text(updated)
-    persist_draft(chat_id, updated)
-    return updated, draft, errors
 
 
 def persist_draft(chat_id: int, extracted: dict) -> None:
     """שומר טיוטה ושומר על message_id של ההודעה המקורית."""
     from bot.draft_session import get_draft_message_ref
 
-    draft = extracted_to_draft_text(extracted)
     ref = get_draft_message_ref(chat_id)
     msg_id = ref[1] if ref else None
-    set_draft_pending(chat_id, extracted, draft, message_id=msg_id)
+    set_draft_pending(chat_id, extracted, draft_text="", message_id=msg_id)
 
 
 def handle_draft_text(chat_id: int, text: str) -> DraftHandleResult:
@@ -887,13 +834,8 @@ def handle_draft_text(chat_id: int, text: str) -> DraftHandleResult:
             extracted=extracted,
         )
 
-    updated, draft, errors = apply_user_edit(chat_id, text)
-    return DraftHandleResult(
-        handled=True,
-        update_draft=True,
-        extracted=updated,
-        errors=errors or None,
-    )
+    # Removed fallback to natural language edit because it is deprecated.
+    return DraftHandleResult(handled=False)
 
 
 def swap_supports(extracted: dict) -> dict:

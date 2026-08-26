@@ -49,9 +49,10 @@ def _is_admin(update: Update) -> bool:
 
 def build_admin_persistent_reply_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
+        ["למהנדס", "רשימת משתמשים"],
         [pkg.label_admin_keyboard() for pkg in ADMIN_PACKAGE_CATALOG[:2]],
         [pkg.label_admin_keyboard() for pkg in ADMIN_PACKAGE_CATALOG[2:4]],
-        [ADMIN_PACKAGE_CATALOG[4].label_admin_keyboard(), "רשימת משתמשים"],
+        [ADMIN_PACKAGE_CATALOG[4].label_admin_keyboard()],
     ]
     return ReplyKeyboardMarkup(
         buttons,

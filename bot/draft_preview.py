@@ -58,11 +58,24 @@ async def send_draft_preview(
     *,
     reply_to_message=None,
 ) -> bool:
-    """שולח תמונת שרטוט עם כפתורי עריכה ואישור. True אם נשלח בהצלחה."""
+    """שולח הודעת הסבר + תמונת שרטוט עם כפתורי עריכה ואישור. True אם נשלח בהצלחה."""
     png = render_exercise_problem_png_bytes(extracted)
     if not png:
         log.warning("Draft preview render failed chat=%s", chat_id)
         return False
+
+    try:
+        if reply_to_message is not None:
+            intro_msg = await reply_to_message.reply_text(DRAFT_INSTRUCTION_TEXT)
+        else:
+            intro_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=DRAFT_INSTRUCTION_TEXT,
+            )
+        if intro_msg is not None:
+            register_draft_cleanup_id(chat_id, getattr(intro_msg, "message_id", None))
+    except Exception as exc:
+        log.warning("Draft preview intro send failed chat=%s: %s", chat_id, exc)
 
     keyboard = build_draft_keyboard(extracted)
     photo_msg = None
@@ -87,7 +100,7 @@ async def send_draft_preview(
     set_draft_pending(
         chat_id,
         extracted,
-        "",
+        DRAFT_INSTRUCTION_TEXT,
         message_id=photo_msg.message_id,
         photo_message_id=photo_msg.message_id,
         clear_edit=True,

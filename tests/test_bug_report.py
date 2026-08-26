@@ -105,3 +105,19 @@ async def test_forward_bug_report_uses_admin_bot_token():
     assert ok is True
     bot_cls.assert_called_once_with(token="admin-token")
     fake_bot.send_message.assert_awaited_once_with(chat_id=12345, text="hello report")
+
+
+@pytest.mark.anyio
+async def test_forward_bug_report_direct_via_main_bot():
+    main_bot = MagicMock()
+    main_bot.send_message = AsyncMock()
+
+    with patch.object(handlers, "ADMIN_USER_IDS", frozenset({11111, 22222})):
+        with patch.object(handlers, "ADMIN_BOT_TOKEN", ""):
+            ok = await handlers._forward_bug_report_via_admin_bot("direct report", fallback_bot=main_bot)
+
+    assert ok is True
+    assert main_bot.send_message.await_count == 2
+    sent_to = {call.kwargs.get("chat_id") for call in main_bot.send_message.await_args_list}
+    assert sent_to == {11111, 22222}
+

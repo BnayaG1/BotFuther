@@ -231,3 +231,76 @@ async def test_on_text_persistent_buttons_work_during_assistant_progress():
                 await handlers.on_text(update, context)
                 mock_formulas.assert_awaited_once()
 
+
+def test_persistent_keyboard_admin_vs_regular():
+    # Regular user
+    kb_user = handlers.build_persistent_keyboard(is_admin=False)
+    texts_user = [btn.text for row in kb_user.keyboard for btn in row]
+    assert handlers._PERSISTENT_ADMIN_LABEL not in texts_user
+    assert handlers._PERSISTENT_MAIN_LABEL in texts_user
+
+    # Admin user
+    kb_admin = handlers.build_persistent_keyboard(is_admin=True)
+    texts_admin = [btn.text for row in kb_admin.keyboard for btn in row]
+    assert handlers._PERSISTENT_ADMIN_LABEL in texts_admin
+    assert handlers._PERSISTENT_MAIN_LABEL in texts_admin
+    assert handlers._PERSISTENT_BUG_REPORT_LABEL in texts_admin
+    assert handlers._PERSISTENT_FORMULAS_LABEL in texts_admin
+
+
+@pytest.mark.anyio
+async def test_on_text_admin_button_triggers_admin_system(monkeypatch):
+    monkeypatch.setattr("bot.config.ADMIN_USER_IDS", frozenset({9999}))
+    monkeypatch.setattr(handlers, "ADMIN_USER_IDS", frozenset({9999}))
+    update = MagicMock(spec=Update)
+    update.message = MagicMock(spec=Message)
+    update.message.text = handlers._PERSISTENT_ADMIN_LABEL
+    update.effective_chat = Chat(id=9999, type="private")
+    update.effective_user = User(id=9999, is_bot=False, first_name="Admin")
+    update.message.reply_text = AsyncMock()
+
+    context = MagicMock()
+
+    with patch.object(handlers, "telegram_chat_id", return_value=9999):
+        with patch.object(handlers, "telegram_user_id", return_value=9999):
+            await handlers.on_text(update, context)
+
+    assert update.message.reply_text.await_count == 2
+    args0, kwargs0 = update.message.reply_text.await_args_list[0]
+    assert "אדמין" in args0[0]
+    args1, kwargs1 = update.message.reply_text.await_args_list[1]
+    assert "מקלדת ניהול" in args1[0]
+    admin_kb = kwargs1.get("reply_markup")
+    assert isinstance(admin_kb, ReplyKeyboardMarkup)
+    admin_texts = [btn.text for row in admin_kb.keyboard for btn in row]
+    assert handlers._PERSISTENT_ENGINEER_LABEL in admin_texts
+
+
+@pytest.mark.anyio
+async def test_on_text_engineer_button_returns_to_main_system(monkeypatch):
+    monkeypatch.setattr("bot.config.ADMIN_USER_IDS", frozenset({9999}))
+    monkeypatch.setattr(handlers, "ADMIN_USER_IDS", frozenset({9999}))
+    update = MagicMock(spec=Update)
+    update.message = MagicMock(spec=Message)
+    update.message.text = handlers._PERSISTENT_ENGINEER_LABEL
+    update.effective_chat = Chat(id=9999, type="private")
+    update.effective_user = User(id=9999, is_bot=False, first_name="Admin")
+    update.message.reply_text = AsyncMock()
+
+    context = MagicMock()
+    context.user_data = {"admin_awaiting_custom_qty": "30_days"}
+
+    with patch.object(handlers, "telegram_chat_id", return_value=9999):
+        with patch.object(handlers, "telegram_user_id", return_value=9999):
+            with patch.object(handlers, "cmd_start", new_callable=AsyncMock) as mock_start:
+                await handlers.on_text(update, context)
+
+    assert "admin_awaiting_custom_qty" not in context.user_data
+    mock_start.assert_awaited_once()
+    update.message.reply_text.assert_awaited_once()
+    args, kwargs = update.message.reply_text.await_args
+    assert "חזרת למערכת הראשית" in args[0]
+    user_kb = kwargs.get("reply_markup")
+    assert isinstance(user_kb, ReplyKeyboardMarkup)
+
+

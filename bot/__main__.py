@@ -30,9 +30,17 @@ from bot.env import load_env_files, log_startup_config, require_env
 from bot.gemini_chat import gemini_runtime
 from bot.access import init_access_db
 from bot.exercise_bank import init_exercise_bank_db
+from bot.admin_bot import (
+    cmd_dbpath,
+    cmd_user_detail,
+    cmd_users,
+    on_admin_callback,
+)
 from bot.handlers import (
     INTRO_AVAILABLE,
+    cmd_admin,
     cmd_coupon,
+    cmd_engineer,
     cmd_formulas,
     cmd_ping,
     cmd_quota,
@@ -131,10 +139,16 @@ def main() -> None:
     app_bot.add_handler(CommandHandler("formulas", cmd_formulas))
     app_bot.add_handler(CommandHandler("formula", cmd_formulas))
     app_bot.add_handler(CommandHandler("coupon", cmd_coupon))
+    app_bot.add_handler(CommandHandler("admin", cmd_admin))
+    app_bot.add_handler(CommandHandler("engineer", cmd_engineer))
+    app_bot.add_handler(CommandHandler("users", cmd_users))
+    app_bot.add_handler(CommandHandler("user", cmd_user_detail))
+    app_bot.add_handler(CommandHandler("dbpath", cmd_dbpath))
 
     app_bot.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_image))
     app_bot.add_handler(CallbackQueryHandler(on_menu_callback, pattern=r"^menu:"))
     app_bot.add_handler(CallbackQueryHandler(on_buy_callback, pattern=r"^buy:"))
+    app_bot.add_handler(CallbackQueryHandler(on_admin_callback, pattern=r"^admin:"))
 
     if INTRO_AVAILABLE:
         app_bot.add_handler(CallbackQueryHandler(on_intro_callback, pattern=r"^intro:"))

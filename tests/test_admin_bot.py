@@ -37,13 +37,15 @@ def test_admin_persistent_reply_keyboard():
     from bot.admin_bot import build_admin_persistent_reply_keyboard
     kb = build_admin_persistent_reply_keyboard()
     labels = [btn.text for row in kb.keyboard for btn in row]
-    assert "חודש · ₪39" in labels
-    assert "חודשיים · ₪72" in labels
-    assert "3 חודשים · ₪99" in labels
-    assert "4 חודשים · ₪120" in labels
-    assert "VIP ללא הגבלות (120 יום)" in labels
-    assert "👥 רשימת משתמשים" in labels
+    assert "למהנדס" in labels
+    assert "רשימת משתמשים" in labels
+    assert "₪39" in labels
+    assert "₪72" in labels
+    assert "₪99" in labels
+    assert "₪120" in labels
+    assert "VIP" in labels
     assert kb.is_persistent is True
+
 
 
 @pytest.mark.anyio
@@ -58,6 +60,7 @@ async def test_on_admin_text_package_button(monkeypatch):
     update.message.reply_text = AsyncMock()
 
     context = MagicMock()
+    context.user_data = {}
     await on_admin_text(update, context)
 
     update.message.reply_text.assert_awaited_once()

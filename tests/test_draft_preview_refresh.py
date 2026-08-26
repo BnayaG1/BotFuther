@@ -130,3 +130,46 @@ def test_store_vision_context_preserves_cleanup_ids():
     assert 10 in ids and 11 in ids and 12 in ids
     assert 9 not in ids
     clear_vision_context(chat_id)
+
+
+@pytest.mark.anyio
+async def test_send_draft_preview_sends_intro_and_registers_cleanup():
+    from bot.draft_keyboard import DRAFT_INSTRUCTION_TEXT
+    from bot.draft_preview import send_draft_preview
+
+    chat_id = 5555
+    clear_vision_context(chat_id)
+
+    context = MagicMock()
+    context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=301))
+    context.bot.send_photo = AsyncMock(return_value=MagicMock(message_id=302))
+
+    with patch(
+        "bot.draft_preview.render_exercise_problem_png_bytes",
+        return_value=b"fake-png-bytes",
+    ):
+        ok = await send_draft_preview(
+            context,
+            chat_id,
+            {"beam": {"L": 5.0, "loads": [], "supports": []}},
+        )
+
+    assert ok is True
+    context.bot.send_message.assert_awaited_once_with(
+        chat_id=chat_id,
+        text=DRAFT_INSTRUCTION_TEXT,
+    )
+    context.bot.send_photo.assert_awaited_once()
+    assert (
+        "בוא רק נוודא שהנתונים שקלטתי מהתרגיל שלך נכונים." in DRAFT_INSTRUCTION_TEXT
+    )
+    assert (
+        "אם יש טעות תתקן עם הכפתורים למטה, ואם הכל נכון תאשר."
+        in DRAFT_INSTRUCTION_TEXT
+    )
+
+    ids = get_draft_cleanup_message_ids(chat_id)
+    assert 301 in ids
+    assert 302 in ids
+    clear_vision_context(chat_id)
+

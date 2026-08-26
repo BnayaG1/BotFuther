@@ -13,7 +13,6 @@ from bot.draft_format import (
     _fmt_num,
     _inclined_dir,
     _inclined_mag,
-    _load_to_draft_line,
     distributed_span_from_left,
     x_from_left_end,
 )
@@ -183,10 +182,8 @@ def _load_summary_he(beam: dict, idx: int, ld: dict) -> str:
 
 
 DRAFT_INSTRUCTION_TEXT = (
-    "זו מה שחילצתי.\n"
-    "אם משהו לא מדויק — כתוב במילים מה לתקן "
-    "(אורך קורה, הזזת עומס/סמך, מפורס, כיוון או סוג עומס) ואשלח תיקון.\n"
-    "אם זה התרגיל שלך - לחץ אישור."
+    "בוא רק נוודא שהנתונים שקלטתי מהתרגיל שלך נכונים.\n"
+    "אם יש טעות תתקן עם הכפתורים למטה, ואם הכל נכון תאשר."
 )
 
 DRAFT_FIXED_TEXT = (
@@ -685,12 +682,7 @@ def edit_prompt(edit: dict[str, Any], extracted: dict) -> str:
         return "אורך קורה L — הקלד מספר (למשל `13` או `L=13`)"
     if kind == "support":
         return "תכתוב את המרחק במטרים של הסמך מהקצה השמאלי של הקורה"
-    if kind == "load_dir":
-        idx = int(edit.get("index", 1))
-        return f"כיוון עומס {idx}"
-    if kind == "load":
-        idx = int(edit.get("index", 1))
-        return f"עומס {idx} — הקלד תיקון"
+
     if kind == "load_mag":
         return "תשלח את המשקל הנכון של העומס כמספר בלבד"
     if kind == "load_x":
