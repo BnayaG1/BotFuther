@@ -80,6 +80,16 @@ def serve_landing_assets(filename):
         return send_from_directory(_LANDING_DIR, "index.html")
     return ("Not Found", 404)
 
+def _start_flask_server():
+    try:
+        _p = int(os.environ.get("PORT", 8080))
+        print(f"[Railway/Web] Starting Flask landing server on 0.0.0.0:{_p}", flush=True)
+        app.run(host="0.0.0.0", port=_p, threaded=True, use_reloader=False)
+    except Exception as _err:
+        print(f"[Railway/Web] Error starting Flask: {_err}", flush=True)
+
+threading.Thread(target=_start_flask_server, daemon=True).start()
+
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
 # Avoid logging full Telegram API URLs (they embed the bot token).
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -163,9 +173,7 @@ def main() -> None:
 
     log.info("Bot is running. Starting Flask and Polling...")
 
-    # הפעלת Flask ב-Thread נפרד
-    port = int(os.environ.get("PORT", 8080))
-    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port), daemon=True).start()
+    # שרת ה-Flask מופעל ישירות בעליית המודול עבור ה-Healthcheck של Railway
 
     app_bot.run_polling(**_POLLING_KW)
 
