@@ -81,17 +81,28 @@ def serve_landing_assets(filename):
     return ("Not Found", 404)
 
 def _start_flask_server():
-    try:
-        raw_port = os.environ.get("PORT") or os.environ.get("RAILWAY_PORT") or "8080"
-        _p = int(raw_port)
-        print(f"[Railway/Web] Starting Flask landing server on 0.0.0.0:{_p}", flush=True)
-        app.run(host="0.0.0.0", port=_p, threaded=True, use_reloader=False)
-    except Exception as _err:
-        print(f"[Railway/Web] Error starting Flask: {_err}", flush=True)
+    ports_to_listen = set()
+    raw_port = os.environ.get("PORT") or os.environ.get("RAILWAY_PORT")
+    if raw_port:
+        try:
+            ports_to_listen.add(int(raw_port))
+        except ValueError:
+            pass
+    ports_to_listen.add(8080)
+    ports_to_listen.add(80)
+    ports_to_listen.add(3000)
 
-# Start web server thread (non-daemon so container web server never terminates unexpectedly)
-_web_thread = threading.Thread(target=_start_flask_server, daemon=False)
-_web_thread.start()
+    for p in sorted(ports_to_listen):
+        def _run(port_num):
+            try:
+                print(f"[Railway/Web] Listening for traffic on 0.0.0.0:{port_num}", flush=True)
+                app.run(host="0.0.0.0", port=port_num, threaded=True, use_reloader=False)
+            except Exception as _err:
+                # Port might be in use or restricted, which is expected for secondary ports
+                pass
+        threading.Thread(target=_run, args=(p,), daemon=False).start()
+
+_start_flask_server()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
 # Avoid logging full Telegram API URLs (they embed the bot token).
