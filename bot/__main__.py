@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 from __future__ import annotations
 import asyncio
 import logging
 import sys
 import threading
 import os
-from flask import Flask
+from flask import Flask, send_from_directory
 from telegram import BotCommand, Update
 from telegram import Update
 from telegram.ext import (
@@ -21,6 +21,8 @@ from telegram.request import HTTPXRequest
 from bot.config import (
     ADMIN_USER_IDS,
     APP_DIR,
+    BOT_DESCRIPTION,
+    BOT_SHORT_DESCRIPTION,
     TELEGRAM_KEY_NAMES,
     get_admin_user_ids,
 )
@@ -60,10 +62,23 @@ from bot.handlers import (
 
 from bot.instance_lock import acquire_bot_instance_lock
 
-# Flask פשוט כדי למנוע מ-Render לסגור את השרת
-app = Flask(__name__)
-@app.route('/')
-def home(): return "Bot is running!"
+# Flask להגשת דף הנחיתה של בניה גיל ומענה ל-Healthcheck של Railway
+_LANDING_DIR = os.path.join(str(APP_DIR), "landing_page")
+app = Flask(__name__, static_folder=_LANDING_DIR, static_url_path="")
+
+@app.route("/")
+def home():
+    if os.path.exists(os.path.join(_LANDING_DIR, "index.html")):
+        return send_from_directory(_LANDING_DIR, "index.html")
+    return "Bot is running!"
+
+@app.route("/<path:filename>")
+def serve_landing_assets(filename):
+    if os.path.exists(os.path.join(_LANDING_DIR, filename)):
+        return send_from_directory(_LANDING_DIR, filename)
+    if os.path.exists(os.path.join(_LANDING_DIR, "index.html")):
+        return send_from_directory(_LANDING_DIR, "index.html")
+    return ("Not Found", 404)
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
 # Avoid logging full Telegram API URLs (they embed the bot token).
@@ -86,6 +101,13 @@ _BOT_COMMANDS = [
 async def _post_init_set_commands(application: Application) -> None:
     await application.bot.set_my_commands(_BOT_COMMANDS)
     log.info("Telegram bot commands menu set (%s)", [c.command for c in _BOT_COMMANDS])
+    try:
+        await application.bot.set_my_description(BOT_DESCRIPTION)
+        if BOT_SHORT_DESCRIPTION:
+            await application.bot.set_my_short_description(BOT_SHORT_DESCRIPTION)
+        log.info("Telegram bot description set successfully.")
+    except Exception as exc:
+        log.warning("Failed to set bot description: %s", exc)
 
 
 def main() -> None:
