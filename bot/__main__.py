@@ -82,13 +82,16 @@ def serve_landing_assets(filename):
 
 def _start_flask_server():
     try:
-        _p = int(os.environ.get("PORT", 8080))
+        raw_port = os.environ.get("PORT") or os.environ.get("RAILWAY_PORT") or "8080"
+        _p = int(raw_port)
         print(f"[Railway/Web] Starting Flask landing server on 0.0.0.0:{_p}", flush=True)
         app.run(host="0.0.0.0", port=_p, threaded=True, use_reloader=False)
     except Exception as _err:
         print(f"[Railway/Web] Error starting Flask: {_err}", flush=True)
 
-threading.Thread(target=_start_flask_server, daemon=True).start()
+# Start web server thread (non-daemon so container web server never terminates unexpectedly)
+_web_thread = threading.Thread(target=_start_flask_server, daemon=False)
+_web_thread.start()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
 # Avoid logging full Telegram API URLs (they embed the bot token).
@@ -181,4 +184,13 @@ def main() -> None:
 if __name__ == "__main__":
     if str(APP_DIR) not in sys.path:
         sys.path.insert(0, str(APP_DIR))
-    main()
+    try:
+        main()
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:
+        log.exception("Unexpected error in bot main runner: %s", e)
+        # Keep process alive so Flask landing page and Railway Healthcheck stay 100% active
+        import time
+        while True:
+            time.sleep(3600)

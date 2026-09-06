@@ -16,5 +16,7 @@ RUN mkdir -p /app/data
 
 ENV PYTHONUNBUFFERED=1
 ENV ACCESS_DB_PATH=/app/data/access.db
+ENV PORT=8080
+EXPOSE 8080
 
 CMD ["python", "-m", "bot"]
