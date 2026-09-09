@@ -4934,7 +4934,9 @@ def resolve_beam_support_geometry(beam: dict) -> tuple[str, float, float]:
             elif st == "pin":
                 pins.append(x)
         if fixed:
-            return "cantilever", max(0.0, min(L, fixed[0])), L
+            wall_x = max(0.0, min(L, fixed[0]))
+            tip_x = 0.0 if wall_x > L / 2.0 else L
+            return "cantilever", wall_x, tip_x
         ra_pos = pins[0] if pins else float(beam.get("ra_pos", 0.0))
         rb_pos = rollers[0] if rollers else float(beam.get("rb_pos", L))
         if not pins and not rollers:
@@ -4951,7 +4953,8 @@ def resolve_beam_support_geometry(beam: dict) -> tuple[str, float, float]:
     ra_pos = max(0.0, min(L, float(beam.get("ra_pos", 0.0))))
     rb_pos = max(0.0, min(L, float(beam.get("rb_pos", L))))
     if mode == "cantilever":
-        return "cantilever", ra_pos, L
+        tip_x = 0.0 if ra_pos > L / 2.0 else L
+        return "cantilever", ra_pos, tip_x
     return mode, ra_pos, rb_pos
 
 

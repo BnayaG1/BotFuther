@@ -10,34 +10,19 @@ from __future__ import annotations
 
 import base64
 import html as html_lib
-import io
 import math
 import re
 import sys
-import ssl
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Arc, Polygon
 import numpy as np
-from matplotlib.lines import Line2D
 
 import core.statics_calculator as solver
-from notebook.pdf_layout import (
-    DEFAULT_BOT_LAYOUT,
-    PAGE_BREAK_CSS,
-    NotebookPdfLayout,
-    assert_page2_fits,
-    build_bot_notebook_extra_html,
-    forces_gaps_mm,
-    panel_height_in,
-    point_calc_top_gap_mm,
-)
+from notebook.pdf_layout import PAGE_BREAK_CSS, build_bot_notebook_extra_html
 
 from notebook.constants import (
     _A4_IFRAME_HEIGHT_PX,
@@ -525,12 +510,13 @@ def _cantilever_values_at_stations(loads: List[dict], L: float, result: Dict[str
     ra_x = float(result.get("R_Ax", 0.0))
     ra_y = float(result.get("R_Ay", 0.0))
     m_a = float(result.get("M_A", 0.0))
+    wall_pos = float(result.get("wall_pos", 0.0))
     rows: List[Dict[str, Any]] = []
-    for x, label in _cantilever_station_labels(loads, L):
+    for x, label in _cantilever_station_labels(loads, L, wall_pos=wall_pos):
         x = float(x)
-        n_val = float(solver.normal_force(x, loads, ra_x, 0.0))
-        q_val = float(solver.cantilever_shear_force(x, loads, ra_y))
-        m_val = float(solver.cantilever_bending_moment(x, loads, ra_y, m_a))
+        n_val = float(solver.normal_force(x, loads, ra_x, wall_pos))
+        q_val = float(solver.cantilever_shear_force(x, loads, ra_y, wall_pos=wall_pos))
+        m_val = float(solver.cantilever_bending_moment(x, loads, ra_y, m_a, wall_pos=wall_pos))
         rows.append({"x": x, "label": label, "N": n_val, "Q": q_val, "M": m_val})
     return rows
 
@@ -1470,14 +1456,18 @@ def _draw_beam_schematic(
     )
 
 
-def _draw_cantilever_wall_support(ax: Any) -> None:
+def _draw_cantilever_wall_support(ax: Any, wall_x: float = 0.0, L: float = 10.0) -> None:
     h = _CANTILEVER_WALL_HALF_H
     span = 2.0 * h
-    ax.plot([0, 0], [-h, h], color=_INK, linewidth=_CANTILEVER_WALL_LW, zorder=3)
+    wx = float(wall_x)
+    is_right = wx > float(L) / 2.0
+    wx = float(L) if is_right else 0.0
+    ax.plot([wx, wx], [-h, h], color=_INK, linewidth=_CANTILEVER_WALL_LW, zorder=3)
     for i in range(6):
         yy = -h + span * (i / 5)
+        hatch_x = wx + (_CANTILEVER_HATCH_X if is_right else -_CANTILEVER_HATCH_X)
         ax.plot(
-            [-_CANTILEVER_HATCH_X, 0],
+            [hatch_x, wx],
             [yy - _CANTILEVER_HATCH_DROP, yy],
             color=_INK,
             linewidth=_CANTILEVER_HATCH_LW,
@@ -1491,19 +1481,22 @@ def _draw_cantilever_beam_schematic(
     loads: List[dict],
     *,
     ra_y: float = 0.0,
+    wall_pos: float = 0.0,
     set_limits: bool = True,
 ) -> None:
     """קורת זיז + עומסים — אותו ylim וקנה מידה כמו סמכים (עומסים דקים)."""
     Lf = float(L)
     ax.plot([0, Lf], [0, 0], color=_INK, linewidth=_BEAM_MAIN_LW, zorder=2, solid_capstyle="round")
-    _draw_cantilever_wall_support(ax)
+    _draw_cantilever_wall_support(ax, wall_x=wall_pos, L=Lf)
     load_scale = max(0.28, 0.05 * max(abs(float(ra_y)), 8.0))
     _draw_loads_like_canvas(ax, loads, load_scale, show_values=False)
-    stations = _cantilever_station_labels(loads, L)
+    stations = _cantilever_station_labels(loads, L, wall_pos=wall_pos)
     layout = _notebook_layout()
     dim_bottom = _draw_notebook_dimension_lines(ax, stations, layout, label_offset_squares=0.5)
     pad_x = max(0.3 * _CANTILEVER_NB_SUPPORT_SCALE, 0.04 * Lf)
-    ax.set_xlim(-pad_x, Lf + max(0.2, 0.03 * Lf))
+    left_pad = pad_x if wall_pos <= Lf / 2.0 else max(0.2, 0.03 * Lf)
+    right_pad = pad_x if wall_pos > Lf / 2.0 else max(0.2, 0.03 * Lf)
+    ax.set_xlim(-left_pad, Lf + right_pad)
     if set_limits:
         ax.set_ylim(min(layout["y_bottom"], dim_bottom), layout["y_top"])
     ax.axis("off")
@@ -2134,13 +2127,14 @@ def build_cantilever_schematic_figure(
     loads: List[dict],
     *,
     ra_y: float = 0.0,
+    wall_pos: float = 0.0,
     wide: bool = False,
 ) -> Any:
     """שרטוט זיז עליון חדש (סגנון בחינה) — בלי דיאגרמות N/Q/M וריאקציות."""
     del ra_y, wide
     from notebook.mpl.schematic.problem_draw import build_problem_figure
 
-    return build_problem_figure(L, loads, mode="cantilever")
+    return build_problem_figure(L, loads, mode="cantilever", ra_pos=wall_pos)
 
 
 def _notebook_graphics_assets(
@@ -2188,6 +2182,7 @@ def _notebook_graphics_assets(
         normals = np.asarray(result["normal"], dtype=float)
         shears = np.asarray(result["shear"], dtype=float)
         moments = np.asarray(result["moment"], dtype=float)
+        wall_pos = float(result.get("wall_pos", 0.0))
         fig_w = _notebook_fig_width(wide=wide)
         sub_l, sub_r = _subplot_lr(wide=wide)
         gs_left = sub_l + 0.03 if wide else 0.12
@@ -2207,9 +2202,9 @@ def _notebook_graphics_assets(
         )
         ax_b = fig_download.add_subplot(gs[0])
         _draw_cantilever_beam_schematic(
-            ax_b, L, loads, ra_y=float(result.get("R_Ay", 0.0))
+            ax_b, L, loads, ra_y=float(result.get("R_Ay", 0.0)), wall_pos=wall_pos
         )
-        crit = _cantilever_station_labels(loads, L)
+        crit = _cantilever_station_labels(loads, L, wall_pos=wall_pos)
         Lf = float(L)
         x_pad = _beam_x_pad(Lf)
         ax_n = fig_download.add_subplot(gs[1], sharex=ax_b)
@@ -2227,7 +2222,7 @@ def _notebook_graphics_assets(
 
         # display: שרטוט תרגיל חדש (בלי דיאגרמות)
         fig_display = build_cantilever_schematic_figure(
-            L, loads, ra_y=float(result.get("R_Ay", 0.0)), wide=wide
+            L, loads, ra_y=float(result.get("R_Ay", 0.0)), wall_pos=wall_pos, wide=wide
         )
         png_display = _fig_to_png_bytes(fig_display, style="embed", pad_inches=0.04)
         plt.close(fig_display)
@@ -3271,9 +3266,12 @@ def render_solved_notebook(
         )
 
 
-def _cantilever_station_labels(loads: List[dict], L: float) -> List[Tuple[float, str]]:
+def _cantilever_station_labels(
+    loads: List[dict], L: float, wall_pos: float = 0.0
+) -> List[Tuple[float, str]]:
     xs = solver.critical_x_positions(loads, L, 0.0, L)
-    labels: Dict[float, str] = {0.0: "A", round(float(L), 6): "G"}
+    wall_x = float(L) if float(wall_pos) > float(L) / 2.0 else 0.0
+    labels: Dict[float, str] = {wall_x: "A"}
     letters = "BCDEFHIJKLMNOPQRSTUVWXYZ"
     li = 0
     for x in xs:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import html as html_lib
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import core.statics_calculator as solver
@@ -116,10 +115,18 @@ def _point_calc_grid_html(
         ra_x2 = float(cantilever_result.get("R_Ax", 0.0)) if cantilever_result else 0.0
         ra_y2 = float(cantilever_result.get("R_Ay", 0.0)) if cantilever_result else 0.0
         m_a2 = float(cantilever_result.get("M_A", 0.0)) if cantilever_result else 0.0
-        n_terms: List[str] = [f"Ax({_fmt(ra_x2)})"]
-        q_terms: List[str] = [f"Ay({_fmt(ra_y2)})"]
-        m_terms: List[str] = [f"Ma({_fmt(m_a2)})"]
-        _add_signed(m_terms, ra_y2, f"Ay({_fmt(abs(ra_y2))})·{_fmt(x)}")
+        wall_pos = float(cantilever_result.get("wall_pos", 0.0)) if cantilever_result else 0.0
+        is_right = wall_pos > 0.0
+
+        if is_right:
+            n_terms: List[str] = []
+            q_terms: List[str] = []
+            m_terms: List[str] = []
+        else:
+            n_terms = [f"Ax({_fmt(ra_x2)})"]
+            q_terms = [f"Ay({_fmt(ra_y2)})"]
+            m_terms = [f"Ma({_fmt(m_a2)})"]
+            _add_signed(m_terms, ra_y2, f"Ay({_fmt(abs(ra_y2))})·{_fmt(x)}")
 
         for ld in loads:
             t = ld.get("type")

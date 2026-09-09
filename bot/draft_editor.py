@@ -52,8 +52,6 @@ def is_approval_message(text: str) -> bool:
     return bool(_APPROVE_RE.match(text.strip()))
 
 
-
-
 def _validate_for_solve(extracted: dict) -> list[str]:
     try:
         from core.beam_validator import validate_beam_extraction

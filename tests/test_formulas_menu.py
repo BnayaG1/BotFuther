@@ -44,10 +44,11 @@ def test_start_keyboard_includes_formulas():
     assert "menu:formulas" in callbacks
 
 
-def test_persistent_keyboard_includes_formulas():
+def test_persistent_keyboard_excludes_formulas():
     kb = handlers.build_persistent_keyboard()
     texts = [btn.text for row in kb.keyboard for btn in row]
-    assert handlers._PERSISTENT_FORMULAS_LABEL in texts
+    assert handlers._PERSISTENT_FORMULAS_LABEL not in texts
+    assert handlers._PERSISTENT_BUY_LABEL in texts
     assert handlers._PERSISTENT_ASSISTANT_LABEL not in texts
     assert handlers._PERSISTENT_QUOTA_LABEL not in texts
     assert "🔄 איפוס תרגיל" not in texts

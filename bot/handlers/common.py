@@ -3,6 +3,7 @@
 from bot.handlers.router import (  # noqa: F401
     INTRO_AVAILABLE,
     build_persistent_keyboard,
+    build_root_keyboard,
     build_start_keyboard,
     build_start_welcome_text,
     cmd_start,

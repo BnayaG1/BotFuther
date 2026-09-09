@@ -210,10 +210,14 @@ def normal_force(x: float, loads: List[dict], ra_x: float, ra_pos: float) -> flo
     return N
 
 
-def solve_cantilever_beam(loads: List[dict], L: float) -> Dict[str, Any]:
-    """Independent fixed-left/free-right cantilever solution. Fixed support at x=0."""
+def solve_cantilever_beam(
+    loads: List[dict], L: float, wall_pos: float = 0.0
+) -> Dict[str, Any]:
+    """Cantilever solution with fixed support at wall_pos (x=0 or x=L)."""
     if L <= 0:
         raise ValueError("אורך הקורה חייב להיות חיובי.")
+    is_right_wall = float(wall_pos) > float(L) / 2.0
+    actual_wall_pos = float(L) if is_right_wall else 0.0
     sum_fx = 0.0
     sum_fy = 0.0
     load_moment_about_wall = 0.0
@@ -225,7 +229,11 @@ def solve_cantilever_beam(loads: List[dict], L: float) -> Dict[str, Any]:
             fx = float(load.get("Fx", 0.0))
             sum_fx += fx
             sum_fy += fy
-            load_moment_about_wall += fy * x
+            lever = (actual_wall_pos - x) if is_right_wall else x
+            # On left wall (x=0), downward load (fy>0) at x>0 rotates CW (+).
+            # On right wall (x=L), downward load (fy>0) at x<L rotates CCW (-).
+            # So moment contribution to CW sum is +fy*x for left wall, and +fy*lever for right wall (which balances CCW).
+            load_moment_about_wall += fy * lever
             positions.append(x)
         elif load["type"] == "distributed":
             x1 = float(load["x1"])
@@ -234,24 +242,15 @@ def solve_cantilever_beam(loads: List[dict], L: float) -> Dict[str, Any]:
             span = x2 - x1
             resultant = w * span
             centroid = (x1 + x2) / 2.0
+            lever = (actual_wall_pos - centroid) if is_right_wall else centroid
             sum_fy += resultant
-            load_moment_about_wall += resultant * centroid
+            load_moment_about_wall += resultant * lever
             positions.extend([x1, x2])
         elif load["type"] == "moment":
             x = float(load["x"])
             _m = float(load["M"])
             # M>0 = עם השעון בשרטוט; במחשבון הקורה (Σ בקיר) התרומה היא −M
             load_moment_about_wall -= _m
-            # #region agent log
-            try:
-                import json as _json, time as _time
-                from pathlib import Path as _Path
-                _p = _Path(__file__).resolve().parents[1] / "debug-1522a6.log"
-                with _p.open("a", encoding="utf-8") as _f:
-                    _f.write(_json.dumps({"sessionId":"1522a6","runId":"post-fix","hypothesisId":"D","location":"statics_calculator.py:solve_cantilever","message":"calculator moment contrib","data":{"M":_m,"contrib_to_wall_sum":-_m,"x":x},"timestamp":int(_time.time()*1000)})+"\n")
-            except Exception:
-                pass
-            # #endregion
             positions.append(x)
         elif load["type"] == "inclined":
             x = float(load["x"])
@@ -259,7 +258,8 @@ def solve_cantilever_beam(loads: List[dict], L: float) -> Dict[str, Any]:
             fy = float(load["Fy"])
             sum_fx += fx
             sum_fy += fy
-            load_moment_about_wall += fy * x
+            lever = (actual_wall_pos - x) if is_right_wall else x
+            load_moment_about_wall += fy * lever
             positions.append(x)
 
     reaction_x = -sum_fx
@@ -267,17 +267,26 @@ def solve_cantilever_beam(loads: List[dict], L: float) -> Dict[str, Any]:
     reaction_moment = load_moment_about_wall
     diagram_fixed_moment = load_moment_about_wall
     xs = beam_plot_x_coords(float(L), positions)
-    shear = np.array([cantilever_shear_force(x, loads, reaction_y) for x in xs], dtype=float)
-    moment = np.array(
-        [cantilever_bending_moment(x, loads, reaction_y, diagram_fixed_moment) for x in xs],
+    shear = np.array(
+        [cantilever_shear_force(x, loads, reaction_y, wall_pos=actual_wall_pos) for x in xs],
         dtype=float,
     )
-    normal = np.array([normal_force(x, loads, reaction_x, 0.0) for x in xs], dtype=float)
+    moment = np.array(
+        [
+            cantilever_bending_moment(
+                x, loads, reaction_y, diagram_fixed_moment, wall_pos=actual_wall_pos
+            )
+            for x in xs
+        ],
+        dtype=float,
+    )
+    normal = np.array([normal_force(x, loads, reaction_x, actual_wall_pos) for x in xs], dtype=float)
     return {
         "R_Ax": reaction_x,
         "R_Ay": reaction_y,
         "M_A": reaction_moment,
         "diagram_fixed_moment": diagram_fixed_moment,
+        "wall_pos": actual_wall_pos,
         "xs": xs,
         "shear": shear,
         "moment": moment,
@@ -285,8 +294,11 @@ def solve_cantilever_beam(loads: List[dict], L: float) -> Dict[str, Any]:
     }
 
 
-def cantilever_shear_force(x: float, loads: List[dict], reaction_y: float) -> float:
-    V = float(reaction_y)
+def cantilever_shear_force(
+    x: float, loads: List[dict], reaction_y: float, wall_pos: float = 0.0
+) -> float:
+    is_right_wall = float(wall_pos) > 0.0
+    V = 0.0 if is_right_wall else float(reaction_y)
     for load in loads:
         if load["type"] == "point":
             if x >= load["x"]:
@@ -298,13 +310,16 @@ def cantilever_shear_force(x: float, loads: List[dict], reaction_y: float) -> fl
         elif load["type"] == "inclined":
             if x >= load["x"]:
                 V += float(load["Fy"])
+    if is_right_wall and x >= wall_pos:
+        V += float(reaction_y)
     return V
 
 
 def cantilever_bending_moment(
-    x: float, loads: List[dict], reaction_y: float, fixed_moment: float
+    x: float, loads: List[dict], reaction_y: float, fixed_moment: float, wall_pos: float = 0.0
 ) -> float:
-    M = float(fixed_moment) + float(reaction_y) * float(x)
+    is_right_wall = float(wall_pos) > 0.0
+    M = 0.0 if is_right_wall else (float(fixed_moment) + float(reaction_y) * float(x))
     for load in loads:
         if load["type"] == "point":
             if x >= load["x"]:

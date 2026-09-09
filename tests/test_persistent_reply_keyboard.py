@@ -21,7 +21,7 @@ def test_cmd_start_keeps_inline_menu():
 
 
 @pytest.mark.anyio
-async def test_cmd_start_sends_persistent_keyboard_and_inline_menu():
+async def test_cmd_start_sends_root_inline_menu():
     update = MagicMock(spec=Update)
     update.message = MagicMock(spec=Message)
     update.message.reply_text = AsyncMock()
@@ -245,7 +245,8 @@ def test_persistent_keyboard_admin_vs_regular():
     assert handlers._PERSISTENT_ADMIN_LABEL in texts_admin
     assert handlers._PERSISTENT_MAIN_LABEL in texts_admin
     assert handlers._PERSISTENT_BUG_REPORT_LABEL in texts_admin
-    assert handlers._PERSISTENT_FORMULAS_LABEL in texts_admin
+    assert handlers._PERSISTENT_BUY_LABEL in texts_admin
+    assert handlers._PERSISTENT_FORMULAS_LABEL not in texts_admin
 
 
 @pytest.mark.anyio
@@ -302,5 +303,39 @@ async def test_on_text_engineer_button_returns_to_main_system(monkeypatch):
     assert "חזרת למערכת הראשית" in args[0]
     user_kb = kwargs.get("reply_markup")
     assert isinstance(user_kb, ReplyKeyboardMarkup)
+
+
+@pytest.mark.anyio
+async def test_root_menu_flow_statics_and_back():
+    root_kb = handlers.build_root_keyboard()
+    root_callbacks = [btn.callback_data for row in root_kb.inline_keyboard for btn in row]
+    root_labels = [btn.text for row in root_kb.inline_keyboard for btn in row]
+    assert root_callbacks == ["menu:statics", "menu:center_of_gravity"]
+    assert root_labels == ["סטטיקה", "מרכז כובד"]
+
+    statics_kb = handlers.build_start_keyboard()
+    statics_callbacks = [btn.callback_data for row in statics_kb.inline_keyboard for btn in row]
+    assert "menu:center_of_gravity" not in statics_callbacks
+    assert "menu:root" in statics_callbacks
+
+    update = MagicMock(spec=Update)
+    query = MagicMock()
+    query.data = "menu:statics"
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+    update.callback_query = query
+    update.effective_user = User(id=123, is_bot=False, first_name="T")
+    context = MagicMock()
+
+    await handlers.on_menu_callback(update, context)
+    query.edit_message_text.assert_awaited_once()
+    assert query.edit_message_text.await_args.args[0] == "בחר/י פעולה:"
+
+    query.reset_mock()
+    query.data = "menu:root"
+    await handlers.on_menu_callback(update, context)
+    query.edit_message_text.assert_awaited_once()
+    assert query.edit_message_text.await_args.args[0] == "בחר/י נושא:"
+
 
 

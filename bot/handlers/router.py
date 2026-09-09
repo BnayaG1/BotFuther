@@ -53,8 +53,6 @@ from bot.access import (
     redeem_reply_hebrew,
 )
 
-
-
 from bot.purchase import (
     build_package_confirm_keyboard,
     build_payment_keyboard,
@@ -265,6 +263,7 @@ def _bank_extracted_for_solve(extracted: dict) -> dict:
     return finalize_beam_extraction(data)
 _PERSISTENT_FORMULAS_LABEL = "נוסחאות"
 _PERSISTENT_QUOTA_LABEL = "מכסה"
+_PERSISTENT_BUY_LABEL = "רכישת חבילה"
 _PERSISTENT_BUG_REPORT_LABEL = "דיווח על תקלה"
 _PERSISTENT_MAIN_LABEL = "ראשי"
 _PERSISTENT_ADMIN_LABEL = "מנהל"
@@ -273,6 +272,8 @@ _START_INTRO_LABEL = "לימוד בסיס"
 
 _START_SEND_IMAGE_LABEL = "פתרון לתרגיל"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
+_START_STATICS_LABEL = "סטטיקה"
+_START_CENTER_OF_GRAVITY_LABEL = "מרכז כובד"
 
 
 
@@ -450,22 +451,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ):
         await cleanup_practice_chat(context, chat_id)
     await _leave_formulas_chat_if_needed(context, chat_id)
-    text = build_start_welcome_text()
-    keyboard = build_start_keyboard(user_id=uid)
-    try:
-        # שולחים את המקלדת הקבועה (התפריט הזמין תמיד) עם הודעת הפתיחה.
-        welcome = await update.message.reply_text(
-            text, reply_markup=build_persistent_keyboard(user_id=uid), parse_mode="Markdown"
-        )
-    except BadRequest as exc:
-        if "parse entities" not in str(exc).lower():
-            raise
-        welcome = await update.message.reply_text(
-            text, reply_markup=build_persistent_keyboard(user_id=uid)
-        )
+    keyboard = build_root_keyboard()
+    # שולח הודעה עם המקלדת הקבועה בתחתית המסך
+    welcome = await update.message.reply_text(
+        "ברוך הבא!",
+        reply_markup=build_persistent_keyboard(user_id=uid),
+    )
     set_chat_anchor_message_id(chat_id, getattr(welcome, "message_id", None))
-    # תפריט כפתורים Inline (לא "מקלדת למטה").
-    await update.message.reply_text("בחר/י פעולה:", reply_markup=keyboard)
+    # תפריט נושאים ראשי (סטטיקה / מרכז כובד). לחיצה על סטטיקה פותחת את build_start_keyboard
+    await update.message.reply_text("בחר/י נושא:", reply_markup=keyboard)
 
 
 def build_start_welcome_text() -> str:
@@ -474,7 +468,6 @@ def build_start_welcome_text() -> str:
         "השימוש בבוט פשוט: יש לך אופציה להבין כל דבר בפני עצמו בלימוד הבסיס, שם אתה תוכל לעבור על מה שאתה רוצה עם תרגולים ספציפיים לדברים ספציפיים ולהבין כל שלב ושלב, יש לך נוסחאות לדברים ספציפיים שאתה יכול לשלוף ולרשום לך או פשוט להסתכל עליהם, אתה יכול ללחוץ בתפריט הראשי על תרגול ולקבל תרגיל מהמערכת שלי ברמה של מבחן ומשם גם לקבל מדריך שיעבור איתך שלב שלב על התרגיל שיצא עד לפתרון או במקום לקבל פשוט את הפתרון המלא. אתה יכול גם חופשי לשלוח לבוט תמונה של תרגיל שאתה עובד עליו ולקבל עליו מדריך לפתרון או את הפתרון.\n\n"
         "בכל בעיה או בקשה אתה יכול ללחוץ בתפרט הקבוע על 'דיווח על תקלה', והדיווח יגיע ישירות אלי.\n\n"
         "הבוט זמין עבורך ל24 שעות עם גישה חופשית להכל בשביל שתוכל להתרשם ולראות איך זה עובד. לאחר 24 השעות, אם תאהב ותרצה להמשיך אתה יכול לרכוש חבילה לפי חודשים כשחודש אחד עולה 39 שקלים, וכל חודש שתוסיף מההתחלה תקבל עליו 15 אחוז הנחה.\n\n"
-
         "מוזמן להתחיל להשתמש, מקווה שזה יעזור לך לעבור את הקורס בראש שקט."
     )
 
@@ -491,12 +484,24 @@ def _purchase_cta_markup(access: ImageAccessResult) -> InlineKeyboardMarkup | No
     return build_upgrade_options_keyboard()
 
 
+def build_root_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(_START_STATICS_LABEL, callback_data="menu:statics")],
+            [
+                InlineKeyboardButton(
+                    _START_CENTER_OF_GRAVITY_LABEL,
+                    callback_data="menu:center_of_gravity",
+                )
+            ],
+        ]
+    )
+
+
 def build_start_keyboard(
     user_id: int | None = None,
     is_admin: bool | None = None,
 ) -> InlineKeyboardMarkup:
-    if is_admin is None and user_id is not None:
-        is_admin = is_admin_user(user_id)
     rows: list[list[InlineKeyboardButton]] = []
     if INTRO_AVAILABLE:
         rows.append(
@@ -515,13 +520,11 @@ def build_start_keyboard(
                     _PERSISTENT_FORMULAS_LABEL, callback_data="menu:formulas"
                 )
             ],
-            [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")],
         ]
     )
-    if is_admin:
-        rows.append(
-            [InlineKeyboardButton("🛠 מנהל", callback_data="menu:admin")]
-        )
+    rows.append(
+        [InlineKeyboardButton("« חזרה", callback_data="menu:root")]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -539,12 +542,12 @@ def build_persistent_keyboard(
     if is_admin:
         rows = [
             [KeyboardButton(_PERSISTENT_MAIN_LABEL), KeyboardButton(_PERSISTENT_ADMIN_LABEL)],
-            [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_FORMULAS_LABEL)],
+            [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_BUY_LABEL)],
         ]
     else:
         rows = [
             [KeyboardButton(_PERSISTENT_MAIN_LABEL)],
-            [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_FORMULAS_LABEL)],
+            [KeyboardButton(_PERSISTENT_BUG_REPORT_LABEL), KeyboardButton(_PERSISTENT_BUY_LABEL)],
         ]
     return ReplyKeyboardMarkup(
         rows,
@@ -1038,8 +1041,38 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await cmd_admin(update, context)
         return
 
+    if action == "center_of_gravity":
+        await query.answer()
+        return
+
+    if action == "statics":
+        await query.answer()
+        uid = telegram_user_id(update)
+        keyboard = build_start_keyboard(user_id=uid)
+        try:
+            await query.edit_message_text("בחר/י פעולה:", reply_markup=keyboard)
+        except Exception:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="בחר/י פעולה:",
+                reply_markup=keyboard,
+            )
+        return
+
+    if action == "root":
+        await query.answer()
+        try:
+            await query.edit_message_text("בחר/י נושא:", reply_markup=build_root_keyboard())
+        except Exception:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="בחר/י נושא:",
+                reply_markup=build_root_keyboard(),
+            )
+        return
+
     # יציאה מתרגול לנושא אחר — מוחקים את הודעות התרגיל מהצ'אט.
-    if action in ("new", "formulas", "intro", "main") or action.startswith("mode:"):
+    if action in ("new", "formulas", "intro", "main", "statics", "root") or action.startswith("mode:"):
         from bot.draft_session import get_draft_source_user_message_id
 
         leave_session = get_solution_session(chat_id)
@@ -1052,7 +1085,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await cleanup_practice_chat(context, chat_id)
 
     # יציאה מנוסחאות לנושא אחר — מוחקים את הודעות הנוסחאות מהצ'אט.
-    if action in ("new", "intro", "give_exercise", "main") or action.startswith(
+    if action in ("new", "intro", "give_exercise", "main", "statics", "root") or action.startswith(
         "mode:"
     ):
         await _leave_formulas_chat_if_needed(context, chat_id)
@@ -2680,6 +2713,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             _PERSISTENT_MAIN_LABEL,
             _START_INTRO_LABEL,
             _PERSISTENT_FORMULAS_LABEL,
+            _PERSISTENT_BUY_LABEL,
             _PERSISTENT_ASSISTANT_LABEL,
             _PERSISTENT_QUOTA_LABEL,
             _PERSISTENT_BUG_REPORT_LABEL,
@@ -2767,6 +2801,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             _PERSISTENT_MAIN_LABEL,
             _START_INTRO_LABEL,
             _PERSISTENT_FORMULAS_LABEL,
+            _PERSISTENT_BUY_LABEL,
             _PERSISTENT_ASSISTANT_LABEL,
             _PERSISTENT_QUOTA_LABEL,
             _PERSISTENT_BUG_REPORT_LABEL,
@@ -2963,6 +2998,22 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             message=update.message,
         )
         return
+    if text == _START_STATICS_LABEL:
+        await _send_main_action_menu(context, chat_id, user_id=telegram_user_id(update))
+        return
+    if text == _START_CENTER_OF_GRAVITY_LABEL:
+        return
+
+    if text in (_PERSISTENT_BUY_LABEL, "רכישת חבילה"):
+        leave_session = get_solution_session(chat_id)
+        if has_practice_chat_trail(chat_id) or (
+            leave_session is not None and leave_session.from_practice
+        ):
+            await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        await _send_purchase_menu(context, chat_id, message=update.message)
+        return
+
     if text == _PERSISTENT_BUG_REPORT_LABEL:
         await _leave_formulas_chat_if_needed(context, chat_id)
         await _prompt_bug_report(update.message)

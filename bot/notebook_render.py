@@ -77,18 +77,9 @@ def render_notebook_png_bytes(extracted: dict, solved: dict) -> bytes | None:
         import notebook as nb
         import core.statics_calculator as solver
 
-        if tool_name == "beam_solve_cantilever":
-            result = solver.solve_cantilever_beam(loads, L)
-            _, _, pdf_bytes = nb.build_cantilever_page_html(
-                loads, L, result, wide_layout=True
-            )
-            return nb._pdf_to_png_bytes(
-                pdf_bytes, dpi=nb._BOT_EXPORT_DPI
-            )
-
         support_mode, ra_pos, rb_pos = resolve_beam_support_geometry(beam)
-        if support_mode == "cantilever":
-            result = solver.solve_cantilever_beam(loads, L)
+        if tool_name == "beam_solve_cantilever" or support_mode == "cantilever":
+            result = solver.solve_cantilever_beam(loads, L, wall_pos=ra_pos)
             _, _, pdf_bytes = nb.build_cantilever_page_html(
                 loads, L, result, wide_layout=True
             )
@@ -152,7 +143,7 @@ def render_exercise_problem_png_bytes(extracted: dict) -> bytes | None:
 
         support_mode, ra_pos, rb_pos = resolve_beam_support_geometry(beam)
         if support_mode == "cantilever":
-            fig = nb.build_cantilever_schematic_figure(L, loads, wide=True)
+            fig = nb.build_cantilever_schematic_figure(L, loads, wall_pos=ra_pos, wide=True)
         else:
             fig = nb.build_beam_schematic_figure(
                 L, loads, ra_pos, rb_pos, 0.0, 0.0, 0.0, 0.0, wide=True

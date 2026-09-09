@@ -64,7 +64,8 @@ def _station_points(
     Lf = float(L)
     if cantilever:
         xs = solver.critical_x_positions(loads, Lf, 0.0, Lf)
-        labels: dict[float, str] = {0.0: "A"}
+        wall_x = float(Lf) if ra_pos is not None and float(ra_pos) > Lf / 2.0 else 0.0
+        labels: dict[float, str] = {wall_x: "A"}
         letters = "BCDEGHIJKLMNOPQRSTUVWXYZ"
         li = 0
         out: List[Tuple[float, str]] = []
@@ -157,8 +158,9 @@ def build_exercise_from_beam(
     ex_loads = _solver_loads_to_exercise_loads(loads)
 
     if mode == "cantilever":
-        stations = _station_points(loads, Lf, cantilever=True)
-        supports = [Support("A", "fixed", 0.0)]
+        wall_x = float(Lf) if float(ra_pos) > Lf / 2.0 else 0.0
+        stations = _station_points(loads, Lf, cantilever=True, ra_pos=wall_x)
+        supports = [Support("A", "fixed", wall_x)]
         labeled = [
             LabeledPoint(label, x)
             for x, label in stations

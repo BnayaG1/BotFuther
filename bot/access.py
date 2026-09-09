@@ -27,6 +27,7 @@ _conn: sqlite3.Connection | None = None
 
 _raw_access_db = (
     os.getenv("ACCESS_DB_PATH", "").strip()
+    or os.getenv("COUPON_DB_PATH", "").strip()
     or os.getenv("DB_PATH", "").strip()
 )
 DB_PATH = Path(_raw_access_db).resolve() if _raw_access_db else (APP_DIR / "access.db").resolve()
@@ -687,7 +688,7 @@ def has_intro_access(user_id: int, *, now: float | None = None) -> bool:
 def intro_access_blocked_hebrew() -> str:
     return (
         "הגישה לתכני הלימוד זמינה ב-24 השעות הראשונות או עם קוד קופון בתוקף.\n"
-        "לרכישת חבילה/קופון לחץ/י על 'רכישת חבילה' בתפריט הראשי."
+        "לרכישת חבילה/קופון לחץ/י על 'רכישת חבילה' בתפריט הקבוע."
     )
 
 

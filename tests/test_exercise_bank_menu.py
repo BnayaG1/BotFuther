@@ -57,16 +57,11 @@ async def test_give_exercise_locked_without_access():
     query.message.delete.assert_awaited_once()
     mock_gen.assert_not_called()
     context.bot.send_message.assert_awaited()
-    kwargs = context.bot.send_message.await_args.kwargs
-    text = kwargs.get("text") or ""
-    if not text and context.bot.send_message.await_args.args:
-        text = (
-            context.bot.send_message.await_args.args[1]
-            if len(context.bot.send_message.await_args.args) > 1
-            else ""
-        )
-    text = kwargs.get("text", text)
-    assert "מגבלת" in text
+    texts = [
+        (call.kwargs.get("text") or "")
+        for call in context.bot.send_message.await_args_list
+    ]
+    assert any("מגבלת" in t for t in texts)
 
 
 
@@ -262,4 +257,27 @@ async def test_on_image_notebook_mode_checks_solve_access_without_consume():
 
     mock_check.assert_called_once()
     mock_begin.assert_called_once_with(chat_id, solve_mode=SolveMode.NOTEBOOK)
+
+
+def test_start_keyboard_has_center_of_gravity():
+    keyboard = handlers.build_root_keyboard()
+    callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+    labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "menu:center_of_gravity" in callbacks
+    assert "מרכז כובד" in labels
+
+
+@pytest.mark.anyio
+async def test_center_of_gravity_callback_does_nothing():
+    update = MagicMock(spec=Update)
+    query = MagicMock(spec=CallbackQuery)
+    query.data = "menu:center_of_gravity"
+    query.answer = AsyncMock()
+    update.callback_query = query
+    context = MagicMock()
+
+    await handlers.on_menu_callback(update, context)
+
+    query.answer.assert_awaited_once_with()
+    context.bot.send_message.assert_not_called()
 

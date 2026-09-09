@@ -18,7 +18,6 @@ from exercise_generator.randomize import (
     random_force_magnitude,
     random_inclined_angle_deg,
     random_point_spacings,
-    random_udl_span_length,
     random_udl_weights,
     shuffled_load_kinds,
     udl_spans_overlap,

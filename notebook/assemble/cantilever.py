@@ -42,7 +42,8 @@ def build_cantilever_page_html(
     normals = np.asarray(result["normal"], dtype=float)
     shears = np.asarray(result["shear"], dtype=float)
     moments = np.asarray(result["moment"], dtype=float)
-    crit = cantilever_station_labels_fn(loads, L)
+    wall_pos = float(result.get("wall_pos", 0.0))
+    crit = cantilever_station_labels_fn(loads, L, wall_pos=wall_pos)
     forces_html = build_forces_diagram_html_fn(
         xs, normals, shears, moments, float(L), crit, wide=wide_layout, layout=layout
     )
