@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import asyncio
 import logging
@@ -6,8 +6,7 @@ import sys
 import threading
 import os
 from flask import Flask, send_from_directory
-from telegram import BotCommand, Update
-from telegram import Update
+from telegram import MenuButtonDefault, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -112,19 +111,13 @@ log = logging.getLogger("beam_telegram_bot")
 
 _POLLING_KW = {"drop_pending_updates": True, "allowed_updates": Update.ALL_TYPES}
 
-_BOT_COMMANDS = [
-    BotCommand("start", "תפריט ראשי"),
-    BotCommand("formulas", "נוסחאות"),
-    BotCommand("quota", "מכסה"),
-    BotCommand("reset", "איפוס תרגיל"),
-    BotCommand("help", "עזרה"),
-]
-
-
-
 async def _post_init_set_commands(application: Application) -> None:
-    await application.bot.set_my_commands(_BOT_COMMANDS)
-    log.info("Telegram bot commands menu set (%s)", [c.command for c in _BOT_COMMANDS])
+    try:
+        await application.bot.delete_my_commands()
+        await application.bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+        log.info("Telegram bot commands and menu button deleted/set to default.")
+    except Exception as exc:
+        log.warning("Failed to reset commands/menu button: %s", exc)
     try:
         await application.bot.set_my_description(BOT_DESCRIPTION)
         if BOT_SHORT_DESCRIPTION:

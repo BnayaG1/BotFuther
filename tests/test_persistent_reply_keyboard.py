@@ -138,6 +138,7 @@ async def test_on_text_main_button_shows_start_menu():
 
     mock_wipe.assert_awaited_once()
     assert mock_wipe.await_args.kwargs.get("through_message_id") == 50
+    update.message.reply_text.assert_not_awaited()
     context.bot.send_message.assert_awaited_once()
     args, kwargs = context.bot.send_message.await_args
     assert kwargs.get("text") == "בחר/י פעולה:" or (args and args[0] == chat_id)
@@ -298,11 +299,7 @@ async def test_on_text_engineer_button_returns_to_main_system(monkeypatch):
 
     assert "admin_awaiting_custom_qty" not in context.user_data
     mock_start.assert_awaited_once()
-    update.message.reply_text.assert_awaited_once()
-    args, kwargs = update.message.reply_text.await_args
-    assert "חזרת למערכת הראשית" in args[0]
-    user_kb = kwargs.get("reply_markup")
-    assert isinstance(user_kb, ReplyKeyboardMarkup)
+    update.message.reply_text.assert_not_awaited()
 
 
 @pytest.mark.anyio

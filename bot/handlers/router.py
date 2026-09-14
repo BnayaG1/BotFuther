@@ -47,6 +47,7 @@ from bot.access import (
     has_intro_access,
     image_access_reply_hebrew,
     intro_access_blocked_hebrew,
+    is_user_first_seen,
     looks_like_coupon_code,
     quota_status_for_user,
     redeem_coupon,
@@ -222,6 +223,7 @@ _TEXT_UNHANDLED = (
 _IMAGE_DEDUP_SEC = 120.0
 _recent_image_keys: dict[tuple[int, int], float] = {}
 _bug_report_prompt_chats: set[int] = set()
+_bug_report_message_ids: dict[int, list[int]] = {}
 _coupon_prompt_chats: set[int] = set()
 
 
@@ -242,7 +244,7 @@ _BUG_REPORT_FORCE_REPLY = ForceReply(
     input_field_placeholder="תאר/י את התקלה",
 )
 
-_BUG_REPORT_CANCEL = "ביטול דיווח"
+_BUG_REPORT_CANCEL = "ביטול"
 _PERSISTENT_ASSISTANT_LABEL = "מדריך לפתרון"
 # קיצור זמני: שליחת אות B מייצרת תרגיל מהמחולל ושולחת אותו
 _GENERATED_EXERCISE_TRIGGER = "B"
@@ -435,6 +437,48 @@ async def _deliver_approved_solve(
         notebook_path.unlink(missing_ok=True)
 
 
+async def _wipe_and_reset_to_main(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    user_id: int | None,
+    incoming_mid: int | None,
+) -> None:
+    await cleanup_practice_chat(context, chat_id)
+    await cleanup_formulas_chat(context, chat_id)
+    reset_user_session(chat_id)
+
+    if incoming_mid is not None:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=int(incoming_mid))
+        except Exception:
+            pass
+        anchor = get_chat_anchor_message_id(chat_id)
+        if anchor is not None:
+            start_mid = int(anchor)
+            end_mid = int(incoming_mid) - 1
+            if end_mid >= start_mid and (end_mid - start_mid) <= 50:
+                for mid in range(start_mid, end_mid + 1):
+                    try:
+                        await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                    except Exception:
+                        pass
+
+    keyboard = build_root_keyboard()
+    root_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="בחר/י נושא:",
+        reply_markup=build_persistent_keyboard(user_id=user_id),
+    )
+    set_chat_anchor_message_id(chat_id, getattr(root_msg, "message_id", None))
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="נושאים לבחירה:",
+        reply_markup=keyboard,
+    )
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -445,21 +489,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ensure_user_first_seen(int(user.id))
     context.chat_data[_CHAT_UI_VERSION_KEY] = str(BOT_UI_VERSION or "").strip() or "default"
     chat_id = telegram_chat_id(update)
-    leave_session = get_solution_session(chat_id)
-    if has_practice_chat_trail(chat_id) or (
-        leave_session is not None and leave_session.from_practice
-    ):
-        await cleanup_practice_chat(context, chat_id)
-    await _leave_formulas_chat_if_needed(context, chat_id)
-    keyboard = build_root_keyboard()
-    # שולח הודעה עם המקלדת הקבועה בתחתית המסך
-    welcome = await update.message.reply_text(
-        "ברוך הבא!",
-        reply_markup=build_persistent_keyboard(user_id=uid),
+    incoming_mid = getattr(update.message, "message_id", None)
+    await _wipe_and_reset_to_main(
+        update,
+        context,
+        chat_id=chat_id,
+        user_id=uid,
+        incoming_mid=int(incoming_mid) if incoming_mid is not None else None,
     )
-    set_chat_anchor_message_id(chat_id, getattr(welcome, "message_id", None))
-    # תפריט נושאים ראשי (סטטיקה / מרכז כובד). לחיצה על סטטיקה פותחת את build_start_keyboard
-    await update.message.reply_text("בחר/י נושא:", reply_markup=keyboard)
 
 
 def build_start_welcome_text() -> str:
@@ -494,6 +531,14 @@ def build_root_keyboard() -> InlineKeyboardMarkup:
                     callback_data="menu:center_of_gravity",
                 )
             ],
+        ]
+    )
+
+
+def build_center_of_gravity_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("חזור", callback_data="menu:root")],
         ]
     )
 
@@ -653,11 +698,6 @@ async def cmd_engineer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
     context.user_data.pop("admin_awaiting_custom_qty", None)
-    uid = telegram_user_id(update)
-    await update.message.reply_text(
-        "חזרת למערכת הראשית.",
-        reply_markup=build_persistent_keyboard(user_id=uid),
-    )
     await cmd_start(update, context)
 
 
@@ -721,24 +761,29 @@ async def _forward_bug_report_via_admin_bot(
 
 
 
+async def _cleanup_bug_report_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """מוחק את כל הודעות שיחת הדיווח שהצטברו בצ'אט."""
+    mids = _bug_report_message_ids.pop(chat_id, [])
+    for mid in mids:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+
+
 async def _prompt_bug_report(message) -> None:
     chat_id = int(message.chat_id)
     _bug_report_prompt_chats.add(chat_id)
-    await message.reply_text(
-        "*דיווח על תקלה*\n\n"
-        "כתוב/י כאן במילים שלך מה קרה (או מה לא עובד).\n"
-        "אחרי השליחה הדיווח יועבר אוטומטית לצוות.\n\n"
-        "אפשר לבטל עם «ביטול דיווח».",
-        parse_mode="Markdown",
+    _bug_report_message_ids[chat_id] = []
+    if getattr(message, "message_id", None):
+        _bug_report_message_ids[chat_id].append(int(message.message_id))
+    sent = await message.reply_text(
+        "נתקלת בתקלה? או שיש לך בקשה להוסיף?\n"
+        "מוזמן/ת לרשום במילים שלך את הבעיה:",
         reply_markup=build_bug_report_cancel_keyboard(),
     )
-    try:
-        await message.reply_text(
-            "כאן אפשר לרשום את פרטי התקלה:",
-            reply_markup=_BUG_REPORT_FORCE_REPLY,
-        )
-    except BadRequest:
-        pass
+    if sent and getattr(sent, "message_id", None):
+        _bug_report_message_ids[chat_id].append(int(sent.message_id))
 
 
 async def _send_content_locked(
@@ -1043,6 +1088,16 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "center_of_gravity":
         await query.answer()
+        text = "מערכת הלימוד של מרכז כובד כרגע בפיתוח, מוזמן לחזור ללמידה של מה שיש!"
+        keyboard = build_center_of_gravity_keyboard()
+        try:
+            await query.edit_message_text(text, reply_markup=keyboard)
+        except Exception:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+            )
         return
 
     if action == "statics":
@@ -1092,8 +1147,14 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "main":
         await query.answer()
-        await _delete_callback_message(query)
-        await _send_main_action_menu(context, chat_id)
+        mid = query.message.message_id if query.message else None
+        await _wipe_and_reset_to_main(
+            update,
+            context,
+            chat_id=chat_id,
+            user_id=telegram_user_id(update),
+            incoming_mid=mid,
+        )
         return
 
     if action == "formulas":
@@ -2966,12 +3027,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if text == _PERSISTENT_MAIN_LABEL:
         through_mid = getattr(update.message, "message_id", None)
-        await wipe_chat_after_anchor(
+        uid = telegram_user_id(update)
+        await _wipe_and_reset_to_main(
+            update,
             context,
-            chat_id,
-            through_message_id=int(through_mid) if through_mid is not None else None,
+            chat_id=chat_id,
+            user_id=uid,
+            incoming_mid=int(through_mid) if through_mid is not None else None,
         )
-        await _send_main_action_menu(context, chat_id, user_id=telegram_user_id(update))
         return
 
     if text == _START_INTRO_LABEL:
@@ -3027,22 +3090,32 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if chat_id in _bug_report_prompt_chats:
+        user_mid = getattr(update.message, "message_id", None)
+        if user_mid:
+            _bug_report_message_ids.setdefault(chat_id, []).append(int(user_mid))
+
         if text in (_BUG_REPORT_CANCEL, _PERSISTENT_BUG_REPORT_LABEL):
             if text == _BUG_REPORT_CANCEL:
                 _bug_report_prompt_chats.discard(chat_id)
+                await _cleanup_bug_report_messages(context, chat_id)
                 await update.message.reply_text(
                     "הדיווח בוטל.",
-                    reply_markup=build_persistent_keyboard(),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+                    ]),
                 )
                 return
             # לחיצה חוזרת על הכפתור — פשוט מזכירים לכתוב, נשארים במצב הדיווח
-            await update.message.reply_text(
-                "כתוב/י עכשיו את תיאור התקלה, או לחץ/י «ביטול דיווח».",
+            sent = await update.message.reply_text(
+                "כתוב/י עכשיו את תיאור הבעיה, או לחץ/י «ביטול».",
                 reply_markup=build_bug_report_cancel_keyboard(),
             )
+            if sent and getattr(sent, "message_id", None):
+                _bug_report_message_ids.setdefault(chat_id, []).append(int(sent.message_id))
             return
 
         _bug_report_prompt_chats.discard(chat_id)
+        await _cleanup_bug_report_messages(context, chat_id)
         user = update.effective_user
         report = _bug_report_admin_text(
             user_id=telegram_user_id(update),
@@ -3054,17 +3127,20 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         sent = await _forward_bug_report_via_admin_bot(
             report, fallback_bot=context.bot
         )
+        kb_done = InlineKeyboardMarkup([
+            [InlineKeyboardButton("ראשי", callback_data="menu:main")],
+        ])
         if sent:
             await update.message.reply_text(
                 "תודה! הדיווח נשלח לצוות. נטפל בזה בהקדם.",
-                reply_markup=build_persistent_keyboard(),
+                reply_markup=kb_done,
             )
         else:
             log.warning("Bug report could not be delivered (chat=%s)", chat_id)
             await update.message.reply_text(
                 "קיבלנו את הדיווח מקומית, אבל השליחה לצוות נכשלה זמנית. "
                 "נסי/ה שוב עוד רגע או כתוב/י לנו בוואטסאפ אם דחוף.",
-                reply_markup=build_persistent_keyboard(),
+                reply_markup=kb_done,
             )
         return
 

@@ -418,6 +418,17 @@ def consume_practice_slot(user_id: int) -> ImageAccessResult:
     return consume_feature_slot(user_id, FeatureKind.PRACTICE)
 
 
+def is_user_first_seen(user_id: int) -> bool:
+    """מחזיר True אם המשתמש כבר נרשם בעבר ב-user_first_seen."""
+    conn = _connect()
+    with _db_lock:
+        row = conn.execute(
+            "SELECT 1 FROM user_first_seen WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        return row is not None
+
+
 def ensure_user_first_seen(
     user_id: int, username: str | None = None, *, now: float | None = None
 ) -> float:
