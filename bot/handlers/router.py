@@ -276,6 +276,7 @@ _START_SEND_IMAGE_LABEL = "פתרון לתרגיל"
 _START_GIVE_EXERCISE_LABEL = "תרגול"
 _START_STATICS_LABEL = "סטטיקה"
 _START_CENTER_OF_GRAVITY_LABEL = "מרכז כובד"
+_START_EXPERIMENT_LABEL = "ניסוי"
 
 
 
@@ -529,6 +530,12 @@ def build_root_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     _START_CENTER_OF_GRAVITY_LABEL,
                     callback_data="menu:center_of_gravity",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    _START_EXPERIMENT_LABEL,
+                    callback_data="menu:experiment",
                 )
             ],
         ]
@@ -1084,6 +1091,10 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if action == "admin":
         await _delete_callback_message(query)
         await cmd_admin(update, context)
+        return
+
+    if action == "experiment":
+        await query.answer()
         return
 
     if action == "center_of_gravity":
