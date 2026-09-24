@@ -307,8 +307,12 @@ async def test_root_menu_flow_statics_and_back():
     root_kb = handlers.build_root_keyboard()
     root_callbacks = [btn.callback_data for row in root_kb.inline_keyboard for btn in row]
     root_labels = [btn.text for row in root_kb.inline_keyboard for btn in row]
-    assert root_callbacks == ["menu:statics", "menu:center_of_gravity"]
-    assert root_labels == ["סטטיקה", "מרכז כובד"]
+    assert root_callbacks == [
+        "menu:statics",
+        "menu:center_of_gravity",
+        "menu:experiment",
+    ]
+    assert root_labels == ["סטטיקה", "מרכז כובד", "ניסוי"]
 
     statics_kb = handlers.build_start_keyboard()
     statics_callbacks = [btn.callback_data for row in statics_kb.inline_keyboard for btn in row]
