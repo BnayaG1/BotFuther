@@ -121,11 +121,3 @@ def test_reactions_unchanged_with_split_display():
     # אותה מוסכמה כמו test_personal_assistant_reactions_physics
     assert abs(by_guide - (-rb_y)) < 0.02
 
-
-def test_notebook_distributed_terms_use_shared_split():
-    from notebook.facade import _distributed_moment_terms_about
-
-    terms = _distributed_moment_terms_about(3.0, 0.0, 10.0, 2.0)
-    assert len(terms) == 2
-    terms_no_cross = _distributed_moment_terms_about(3.0, 3.0, 5.0, 2.0)
-    assert len(terms_no_cross) == 1

@@ -38,11 +38,15 @@ from bot.admin_bot import (
 )
 from bot.handlers import (
     INTRO_AVAILABLE,
+    PROFILES_DATA,
+    PROFILE_RANGE_MENUS,
+    PROFILE_CHOICE_MENUS,
     cmd_admin,
     cmd_coupon,
     cmd_engineer,
     cmd_formulas,
     cmd_ping,
+    cmd_profile,
     cmd_quota,
     cmd_reset,
     cmd_start,
@@ -139,7 +143,13 @@ def main() -> None:
     init_access_db()
     init_exercise_bank_db()
 
-    request = HTTPXRequest(connect_timeout=30.0, read_timeout=90.0, write_timeout=90.0, pool_timeout=30.0)
+    request = HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=90.0,
+        write_timeout=90.0,
+        media_write_timeout=120.0,
+        pool_timeout=30.0,
+    )
     app_bot = (
         Application.builder()
         .token(main_token)
@@ -162,8 +172,11 @@ def main() -> None:
     app_bot.add_handler(CommandHandler("admin", cmd_admin))
     app_bot.add_handler(CommandHandler("engineer", cmd_engineer))
     app_bot.add_handler(CommandHandler("users", cmd_users))
-    app_bot.add_handler(CommandHandler("user", cmd_user_detail))
     app_bot.add_handler(CommandHandler("dbpath", cmd_dbpath))
+
+    profile_commands = [k.lower() for k in [*PROFILES_DATA.keys(), *PROFILE_RANGE_MENUS.keys(), *PROFILE_CHOICE_MENUS.keys()]]
+    if profile_commands:
+        app_bot.add_handler(CommandHandler(profile_commands, cmd_profile))
 
     app_bot.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_image))
     app_bot.add_handler(CallbackQueryHandler(on_menu_callback, pattern=r"^menu:"))

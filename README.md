@@ -28,7 +28,7 @@ python -m bot
 |--------|--------|
 | `bot/` | טלגרם, vision, טיוטה, handlers, גישה/רכישה |
 | `core/` | מנוע סטטיקה, validation, מרכז כובד |
-| `notebook/` | רינדור PDF/PNG של פתרון מחברת |
+| `notebook_solution/` | רינדור PNG של פתרון מחברת |
 | `personal_assistant/` | מדריך פתרון שלב-אחר-שלב |
 | `assets/` | תמונות בנק תרגילים ונוסחאות |
 | `validator_images/` | regression ל-vision |

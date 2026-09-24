@@ -36,6 +36,8 @@ def distributed_moment_segments_about(
     x_ref: float,
     *,
     eps: float = 1e-9,
+    w1: float | None = None,
+    w2: float | None = None,
 ) -> list[DistributedMomentSegment]:
     """מחזיר מקטעי מפורס לחישוב מומנט סביב x_ref.
 
@@ -43,19 +45,30 @@ def distributed_moment_segments_about(
     """
     xa = float(x1)
     xb = float(x2)
+    wa = float(w if w1 is None else w1)
+    wb = float(w if w2 is None else w2)
     if xb < xa:
-        xa, xb = xb, xa
+        xa, xb, wa, wb = xb, xa, wb, wa
     span = xb - xa
-    if abs(float(w)) < eps or span <= eps:
+    if span <= eps or (abs(wa) < eps and abs(wb) < eps):
         return []
     xref = float(x_ref)
 
-    def _one(seg_a: float, seg_b: float) -> DistributedMomentSegment | None:
+    def _w_at(x: float) -> float:
+        if span <= eps:
+            return wa
+        return wa + (wb - wa) * ((float(x) - xa) / span)
+
+    def _one(seg_a: float, seg_b: float, sa: float, sb: float) -> DistributedMomentSegment | None:
         seg_span = seg_b - seg_a
         if seg_span <= eps:
             return None
-        force = float(w) * seg_span
-        centroid = 0.5 * (seg_a + seg_b)
+        force = (float(sa) + float(sb)) * 0.5 * seg_span
+        den = float(sa) + float(sb)
+        if abs(den) < eps:
+            centroid = 0.5 * (seg_a + seg_b)
+        else:
+            centroid = seg_a + seg_span * (float(sa) + 2.0 * float(sb)) / (3.0 * den)
         arm = centroid - xref
         return DistributedMomentSegment(
             x1=seg_a,
@@ -67,8 +80,9 @@ def distributed_moment_segments_about(
         )
 
     if distributed_crosses_pivot(xa, xb, xref, eps=eps):
-        left = _one(xa, xref)
-        right = _one(xref, xb)
+        wm = _w_at(xref)
+        left = _one(xa, xref, wa, wm)
+        right = _one(xref, xb, wm, wb)
         return [s for s in (left, right) if s is not None]
-    one = _one(xa, xb)
+    one = _one(xa, xb, wa, wb)
     return [one] if one is not None else []

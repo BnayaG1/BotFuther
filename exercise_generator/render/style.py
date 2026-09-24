@@ -60,6 +60,6 @@ FIGSIZE = (FIG_WIDTH_IN, FIG_WIDTH_IN * _DATA_H / _DATA_W)
 # חותמת מותג — פינה ימנית-עליונה
 STAMP_TEXT = "המהנדס הדיגיטלי"
 STAMP_INK_RGB = (110, 110, 110)  # שחור רך (לא שחור מלא)
-STAMP_WIDTH_FRAC = 0.095  # ~9.5% מרוחב התמונה
+STAMP_WIDTH_FRAC = 0.058  # רוחב ה-QR; ננעל לכפולה שלמה של המודול
 STAMP_PAD_FRAC = 0.01  # מרווח מהשוליים
-STAMP_BARCODE_RELATIVE = "assets/digital_engineer_barcode.png"
+STAMP_BARCODE_RELATIVE = "assets/digital_engineer_barcode.png"  # https://t.me/MySemesterAI_bot

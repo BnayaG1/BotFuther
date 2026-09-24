@@ -93,15 +93,66 @@ def downward_intensity_to_w(value: float) -> float:
     return -abs(float(value))
 
 
-def _moment_from_udl_about_cut(w: float, x1: float, x2: float, x: float) -> float:
+def _udl_pair(load: dict) -> Tuple[float, float, float, float]:
+    """(x1, x2, w1, w2). בלי w1/w2 — מלבן לפי w."""
+    x1 = float(load.get("x1", 0.0) or 0.0)
+    x2 = float(load.get("x2", 0.0) or 0.0)
+    w = float(load.get("w", 0.0) or 0.0)
+    w1 = float(load["w1"]) if load.get("w1") is not None else w
+    w2 = float(load["w2"]) if load.get("w2") is not None else w
+    if x2 < x1:
+        return x2, x1, w2, w1
+    return x1, x2, w1, w2
+
+
+def _udl_resultant_centroid(
+    w1: float, w2: float, x1: float, x2: float
+) -> Tuple[float, float]:
+    span = float(x2) - float(x1)
+    if span <= 1e-15:
+        return 0.0, float(x1)
+    resultant = (float(w1) + float(w2)) * 0.5 * span
+    denom = float(w1) + float(w2)
+    if abs(denom) < 1e-15:
+        return resultant, (float(x1) + float(x2)) * 0.5
+    return resultant, float(x1) + span * (float(w1) + 2.0 * float(w2)) / (3.0 * denom)
+
+
+def _udl_shear_left_of(w1: float, w2: float, x1: float, x2: float, x: float) -> float:
     if x <= x1:
         return 0.0
-    if x < x2:
-        a = x - x1
-        return w * a * a / 2.0
     span = x2 - x1
-    centroid = (x1 + x2) / 2.0
-    return w * span * (x - centroid)
+    if span <= 1e-15:
+        return 0.0
+    if x >= x2:
+        return (w1 + w2) * 0.5 * span
+    a = x - x1
+    wx = w1 + (w2 - w1) * (a / span)
+    return (w1 + wx) * 0.5 * a
+
+
+def _moment_from_udl_about_cut(
+    w: float, x1: float, x2: float, x: float, w1: float | None = None, w2: float | None = None
+) -> float:
+    wa = float(w if w1 is None else w1)
+    wb = float(w if w2 is None else w2)
+    xa, xb = float(x1), float(x2)
+    if xb < xa:
+        xa, xb, wa, wb = xb, xa, wb, wa
+    if x <= xa:
+        return 0.0
+    span = xb - xa
+    if span <= 1e-15:
+        return 0.0
+    if x < xb:
+        a = x - xa
+        wx = wa + (wb - wa) * (a / span)
+        r = (wa + wx) * 0.5 * a
+        den = wa + wx
+        xc = xa + (a * 0.5 if abs(den) < 1e-15 else a * (wa + 2.0 * wx) / (3.0 * den))
+        return r * (x - xc)
+    r, xc = _udl_resultant_centroid(wa, wb, xa, xb)
+    return r * (x - xc)
 
 
 def compute_reactions(
@@ -120,9 +171,8 @@ def compute_reactions(
             sum_fx += float(load.get("Fx", 0.0))
             moment_about_ra -= load["Fy"] * (load["x"] - ra_pos)
         elif load["type"] == "distributed":
-            span = load["x2"] - load["x1"]
-            resultant = load["w"] * span
-            centroid = (load["x1"] + load["x2"]) / 2
+            x1, x2, w1, w2 = _udl_pair(load)
+            resultant, centroid = _udl_resultant_centroid(w1, w2, x1, x2)
             sum_fy += resultant
             moment_about_ra -= resultant * (centroid - ra_pos)
         elif load["type"] == "moment":
@@ -161,7 +211,8 @@ def bending_moment(
             if x >= load["x"]:
                 M += load["Fy"] * (x - load["x"])
         elif load["type"] == "distributed":
-            M += _moment_from_udl_about_cut(load["w"], load["x1"], load["x2"], x)
+            x1, x2, w1, w2 = _udl_pair(load)
+            M += _moment_from_udl_about_cut(w1, x1, x2, x, w1=w1, w2=w2)
         elif load["type"] == "moment":
             if x >= load["x"]:
                 M += load["M"]
@@ -189,9 +240,8 @@ def shear_force(
             if x >= load["x"]:
                 V += load["Fy"]
         elif load["type"] == "distributed":
-            x1, x2, w = load["x1"], load["x2"], load["w"]
-            if x >= x1:
-                V += w * (min(x, x2) - x1)
+            x1, x2, w1, w2 = _udl_pair(load)
+            V += _udl_shear_left_of(w1, w2, x1, x2, x)
         elif load["type"] == "inclined":
             if x >= load["x"]:
                 V += load["Fy"]
@@ -236,12 +286,8 @@ def solve_cantilever_beam(
             load_moment_about_wall += fy * lever
             positions.append(x)
         elif load["type"] == "distributed":
-            x1 = float(load["x1"])
-            x2 = float(load["x2"])
-            w = float(load["w"])
-            span = x2 - x1
-            resultant = w * span
-            centroid = (x1 + x2) / 2.0
+            x1, x2, w1, w2 = _udl_pair(load)
+            resultant, centroid = _udl_resultant_centroid(w1, w2, x1, x2)
             lever = (actual_wall_pos - centroid) if is_right_wall else centroid
             sum_fy += resultant
             load_moment_about_wall += resultant * lever
@@ -304,9 +350,8 @@ def cantilever_shear_force(
             if x >= load["x"]:
                 V += float(load["Fy"])
         elif load["type"] == "distributed":
-            x1, x2, w = float(load["x1"]), float(load["x2"]), float(load["w"])
-            if x >= x1:
-                V += w * (min(float(x), x2) - x1)
+            x1, x2, w1, w2 = _udl_pair(load)
+            V += _udl_shear_left_of(w1, w2, x1, x2, x)
         elif load["type"] == "inclined":
             if x >= load["x"]:
                 V += float(load["Fy"])
@@ -325,9 +370,8 @@ def cantilever_bending_moment(
             if x >= load["x"]:
                 M += float(load["Fy"]) * (float(x) - float(load["x"]))
         elif load["type"] == "distributed":
-            M += _moment_from_udl_about_cut(
-                float(load["w"]), float(load["x1"]), float(load["x2"]), float(x)
-            )
+            x1, x2, w1, w2 = _udl_pair(load)
+            M += _moment_from_udl_about_cut(w1, x1, x2, float(x), w1=w1, w2=w2)
         elif load["type"] == "moment":
             if x >= load["x"]:
                 M += float(load["M"])
@@ -340,25 +384,29 @@ def cantilever_bending_moment(
 def get_cantilever_calculation_steps(
     loads: List[dict], L: float, result: Dict[str, Any]
 ) -> List[str]:
+    wall = float(result.get("wall_pos", 0.0) or 0.0)
+    right_wall = wall > float(L) / 2.0
+    side = "מימין" if right_wall else "משמאל"
     lines = [
-        "מודל: זיז רתום משמאל ב-x=0 וחופשי מימין. התגובות מחושבות בבלוק נפרד ממודל שני הסמכים.",
-        f"L={L:g} m; ריתום ב-A: x=0.",
+        f"מודל: זיז רתום {side} ב-x={wall:g}. התגובות מחושבות בבלוק נפרד ממודל שני הסמכים.",
+        f"L={L:g} m; ריתום ב-A: x={wall:g}.",
     ]
     sum_fx = sum_fy = moment_about_wall = 0.0
     for i, load in enumerate(loads, 1):
         if load["type"] == "point":
             fx = float(load.get("Fx", 0.0))
             fy = float(load["Fy"])
-            m = fy * float(load["x"])
+            lever = (wall - float(load["x"])) if right_wall else float(load["x"])
+            m = fy * lever
             sum_fx += fx
             sum_fy += fy
             moment_about_wall += m
             lines.append(f"עומס {i} נקודתי: Fx={fx:g}, Fy={fy:g}; Fy*x={m:g} kN·m.")
         elif load["type"] == "distributed":
-            span = float(load["x2"]) - float(load["x1"])
-            resultant = float(load["w"]) * span
-            centroid = (float(load["x1"]) + float(load["x2"])) / 2.0
-            m = resultant * centroid
+            x1, x2, w1, w2 = _udl_pair(load)
+            resultant, centroid = _udl_resultant_centroid(w1, w2, x1, x2)
+            lever = (wall - centroid) if right_wall else centroid
+            m = resultant * lever
             sum_fy += resultant
             moment_about_wall += m
             lines.append(f"עומס {i} מפולג: R={resultant:g}, x_c={centroid:g}; R*x_c={m:g} kN·m.")
@@ -369,7 +417,8 @@ def get_cantilever_calculation_steps(
         elif load["type"] == "inclined":
             fx = float(load["Fx"])
             fy = float(load["Fy"])
-            m = fy * float(load["x"])
+            lever = (wall - float(load["x"])) if right_wall else float(load["x"])
+            m = fy * lever
             sum_fx += fx
             sum_fy += fy
             moment_about_wall += m
@@ -409,14 +458,12 @@ def get_calculation_steps(
             moment_about_ra += m
             lines.append(f"עומס {i} נקודתי: Fx={fx:g}, Fy={fy:g} kN; תרומה ל-M_A={m:g} kN·m.")
         elif load["type"] == "distributed":
-            span = load["x2"] - load["x1"]
-            w = load["w"]
-            r = w * span
-            xc = (load["x1"] + load["x2"]) / 2
+            x1, x2, w1, w2 = _udl_pair(load)
+            r, xc = _udl_resultant_centroid(w1, w2, x1, x2)
             m = r * (xc - ra_pos)
             sum_fy += r
             moment_about_ra += m
-            lines.append(f"עומס {i} מפולג: w={w:g}, M_A={m:g} kN·m.")
+            lines.append(f"עומס {i} מפולג: R={r:g}, M_A={m:g} kN·m.")
         elif load["type"] == "moment":
             moment_about_ra += load["M"]
             lines.append(f"עומס {i} מומנט טהור M={load['M']:g} kN·m.")
@@ -493,9 +540,8 @@ def equilibrium_load_sums(
             moment_about_ra -= load["Fy"] * (load["x"] - ra_pos)
             moment_about_rb -= load["Fy"] * (load["x"] - rb_pos)
         elif load["type"] == "distributed":
-            span = load["x2"] - load["x1"]
-            resultant = load["w"] * span
-            centroid = (load["x1"] + load["x2"]) / 2.0
+            x1, x2, w1, w2 = _udl_pair(load)
+            resultant, centroid = _udl_resultant_centroid(w1, w2, x1, x2)
             sum_fy += resultant
             moment_about_ra -= resultant * (centroid - ra_pos)
             moment_about_rb -= resultant * (centroid - rb_pos)

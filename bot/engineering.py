@@ -84,14 +84,25 @@ def ui_loads_to_solver(raw_loads: list, *, in_tons: bool = False) -> list[dict]:
             if x2 < x1:
                 x1, x2 = x2, x1
             intensity_ton = _read_ton(ld, "intensity_ton_per_m", "intensity_kN_per_m")
-            internal.append(
-                {
-                    "type": "distributed",
-                    "x1": x1,
-                    "x2": x2,
-                    "w": solver.downward_intensity_to_w(_force(intensity_ton)),
-                }
+            item = {
+                "type": "distributed",
+                "x1": x1,
+                "x2": x2,
+                "w": solver.downward_intensity_to_w(_force(intensity_ton)),
+            }
+            w1_ton = _read_optional_ton(
+                ld, "intensity_start_ton_per_m", "intensity_start_kN_per_m"
             )
+            w2_ton = _read_optional_ton(
+                ld, "intensity_end_ton_per_m", "intensity_end_kN_per_m"
+            )
+            if w1_ton is not None or w2_ton is not None:
+                s1 = float(w1_ton if w1_ton is not None else 0.0)
+                s2 = float(w2_ton if w2_ton is not None else intensity_ton)
+                item["w1"] = solver.downward_intensity_to_w(_force(s1))
+                item["w2"] = solver.downward_intensity_to_w(_force(s2))
+                item["w"] = (item["w1"] + item["w2"]) / 2.0
+            internal.append(item)
         elif kind == "moment":
             m_ton = _read_ton(ld, "M_ton_m", "M_kNm")
             internal.append(
@@ -154,13 +165,17 @@ def tool_beam_solve_simply_supported(args: dict) -> dict:
 
 def tool_beam_solve_cantilever(args: dict) -> dict:
     L = float(args["L"])
+    wall_pos = float(args.get("wall_pos", 0.0))
     loads = ui_loads_to_solver(list(args.get("loads") or []))
-    result = solver.solve_cantilever_beam(loads, L)
+    result = solver.solve_cantilever_beam(loads, L, wall_pos=wall_pos)
     steps = solver.get_cantilever_calculation_steps(loads, L, result)
     return {
         "engine": "beam_solver",
         "model": "cantilever_fixed_at_x0",
-        "geometry_m": {"L": fmt_solver_num(L)},
+        "geometry_m": {
+            "L": fmt_solver_num(L),
+            "wall_pos": fmt_solver_num(float(result.get("wall_pos", wall_pos))),
+        },
         "reactions_ton": {
             "R_Ax": fmt_solver_num(kn_to_ton(result["R_Ax"])),
             "R_Ay": fmt_solver_num(kn_to_ton(result["R_Ay"])),

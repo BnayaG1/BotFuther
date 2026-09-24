@@ -1984,14 +1984,22 @@ def vision_loads_to_tool_loads(raw_loads: list) -> list[dict]:
             tool_loads.append(entry)
         elif t == "distributed":
             w = float(item.get("w", 0.0))
-            tool_loads.append(
-                {
-                    "kind": "distributed",
-                    "x1": float(item.get("x1", 0.0)),
-                    "x2": float(item.get("x2", 0.0)),
-                    "intensity_ton_per_m": abs(w),
-                }
-            )
+            entry = {
+                "kind": "distributed",
+                "x1": float(item.get("x1", 0.0)),
+                "x2": float(item.get("x2", 0.0)),
+                "intensity_ton_per_m": abs(w),
+            }
+            w1 = item.get("w_start", item.get("w1"))
+            w2 = item.get("w_end", item.get("w2"))
+            shape = str(item.get("shape") or "rectangular").lower()
+            if w1 is not None or w2 is not None:
+                entry["intensity_start_ton_per_m"] = abs(float(w1 if w1 is not None else 0.0))
+                entry["intensity_end_ton_per_m"] = abs(float(w2 if w2 is not None else w))
+            elif shape == "triangular":
+                entry["intensity_start_ton_per_m"] = 0.0
+                entry["intensity_end_ton_per_m"] = abs(w)
+            tool_loads.append(entry)
         elif t == "moment":
             tool_loads.append(
                 {
@@ -5361,7 +5369,9 @@ def solve_from_vision_data(data: dict) -> dict:
             raise ValueError(f"לא זוהו עומסים בתמונה{hint}")
         support_mode, ra_pos, rb_pos = resolve_beam_support_geometry(beam)
         if support_mode == "cantilever":
-            result = tool_beam_solve_cantilever({"L": L, "loads": loads})
+            result = tool_beam_solve_cantilever(
+                {"L": L, "loads": loads, "wall_pos": ra_pos}
+            )
             return {"exercise_type": "beam", "tool_name": "beam_solve_cantilever", "result": result}
         if abs(rb_pos - ra_pos) < 1e-6:
             rb_pos = L

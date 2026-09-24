@@ -16,11 +16,12 @@ from telegram import (
     ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     KeyboardButton,
     ReplyKeyboardMarkup,
     Update,
 )
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TimedOut
 from telegram.ext import ContextTypes
 
 from bot.config import (
@@ -237,6 +238,21 @@ async def cmd_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         coupon_prompt_text_hebrew(),
         reply_markup=ForceReply(selective=True),
     )
+
+
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.text:
+        return
+    text = update.message.text.strip()
+    cmd = text.split()[0]
+    if cmd.startswith("/"):
+        cmd_name = cmd[1:].split("@")[0].upper()
+        for key in profile_command_names():
+            if key.upper() == cmd_name:
+                chat_id = telegram_chat_id(update)
+                user_mid = update.message.message_id
+                await _open_named_profile(context, chat_id, key, message_to_delete_id=user_mid)
+                return
 
 
 _BUG_REPORT_FORCE_REPLY = ForceReply(
@@ -535,12 +551,187 @@ def build_root_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+_REPOS_ROOT = Path(__file__).resolve().parent.parent.parent
+_COG_FORMULAS_TABLE = _REPOS_ROOT / "assets" / "formulas" / "center_of_gravity_table.png"
+
+PROFILES_DATA: dict[str, list[str]] = {
+    "IPN": [str(_REPOS_ROOT / "assets" / "profiles" / "IPN_1.png")],
+    "IPE": [str(_REPOS_ROOT / "assets" / "profiles" / "IPE_1.png")],
+    "IPB": [
+        str(_REPOS_ROOT / "assets" / "profiles" / "IPB_1.png"),
+        str(_REPOS_ROOT / "assets" / "profiles" / "IPB_2.png"),
+    ],
+    "UPB": [str(_REPOS_ROOT / "assets" / "profiles" / "UPB_1.png")],
+    "CHS": [
+        str(_REPOS_ROOT / "assets" / "profiles" / "CHS_1.png"),
+        str(_REPOS_ROOT / "assets" / "profiles" / "CHS_2.png"),
+    ],
+}
+
+LPN_TYPES: dict[str, dict[str, object]] = {
+    "equal": {
+        "label": "שווה שוקיים",
+        "ranges": {
+            "small": {
+                "label": "20×3 עד 90×9",
+                "pages": [
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_1.png"),
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_2.png"),
+                ],
+            },
+            "large": {
+                "label": "100×8 עד 200×24",
+                "pages": [
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_3.png"),
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_4.png"),
+                ],
+            },
+        },
+    },
+    "unequal": {
+        "label": "שוני שוקיים",
+        "ranges": {
+            "small": {
+                "label": "30×20×3 עד 90×60×8",
+                "pages": [
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_unequal_1.png"),
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_unequal_2.png"),
+                ],
+            },
+            "large": {
+                "label": "100×50×6 עד 200×100×14",
+                "pages": [
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_unequal_3.png"),
+                    str(_REPOS_ROOT / "assets" / "profiles" / "LPN_unequal_4.png"),
+                ],
+            },
+        },
+    },
+}
+
+PROFILE_RANGE_MENUS: dict[str, dict[str, dict[str, object]]] = {
+    "LPN": LPN_TYPES,
+}
+
+RHS_TYPES: dict[str, dict[str, object]] = {
+    "rect": {
+        "label": "מלבני",
+        "pages": [
+            str(_REPOS_ROOT / "assets" / "profiles" / "RHS_1.png"),
+            str(_REPOS_ROOT / "assets" / "profiles" / "RHS_2.png"),
+        ],
+    },
+    "square": {
+        "label": "ריבועי",
+        "pages": [
+            str(_REPOS_ROOT / "assets" / "profiles" / "RHS_square_1.png"),
+            str(_REPOS_ROOT / "assets" / "profiles" / "RHS_square_2.png"),
+        ],
+    },
+}
+
+PROFILE_CHOICE_MENUS: dict[str, dict[str, dict[str, object]]] = {
+    "RHS": RHS_TYPES,
+}
+
+
+def profile_command_names() -> list[str]:
+    return [*PROFILES_DATA.keys(), *PROFILE_RANGE_MENUS.keys(), *PROFILE_CHOICE_MENUS.keys()]
+
+
+PROFILE_MENU_LABELS: dict[str, str] = {
+    "CHS": "צינור עגול",
+}
+
+
+def build_cog_formulas_keyboard(
+    back_callback: str = "menu:cog_formulas_back",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("חזור", callback_data=back_callback)]]
+    )
+
+
+def build_cog_practice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("נוסחא", callback_data="menu:cog_practice_formula")],
+            [InlineKeyboardButton("פרופילים", callback_data="menu:cog_practice_profiles")],
+            [InlineKeyboardButton("חזור", callback_data="menu:cog_practice_back")],
+        ]
+    )
+
+
 def build_center_of_gravity_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("נוסחאות", callback_data="menu:cog_formulas")],
+            [InlineKeyboardButton("תרגול", callback_data="menu:cog_practice")],
+            [InlineKeyboardButton("פרופילים", callback_data="menu:cog_profiles")],
             [InlineKeyboardButton("חזור", callback_data="menu:root")],
         ]
     )
+
+
+def build_profiles_menu_text() -> str:
+    lines = ["פרופילים:"]
+    for name in profile_command_names():
+        extra = PROFILE_MENU_LABELS.get(name)
+        if extra:
+            lines.append(f"/{name} - {extra}")
+        else:
+            lines.append(f"/{name}")
+    return "\n".join(lines)
+
+
+def build_profiles_menu_keyboard(
+    back_callback: str = "menu:center_of_gravity",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("חזור", callback_data=back_callback)]]
+    )
+
+
+def build_profile_view_keyboard(
+    back_callback: str = "menu:cog_profiles_back",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("חזור", callback_data=back_callback)],
+        ]
+    )
+
+
+def build_lpn_type_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(str(data["label"]), callback_data=f"menu:cog_lpn_type:{type_id}")]
+        for type_id, data in LPN_TYPES.items()
+    ]
+    rows.append([InlineKeyboardButton("חזור", callback_data="menu:cog_profiles_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_lpn_range_keyboard(type_id: str) -> InlineKeyboardMarkup:
+    type_data = LPN_TYPES.get(type_id)
+    ranges = type_data.get("ranges") if isinstance(type_data, dict) else {}
+    if not isinstance(ranges, dict):
+        ranges = {}
+    rows = [
+        [InlineKeyboardButton(str(data["label"]), callback_data=f"menu:cog_lpn_range:{type_id}:{range_id}")]
+        for range_id, data in ranges.items()
+        if isinstance(data, dict)
+    ]
+    rows.append([InlineKeyboardButton("חזור", callback_data="menu:cog_lpn_types")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_rhs_type_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(str(data["label"]), callback_data=f"menu:cog_rhs_type:{type_id}")]
+        for type_id, data in RHS_TYPES.items()
+    ]
+    rows.append([InlineKeyboardButton("חזור", callback_data="menu:cog_profiles_back")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_start_keyboard(
@@ -1074,6 +1265,207 @@ async def _send_intro_opening(
         reply_markup=build_opening_keyboard(),
     )
 
+async def _delete_profiles_menu_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    mid = context.user_data.pop("cog_profiles_menu_msg_id", None)
+    if mid is None:
+        return
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+    except Exception:
+        pass
+
+
+async def _send_lpn_menu_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    text: str,
+    keyboard: InlineKeyboardMarkup,
+    message_to_delete_id: int | None = None,
+) -> None:
+    await _delete_profiles_menu_message(context, chat_id)
+    if message_to_delete_id is not None:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=message_to_delete_id)
+        except Exception:
+            pass
+    profile_msg_ids = context.user_data.pop("cog_profile_msg_ids", [])
+    for mid in profile_msg_ids:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=keyboard,
+    )
+    context.user_data["cog_profile_msg_ids"] = [sent.message_id]
+
+
+async def _show_lpn_type_menu(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_to_delete_id: int | None = None,
+) -> None:
+    await _send_lpn_menu_message(
+        context,
+        chat_id,
+        "בחר סוג LPN:",
+        build_lpn_type_keyboard(),
+        message_to_delete_id=message_to_delete_id,
+    )
+
+
+async def _show_lpn_range_menu(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    type_id: str,
+    message_to_delete_id: int | None = None,
+) -> None:
+    if type_id not in LPN_TYPES:
+        return
+    await _send_lpn_menu_message(
+        context,
+        chat_id,
+        "בחר איזור שאתה צריך:",
+        build_lpn_range_keyboard(type_id),
+        message_to_delete_id=message_to_delete_id,
+    )
+
+
+async def _show_rhs_type_menu(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_to_delete_id: int | None = None,
+) -> None:
+    await _send_lpn_menu_message(
+        context,
+        chat_id,
+        "בחר סוג RHS:",
+        build_rhs_type_keyboard(),
+        message_to_delete_id=message_to_delete_id,
+    )
+
+
+async def _open_named_profile(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    profile_name: str,
+    message_to_delete_id: int | None = None,
+) -> None:
+    if profile_name in PROFILE_RANGE_MENUS:
+        await _show_lpn_type_menu(
+            context,
+            chat_id,
+            message_to_delete_id=message_to_delete_id,
+        )
+        return
+    if profile_name in PROFILE_CHOICE_MENUS:
+        await _show_rhs_type_menu(
+            context,
+            chat_id,
+            message_to_delete_id=message_to_delete_id,
+        )
+        return
+    await _show_profile_view(
+        context,
+        chat_id,
+        profile_name,
+        message_to_delete_id=message_to_delete_id,
+    )
+
+
+_COG_PROFILE_SENDING_KEY = "cog_profile_sending"
+
+
+def _cog_profile_send_busy(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    ud = context.user_data
+    return bool(ud and ud.get(_COG_PROFILE_SENDING_KEY))
+
+
+def _load_profile_page_bytes(pages: list[str]) -> list[bytes]:
+    out: list[bytes] = []
+    for path_str in pages:
+        p = Path(path_str)
+        if p.is_file():
+            out.append(p.read_bytes())
+    return out
+
+
+async def _send_profile_page_photos(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    page_bytes_list: list[bytes],
+) -> list[int]:
+    if not page_bytes_list:
+        return []
+    if len(page_bytes_list) == 1:
+        sent = await context.bot.send_photo(chat_id=chat_id, photo=page_bytes_list[0])
+        return [sent.message_id]
+
+    media = [InputMediaPhoto(media=chunk) for chunk in page_bytes_list]
+    try:
+        sent_msgs = await context.bot.send_media_group(chat_id=chat_id, media=media)
+        return [m.message_id for m in sent_msgs]
+    except (TimedOut, BadRequest) as exc:
+        log.warning("Profile album send failed chat=%s: %s", chat_id, exc)
+
+    sent_ids: list[int] = []
+    for chunk in page_bytes_list:
+        try:
+            sent = await context.bot.send_photo(chat_id=chat_id, photo=chunk)
+            sent_ids.append(sent.message_id)
+        except TimedOut:
+            log.exception("Profile photo timed out chat=%s", chat_id)
+    return sent_ids
+
+
+async def _show_profile_view(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    profile_name: str,
+    message_to_delete_id: int | None = None,
+    pages: list[str] | None = None,
+    back_callback: str = "menu:cog_profiles_back",
+) -> bool:
+    ud = context.user_data
+    if ud is not None and ud.get(_COG_PROFILE_SENDING_KEY):
+        return False
+    if ud is not None:
+        ud[_COG_PROFILE_SENDING_KEY] = True
+
+    if pages is None:
+        pages = PROFILES_DATA.get(profile_name, [])
+
+    sent_msg_ids: list[int] = []
+    try:
+        page_bytes_list = await asyncio.to_thread(_load_profile_page_bytes, pages)
+        await _delete_profiles_menu_message(context, chat_id)
+        if message_to_delete_id is not None:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=message_to_delete_id)
+            except Exception:
+                pass
+
+        sent_msg_ids = await _send_profile_page_photos(context, chat_id, page_bytes_list)
+
+        kb_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"פרופיל /{profile_name}",
+            reply_markup=build_profile_view_keyboard(back_callback),
+        )
+        sent_msg_ids.append(kb_msg.message_id)
+        if ud is not None:
+            ud["cog_profile_msg_ids"] = sent_msg_ids
+        return True
+    finally:
+        if ud is not None:
+            ud.pop(_COG_PROFILE_SENDING_KEY, None)
+
+
 async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data or not query.data.startswith("menu:"):
@@ -1088,7 +1480,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "center_of_gravity":
         await query.answer()
-        text = "מערכת הלימוד של מרכז כובד כרגע בפיתוח, מוזמן לחזור ללמידה של מה שיש!"
+        text = "מרכז כובד"
         keyboard = build_center_of_gravity_keyboard()
         try:
             await query.edit_message_text(text, reply_markup=keyboard)
@@ -1098,6 +1490,328 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 text=text,
                 reply_markup=keyboard,
             )
+        return
+
+    if action == "cog_practice":
+        await query.answer()
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        from exercise_generator.center_of_gravity import (
+            generate_cog_exercise,
+            render_cog_exercise_png,
+        )
+
+        png = await asyncio.to_thread(
+            lambda: render_cog_exercise_png(generate_cog_exercise())
+        )
+        sent = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=png,
+            reply_markup=build_cog_practice_keyboard(),
+        )
+        context.user_data["cog_practice_msg_id"] = sent.message_id
+        context.user_data.pop("cog_profiles_origin", None)
+        return
+
+    if action == "cog_practice_formula":
+        await query.answer()
+        old_mid = context.user_data.pop("cog_practice_formula_msg_id", None)
+        if old_mid is not None:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=old_mid)
+            except Exception:
+                pass
+        pages = await asyncio.to_thread(
+            _load_profile_page_bytes, [str(_COG_FORMULAS_TABLE)]
+        )
+        if not pages:
+            return
+        sent = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=pages[0],
+            reply_markup=build_cog_formulas_keyboard(
+                "menu:cog_practice_formula_back"
+            ),
+        )
+        context.user_data["cog_practice_formula_msg_id"] = sent.message_id
+        if query.message:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        return
+
+    if action == "cog_practice_formula_back":
+        await query.answer()
+        mid = query.message.message_id if query.message else None
+        stored_mid = context.user_data.get("cog_practice_formula_msg_id")
+        if stored_mid == mid:
+            context.user_data.pop("cog_practice_formula_msg_id", None)
+        if mid is not None:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+        practice_mid = context.user_data.get("cog_practice_msg_id")
+        if practice_mid is not None:
+            try:
+                await context.bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=practice_mid,
+                    reply_markup=build_cog_practice_keyboard(),
+                )
+            except Exception:
+                pass
+        return
+
+    if action == "cog_practice_profiles":
+        await query.answer()
+        old_ids = list(context.user_data.pop("cog_profile_msg_ids", []))
+        old_menu_mid = context.user_data.pop("cog_profiles_menu_msg_id", None)
+        if old_menu_mid is not None:
+            old_ids.append(old_menu_mid)
+        for mid in old_ids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+        context.user_data["cog_profiles_origin"] = "practice"
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=build_profiles_menu_text(),
+            reply_markup=build_profiles_menu_keyboard(
+                "menu:cog_practice_profiles_back"
+            ),
+        )
+        context.user_data["cog_profiles_menu_msg_id"] = sent.message_id
+        if query.message:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        return
+
+    if action == "cog_practice_profiles_back":
+        await query.answer()
+        mids = list(context.user_data.pop("cog_profile_msg_ids", []))
+        menu_mid = context.user_data.pop("cog_profiles_menu_msg_id", None)
+        if menu_mid is not None:
+            mids.append(menu_mid)
+        if query.message and query.message.message_id not in mids:
+            mids.append(query.message.message_id)
+        for mid in mids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+        context.user_data.pop("cog_profiles_origin", None)
+        practice_mid = context.user_data.get("cog_practice_msg_id")
+        if practice_mid is not None:
+            try:
+                await context.bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=practice_mid,
+                    reply_markup=build_cog_practice_keyboard(),
+                )
+            except Exception:
+                pass
+        return
+
+    if action == "cog_practice_back":
+        await query.answer()
+        context.user_data.pop("cog_practice_msg_id", None)
+        context.user_data.pop("cog_profiles_origin", None)
+        helper_ids = list(context.user_data.pop("cog_profile_msg_ids", []))
+        for key in ("cog_practice_formula_msg_id", "cog_profiles_menu_msg_id"):
+            mid = context.user_data.pop(key, None)
+            if mid is not None:
+                helper_ids.append(mid)
+        for mid in helper_ids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="מרכז כובד",
+            reply_markup=build_center_of_gravity_keyboard(),
+        )
+        return
+
+    if action == "cog_formulas":
+        await query.answer()
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        pages = await asyncio.to_thread(
+            _load_profile_page_bytes, [str(_COG_FORMULAS_TABLE)]
+        )
+        if not pages:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="מרכז כובד",
+                reply_markup=build_center_of_gravity_keyboard(),
+            )
+            return
+        sent = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=pages[0],
+            reply_markup=build_cog_formulas_keyboard(),
+        )
+        context.user_data["cog_formulas_msg_ids"] = [sent.message_id]
+        return
+
+    if action == "cog_formulas_back":
+        await query.answer()
+        msg_ids = list(context.user_data.pop("cog_formulas_msg_ids", []))
+        if query.message and query.message.message_id not in msg_ids:
+            msg_ids.append(query.message.message_id)
+        for mid in msg_ids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="מרכז כובד",
+            reply_markup=build_center_of_gravity_keyboard(),
+        )
+        return
+
+    if action == "cog_profiles":
+        await query.answer()
+        context.user_data.pop("cog_profiles_origin", None)
+        text = build_profiles_menu_text()
+        keyboard = build_profiles_menu_keyboard()
+        try:
+            await query.edit_message_text(text, reply_markup=keyboard)
+            if query.message:
+                context.user_data["cog_profiles_menu_msg_id"] = query.message.message_id
+        except Exception:
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+            )
+            context.user_data["cog_profiles_menu_msg_id"] = sent.message_id
+        return
+
+    if action == "cog_profiles_back":
+        await query.answer()
+        profile_msg_ids = context.user_data.pop("cog_profile_msg_ids", [])
+        for mid in profile_msg_ids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+        text = build_profiles_menu_text()
+        back_callback = (
+            "menu:cog_practice_profiles_back"
+            if context.user_data.get("cog_profiles_origin") == "practice"
+            else "menu:center_of_gravity"
+        )
+        keyboard = build_profiles_menu_keyboard(back_callback)
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=keyboard,
+        )
+        context.user_data["cog_profiles_menu_msg_id"] = sent.message_id
+        return
+
+    if action == "cog_lpn_types":
+        await query.answer()
+        await _show_lpn_type_menu(context, chat_id)
+        return
+
+    if action.startswith("cog_lpn_type:"):
+        await query.answer()
+        type_id = action.split(":", 1)[-1]
+        mid = query.message.message_id if query.message else None
+        await _show_lpn_range_menu(
+            context,
+            chat_id,
+            type_id,
+            message_to_delete_id=mid,
+        )
+        return
+
+    if action.startswith("cog_lpn_ranges:"):
+        await query.answer()
+        type_id = action.split(":", 1)[-1]
+        await _show_lpn_range_menu(context, chat_id, type_id)
+        return
+
+    if action.startswith("cog_lpn_range:"):
+        if _cog_profile_send_busy(context):
+            await query.answer("שולח את הדפים…", show_alert=False)
+            return
+        await query.answer()
+        rest = action.split(":", 1)[-1]
+        parts = rest.split(":", 1)
+        if len(parts) != 2:
+            return
+        type_id, range_id = parts
+        type_data = LPN_TYPES.get(type_id)
+        ranges = type_data.get("ranges") if isinstance(type_data, dict) else {}
+        if not isinstance(ranges, dict):
+            return
+        range_data = ranges.get(range_id)
+        if not isinstance(range_data, dict):
+            return
+        pages = [str(p) for p in range_data.get("pages", [])]
+        mid = query.message.message_id if query.message else None
+        await _show_profile_view(
+            context,
+            chat_id,
+            "LPN",
+            message_to_delete_id=mid,
+            pages=pages,
+            back_callback=f"menu:cog_lpn_ranges:{type_id}",
+        )
+        return
+
+    if action == "cog_rhs_types":
+        await query.answer()
+        await _show_rhs_type_menu(context, chat_id)
+        return
+
+    if action.startswith("cog_rhs_type:"):
+        if _cog_profile_send_busy(context):
+            await query.answer("שולח את הדפים…", show_alert=False)
+            return
+        await query.answer()
+        type_id = action.split(":", 1)[-1]
+        type_data = RHS_TYPES.get(type_id)
+        if not isinstance(type_data, dict):
+            return
+        pages = [str(p) for p in type_data.get("pages", [])]
+        mid = query.message.message_id if query.message else None
+        await _show_profile_view(
+            context,
+            chat_id,
+            "RHS",
+            message_to_delete_id=mid,
+            pages=pages,
+            back_callback="menu:cog_rhs_types",
+        )
+        return
+
+    if action.startswith("cog_profile:"):
+        await query.answer()
+        profile_name = action.split(":", 1)[-1]
+        mid = query.message.message_id if query.message else None
+        await _open_named_profile(context, chat_id, profile_name, message_to_delete_id=mid)
         return
 
     if action == "statics":
@@ -3066,6 +3780,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if text == _START_CENTER_OF_GRAVITY_LABEL:
         return
+
+    clean_cmd = text.strip()
+    if clean_cmd.startswith("/"):
+        profile_key = clean_cmd[1:].upper()
+        for key in profile_command_names():
+            if key.upper() == profile_key:
+                user_mid = getattr(update.message, "message_id", None)
+                await _open_named_profile(context, chat_id, key, message_to_delete_id=user_mid)
+                return
 
     if text in (_PERSISTENT_BUY_LABEL, "רכישת חבילה"):
         leave_session = get_solution_session(chat_id)

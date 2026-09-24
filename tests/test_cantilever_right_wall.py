@@ -1,18 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import math
-import pytest
-
 from core.statics_calculator import (
     cantilever_bending_moment,
     cantilever_shear_force,
     solve_cantilever_beam,
 )
 from bot.vision import resolve_beam_support_geometry
-import notebook as nb
 from personal_assistant.reactions.cantilever import sigma_ma as cant_sigma_ma
-from personal_assistant.reactions.cantilever import sigma_m_tip as cant_sigma_m_tip
 
 
 def test_resolve_beam_support_geometry_left_vs_right():
@@ -71,21 +66,6 @@ def test_solve_cantilever_right_wall_distributed_load():
 
     assert abs(cantilever_bending_moment(0.0, loads, result["R_Ay"], result["M_A"], wall_pos=6.0)) < 1e-9
     assert abs(cantilever_bending_moment(6.0, loads, result["R_Ay"], result["M_A"], wall_pos=6.0) - 27.0) < 1e-9
-
-
-def test_cantilever_notebook_html_and_pdf_right_wall():
-    L = 8.0
-    loads = [
-        {"type": "point", "x": 2.0, "Fy": 5.0},
-        {"type": "distributed", "x1": 0.0, "x2": 4.0, "w": 3.0},
-    ]
-    result = solve_cantilever_beam(loads, L, wall_pos=8.0)
-    html, png_bytes, pdf_bytes = nb.build_cantilever_page_html(
-        loads, L, result, wide_layout=True
-    )
-    assert html is not None
-    assert len(png_bytes) > 0
-    assert len(pdf_bytes) > 0
 
 
 def test_personal_assistant_right_wall_sigma_ma():
