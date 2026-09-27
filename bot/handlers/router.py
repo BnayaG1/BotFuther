@@ -657,6 +657,7 @@ def build_cog_practice_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("נוסחא", callback_data="menu:cog_practice_formula")],
             [InlineKeyboardButton("פרופילים", callback_data="menu:cog_practice_profiles")],
+            [InlineKeyboardButton("פתרון", callback_data="menu:cog_practice_solution")],
             [InlineKeyboardButton("חזור", callback_data="menu:cog_practice_back")],
         ]
     )
@@ -1504,15 +1505,15 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             render_cog_exercise_png,
         )
 
-        png = await asyncio.to_thread(
-            lambda: render_cog_exercise_png(generate_cog_exercise())
-        )
+        exercise = generate_cog_exercise()
+        png = await asyncio.to_thread(render_cog_exercise_png, exercise)
         sent = await context.bot.send_photo(
             chat_id=chat_id,
             photo=png,
             reply_markup=build_cog_practice_keyboard(),
         )
         context.user_data["cog_practice_msg_id"] = sent.message_id
+        context.user_data["cog_practice_exercise"] = exercise
         context.user_data.pop("cog_profiles_origin", None)
         return
 
@@ -1620,12 +1621,70 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 pass
         return
 
+    if action == "cog_practice_solution":
+        exercise = context.user_data.get("cog_practice_exercise")
+        if exercise is None:
+            await query.answer("התרגיל לא זמין — הגרל תרגיל חדש.", show_alert=True)
+            return
+        await query.answer()
+        old_mid = context.user_data.pop("cog_practice_solution_msg_id", None)
+        if old_mid is not None:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=old_mid)
+            except Exception:
+                pass
+        from exercise_generator.center_of_gravity import render_cog_solution_png
+
+        png = await asyncio.to_thread(render_cog_solution_png, exercise)
+        sent = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=png,
+            reply_markup=build_cog_formulas_keyboard(
+                "menu:cog_practice_solution_back"
+            ),
+        )
+        context.user_data["cog_practice_solution_msg_id"] = sent.message_id
+        if query.message:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        return
+
+    if action == "cog_practice_solution_back":
+        await query.answer()
+        mid = query.message.message_id if query.message else None
+        stored_mid = context.user_data.get("cog_practice_solution_msg_id")
+        if stored_mid == mid:
+            context.user_data.pop("cog_practice_solution_msg_id", None)
+        if mid is not None:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
+        practice_mid = context.user_data.get("cog_practice_msg_id")
+        if practice_mid is not None:
+            try:
+                await context.bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=practice_mid,
+                    reply_markup=build_cog_practice_keyboard(),
+                )
+            except Exception:
+                pass
+        return
+
     if action == "cog_practice_back":
         await query.answer()
         context.user_data.pop("cog_practice_msg_id", None)
+        context.user_data.pop("cog_practice_exercise", None)
         context.user_data.pop("cog_profiles_origin", None)
         helper_ids = list(context.user_data.pop("cog_profile_msg_ids", []))
-        for key in ("cog_practice_formula_msg_id", "cog_profiles_menu_msg_id"):
+        for key in (
+            "cog_practice_formula_msg_id",
+            "cog_practice_solution_msg_id",
+            "cog_profiles_menu_msg_id",
+        ):
             mid = context.user_data.pop(key, None)
             if mid is not None:
                 helper_ids.append(mid)
