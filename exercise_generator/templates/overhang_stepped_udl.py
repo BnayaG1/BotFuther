@@ -320,8 +320,15 @@ def build_example(
         else:
             n_dist = 0
             other_kinds = ["inclined", r.choice(regular_kinds)]
+    elif load_count == 3:
+        n_total = 3
+        n_dist = 1
+        regular_kinds = [
+            kind for kind in NON_DISTRIBUTED_KINDS if kind != "inclined"
+        ]
+        other_kinds = ["inclined", r.choice(regular_kinds)]
     else:
-        raise ValueError("load_count must be 2 or None")
+        raise ValueError("load_count must be 2, 3, or None")
     kinds = shuffled_load_kinds(r, n_dist, other_kinds)
     assert len(kinds) == n_total
 

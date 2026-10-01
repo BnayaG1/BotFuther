@@ -530,6 +530,24 @@ async def _wipe_and_reset_to_main(
     )
 
 
+async def _delete_choose_topic_prompt(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    keep_message_id: int | None = None,
+) -> None:
+    """מוחק את «בחר/י נושא:» שנשלחה בלחיצת ראשי, בלי לגעת בהודעה שנלחצה."""
+    anchor = get_chat_anchor_message_id(chat_id)
+    if anchor is None:
+        return
+    if keep_message_id is not None and int(anchor) == int(keep_message_id):
+        return
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=int(anchor))
+    except Exception:
+        pass
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -1559,6 +1577,10 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "center_of_gravity":
         await query.answer()
+        clicked_mid = query.message.message_id if query.message else None
+        await _delete_choose_topic_prompt(
+            context, chat_id, keep_message_id=clicked_mid
+        )
         text = "מרכז כובד"
         keyboard = build_center_of_gravity_keyboard()
         try:
@@ -1953,6 +1975,10 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "statics":
         await query.answer()
+        clicked_mid = query.message.message_id if query.message else None
+        await _delete_choose_topic_prompt(
+            context, chat_id, keep_message_id=clicked_mid
+        )
         uid = telegram_user_id(update)
         keyboard = build_start_keyboard(user_id=uid)
         try:
@@ -2482,7 +2508,7 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
             with tempfile.TemporaryDirectory(prefix="intro_easy_exercise_") as td:
                 artifact = generate_exercise(
-                    load_count=2,
+                    load_count=3,
                     support_mode=support_mode,
                     out_dir=Path(td),
                     stem="easy",
