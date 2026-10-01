@@ -55,5 +55,20 @@ def pick_family(rng: Any, family: str | None = None) -> str:
     return LOCKED_FAMILY
 
 
-def build_family(family_id: str, *, seed: int | None = None) -> Exercise:
-    return get_builder(family_id)(seed=seed)
+def build_family(
+    family_id: str,
+    *,
+    seed: int | None = None,
+    load_count: int | None = None,
+    support_mode: str | None = None,
+) -> Exercise:
+    builder = get_builder(family_id)
+    if load_count is None and support_mode is None:
+        return builder(seed=seed)
+    if family_id != LOCKED_FAMILY:
+        raise ValueError("custom generation options require the locked exercise family")
+    return builder(
+        seed=seed,
+        load_count=load_count,
+        support_mode=support_mode,
+    )

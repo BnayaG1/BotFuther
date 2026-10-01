@@ -336,6 +336,30 @@ async def test_handle_next_advances_to_next_load():
 
 
 @pytest.mark.anyio
+async def test_handle_next_edits_single_tracked_message():
+    from bot.solution_session import append_assistant_message_id
+
+    chat_id = 880221
+    begin_image_session(chat_id, solve_mode=SolveMode.ASSISTANT)
+    runtime.start_personal_assistant(chat_id, EXTRACTED)
+    append_assistant_message_id(chat_id, 77)
+
+    context = MagicMock()
+    context.bot.delete_message = AsyncMock()
+    context.bot.edit_message_text = AsyncMock()
+    send_text = AsyncMock(return_value=MagicMock(message_id=101))
+
+    await runtime.handle_assistant_action(context, chat_id, "next", send_text=send_text)
+
+    context.bot.edit_message_text.assert_awaited_once()
+    assert context.bot.edit_message_text.await_args.kwargs["message_id"] == 77
+    assert "אלכסוני" in context.bot.edit_message_text.await_args.kwargs["text"]
+    send_text.assert_not_awaited()
+    context.bot.delete_message.assert_not_awaited()
+    runtime.clear_personal_assistant_progress(chat_id)
+
+
+@pytest.mark.anyio
 async def test_deliver_sends_opening_with_begin_button():
     chat_id = 88020
     begin_image_session(chat_id, solve_mode=SolveMode.ASSISTANT)

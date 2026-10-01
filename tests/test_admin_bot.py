@@ -34,16 +34,21 @@ def test_admin_menu_keyboard_includes_vip_option():
 
 
 def test_admin_persistent_reply_keyboard():
-    from bot.admin_bot import build_admin_persistent_reply_keyboard
+    from bot.admin_bot import (
+        ADMIN_KB_COUPONS,
+        ADMIN_KB_ENGINEER,
+        ADMIN_KB_OVERVIEW,
+        ADMIN_KB_USERS,
+        build_admin_persistent_reply_keyboard,
+    )
     kb = build_admin_persistent_reply_keyboard()
     labels = [btn.text for row in kb.keyboard for btn in row]
-    assert "למהנדס" in labels
-    assert "רשימת משתמשים" in labels
-    assert "₪39" in labels
-    assert "₪72" in labels
-    assert "₪99" in labels
-    assert "₪120" in labels
-    assert "VIP" in labels
+    assert ADMIN_KB_ENGINEER in labels
+    assert ADMIN_KB_OVERVIEW in labels
+    assert ADMIN_KB_USERS in labels
+    assert ADMIN_KB_COUPONS in labels
+    assert "₪39" not in labels
+    assert "VIP" not in labels
     assert kb.is_persistent is True
 
 
@@ -102,14 +107,33 @@ async def test_admin_gen_callback_creates_vip_code(monkeypatch):
 async def test_cmd_users_lists_first_seen(monkeypatch):
     monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))
     monkeypatch.setattr(
-        "bot.admin_bot.list_users_first_seen",
-        lambda **kwargs: [(111, 1_700_000_000.0, "john_doe"), (222, 1_700_000_060.0, None)],
+        "bot.admin_bot.list_users_page",
+        lambda **kwargs: (
+            [
+                {
+                    "user_id": 111,
+                    "username": "john_doe",
+                    "first_seen_at": 1_700_000_000.0,
+                    "last_seen_at": 1_700_000_000.0,
+                    "status": "קופון",
+                },
+                {
+                    "user_id": 222,
+                    "username": None,
+                    "first_seen_at": 1_700_000_060.0,
+                    "last_seen_at": None,
+                    "status": "בלי",
+                },
+            ],
+            2,
+        ),
     )
 
     update = MagicMock()
     update.effective_user = User(id=99, is_bot=False, first_name="Admin")
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
+    update.callback_query = None
 
     await cmd_users(update, MagicMock())
 
@@ -117,7 +141,6 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
     text = update.message.reply_text.await_args.args[0]
     assert "סה״כ: 2" in text
     assert "@john_doe" in text
-    assert "https://t.me/john_doe" in text
     assert "222" in text
 
 
@@ -125,14 +148,11 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
 async def test_cmd_user_detail_returns_user_info(monkeypatch):
     monkeypatch.setattr("bot.admin_bot.ADMIN_USER_IDS", frozenset({99}))
     monkeypatch.setattr(
-        "bot.admin_bot.get_user_info",
-        lambda uid: {
-            "user_id": uid,
-            "first_seen_at": 1_700_000_000.0,
-            "username": "super_user",
-            "active_coupon": None,
-            "bank_unlocked": True,
-        },
+        "bot.admin_bot.format_user_card_text",
+        lambda uid, **kwargs: (
+            f"<b>משתמש {uid}</b>\n"
+            f'<a href="https://t.me/super_user">@super_user</a>'
+        ),
     )
 
     update = MagicMock()
@@ -162,6 +182,7 @@ async def test_cmd_users_rejects_non_admin(monkeypatch):
     update.effective_user = User(id=1, is_bot=False, first_name="Nope")
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
+    update.callback_query = None
 
     await cmd_users(update, MagicMock())
 

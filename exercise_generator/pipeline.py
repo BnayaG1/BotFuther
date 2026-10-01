@@ -33,6 +33,8 @@ def generate_exercise(
     *,
     family: str | None = None,
     seed: int | None = None,
+    load_count: int | None = None,
+    support_mode: str | None = None,
     out_dir: Path | str | None = None,
     stem: str = "ex_0001",
 ) -> GeneratedArtifact:
@@ -41,7 +43,12 @@ def generate_exercise(
     family_id = pick_family(rng, family)
     # seed יציב ל־meta גם כשלא הועבר במפורש (לחיבור חוקי הגרלה בהמשך)
     effective_seed = seed if seed is not None else rng.randint(1, 10**9)
-    exercise = build_family(family_id, seed=effective_seed)
+    exercise = build_family(
+        family_id,
+        seed=effective_seed,
+        load_count=load_count,
+        support_mode=support_mode,
+    )
     require_valid(exercise)
 
     out = Path(out_dir) if out_dir is not None else Path("output")

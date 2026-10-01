@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""תבנית נעולה: סמכים או ריתום + 4/5 עומסים (מפורסים + מרוכז/אלכסוני/מומנט/צירי)."""
+"""תבנית נעולה: סמכים או ריתום + עומסים מפורסים/מרוכזים/אלכסוניים/מומנט/ציריים."""
 from __future__ import annotations
 
 import random
@@ -10,6 +10,7 @@ from exercise_generator.randomize import (
     INCLINED_NO_DL_RIGHT_M,
     MAX_LOADS_PER_POINT,
     MOMENT_M,
+    NON_DISTRIBUTED_KINDS,
     UDL_SPAN_MIN,
     make_rng,
     pick_load_composition,
@@ -293,10 +294,34 @@ def build_example(
     *,
     seed: int | None = None,
     rng: random.Random | None = None,
+    load_count: int | None = None,
+    support_mode: str | None = None,
 ) -> Exercise:
     r = rng if rng is not None else make_rng(seed)
-    mode, fixed_side = pick_support_configuration(r)
-    n_total, n_dist, other_kinds = pick_load_composition(r)
+    if support_mode is None:
+        mode, fixed_side = pick_support_configuration(r)
+    elif support_mode == "simply_supported":
+        mode, fixed_side = "simply_supported", None
+    elif support_mode == "cantilever":
+        mode = "cantilever"
+        fixed_side = "left"
+    else:
+        raise ValueError("support_mode must be simply_supported, cantilever, or None")
+    if load_count is None:
+        n_total, n_dist, other_kinds = pick_load_composition(r)
+    elif load_count == 2:
+        n_total = 2
+        regular_kinds = [
+            kind for kind in NON_DISTRIBUTED_KINDS if kind != "inclined"
+        ]
+        if r.random() < 0.5:
+            n_dist = 1
+            other_kinds = [r.choice(regular_kinds)]
+        else:
+            n_dist = 0
+            other_kinds = ["inclined", r.choice(regular_kinds)]
+    else:
+        raise ValueError("load_count must be 2 or None")
     kinds = shuffled_load_kinds(r, n_dist, other_kinds)
     assert len(kinds) == n_total
 

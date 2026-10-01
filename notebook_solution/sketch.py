@@ -97,6 +97,91 @@ def _text(draw: ImageDraw.ImageDraw, text: str, x: float, y: float, font: ImageF
     draw.text((x, y), text, font=font, fill=_INK, anchor="mm")
 
 
+_SIGMA = "\u03a3"
+
+
+def _cap_span(draw: ImageDraw.ImageDraw, font: ImageFont.ImageFont, y: float) -> tuple[float, float]:
+    """ראש ובסיס של אות גדולה כשהטקסט מעוגן באמצע האנכי."""
+    box = draw.textbbox((0, y), "H", font=font, anchor="lm")
+    return float(box[1]), float(box[3])
+
+
+def _sigma_advance(height: float) -> float:
+    return height * 0.92
+
+
+def _draw_sigma(
+    draw: ImageDraw.ImageDraw,
+    x: float,
+    top: float,
+    height: float,
+    fill: tuple[int, int, int],
+) -> float:
+    """סימן סכימה מצויר — שני קווים אופקיים וקודקוד שמאלי. לא גליף הפונט."""
+    width = _sigma_advance(height)
+    stroke = max(2, int(round(height / 11)))
+    right = x + width
+    mid_y = top + height / 2.0
+    bottom = top + height
+    point = x + height * 0.06
+    draw.line([(x, top), (right, top)], fill=fill, width=stroke)
+    draw.line([(right, top), (point, mid_y), (right, bottom)], fill=fill, width=stroke, joint="curve")
+    draw.line([(x, bottom), (right, bottom)], fill=fill, width=stroke)
+    return width
+
+
+def notebook_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> float:
+    """רוחב טקסט, כשכל Σ נמדד לפי הסימן המצויר ולא לפי הפונט."""
+    if _SIGMA not in text:
+        box = draw.textbbox((0, 0), text, font=font)
+        return float(box[2] - box[0])
+    top, bottom = _cap_span(draw, font, 0.0)
+    advance = _sigma_advance(bottom - top)
+    parts = text.split(_SIGMA)
+    total = advance * (len(parts) - 1)
+    for piece in parts:
+        if piece:
+            box = draw.textbbox((0, 0), piece, font=font)
+            total += float(box[2] - box[0])
+    return total
+
+
+def draw_notebook_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: tuple[int, int, int],
+    anchor: str = "lm",
+) -> None:
+    """טקסט כתב־יד. כל Σ מצויר כסימן סכימה ולא נלקח מהפונט."""
+    if _SIGMA not in text:
+        draw.text(xy, text, font=font, fill=fill, anchor=anchor)
+        return
+    x, y = xy
+    width = notebook_text_width(draw, text, font)
+    if anchor in ("mm", "rm"):
+        x -= width if anchor == "rm" else width / 2.0
+    elif anchor not in ("lm", "lt"):
+        draw.text(xy, text, font=font, fill=fill, anchor=anchor)
+        return
+    top, bottom = _cap_span(draw, font, y)
+    if anchor == "lt":
+        shift = y - top
+        top += shift
+        bottom += shift
+        y = (top + bottom) / 2.0
+    height = bottom - top
+    parts = text.split(_SIGMA)
+    for index, piece in enumerate(parts):
+        if piece:
+            draw.text((x, y), piece, font=font, fill=fill, anchor="lm")
+            box = draw.textbbox((0, 0), piece, font=font)
+            x += float(box[2] - box[0])
+        if index < len(parts) - 1:
+            x += _draw_sigma(draw, x, top, height, fill)
+
+
 def _fmt(value: float) -> str:
     mag = abs(float(value))
     if abs(mag - round(mag)) < 1e-6:

@@ -170,7 +170,10 @@ async def test_formula_back_opens_main_action_menu_without_welcome():
     query.answer = AsyncMock()
     query.message = MagicMock(spec=Message)
     query.message.chat_id = 999020
+    query.message.message_id = 20
+    query.message.photo = ()
     query.message.delete = AsyncMock()
+    query.message.edit_text = AsyncMock()
     update.callback_query = query
     update.effective_user = User(id=1020, is_bot=False, first_name="T")
 
@@ -181,13 +184,13 @@ async def test_formula_back_opens_main_action_menu_without_welcome():
     with patch.object(handlers, "telegram_user_id", return_value=1020):
         await handlers.on_formula_callback(update, context)
 
-    query.message.delete.assert_awaited_once()
-    context.bot.send_message.assert_awaited_once()
-    kwargs = context.bot.send_message.await_args.kwargs
-    assert kwargs["text"] == "בחר/י פעולה:"
-    assert isinstance(kwargs.get("reply_markup"), InlineKeyboardMarkup)
+    query.message.edit_text.assert_awaited_once()
+    assert query.message.edit_text.await_args.args[0] == "בחר/י פעולה:"
+    assert isinstance(query.message.edit_text.await_args.kwargs.get("reply_markup"), InlineKeyboardMarkup)
     welcome = handlers.build_start_welcome_text()
-    assert welcome not in kwargs["text"]
+    assert welcome not in query.message.edit_text.await_args.args[0]
+    query.message.delete.assert_not_awaited()
+    context.bot.send_message.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -205,7 +208,10 @@ async def test_formula_back_deletes_formulas_chat_messages():
     query.answer = AsyncMock()
     query.message = MagicMock(spec=Message)
     query.message.chat_id = chat_id
+    query.message.message_id = 32
+    query.message.photo = ()
     query.message.delete = AsyncMock()
+    query.message.edit_text = AsyncMock()
     update.callback_query = query
     update.effective_user = User(id=1021, is_bot=False, first_name="T")
 
@@ -220,7 +226,9 @@ async def test_formula_back_deletes_formulas_chat_messages():
         call.kwargs["message_id"]
         for call in context.bot.delete_message.await_args_list
     }
-    assert deleted == {31, 32}
+    assert deleted == {31}
+    query.message.edit_text.assert_awaited_once()
+    query.message.delete.assert_not_awaited()
     assert not solution_session.has_formulas_chat_trail(chat_id)
 
 

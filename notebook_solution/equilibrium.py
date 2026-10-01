@@ -15,6 +15,8 @@ from notebook_solution.sketch import (
     _FONT_FILES,
     _INK,
     _pen,
+    draw_notebook_text,
+    notebook_text_width,
 )
 
 _U_FORCE = "t"
@@ -24,8 +26,14 @@ _GROUP_GAP = 22
 _BODY_GAP = 18
 
 
-def draw_equilibrium(image: Image.Image, extracted: dict, solved: dict) -> float:
-    groups = _groups(extracted, solved)
+def draw_equilibrium(
+    image: Image.Image,
+    extracted: dict,
+    solved: dict,
+    *,
+    show_solution: bool = True,
+) -> float:
+    groups = _groups(extracted, solved, show_solution=show_solution)
     if not groups:
         return float(_BEAM_Y)
     draw = ImageDraw.Draw(image)
@@ -41,7 +49,12 @@ def draw_equilibrium(image: Image.Image, extracted: dict, solved: dict) -> float
     return y
 
 
-def _groups(extracted: dict, solved: dict) -> list[dict]:
+def _groups(
+    extracted: dict,
+    solved: dict,
+    *,
+    show_solution: bool = True,
+) -> list[dict]:
     del solved
     data = extracted if isinstance(extracted, dict) else {}
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
@@ -90,6 +103,7 @@ def _groups(extracted: dict, solved: dict) -> list[dict]:
         ay=ay,
         by=by,
         ma=ma,
+        show_solution=show_solution,
     )
 
 
@@ -104,8 +118,9 @@ def _build_groups(
     ay: float,
     by: float,
     ma: float,
+    show_solution: bool = True,
 ) -> list[dict]:
-    groups: list[dict] = [_fx_group(loads, ax)]
+    groups: list[dict] = [_fx_group(loads, ax, show_solution=show_solution)]
     if support_mode == "cantilever":
         wall = float(ra_pos)
         right_wall = wall > float(length) / 2.0
@@ -114,12 +129,26 @@ def _build_groups(
         if m_terms:
             parts.extend(m_terms)
         groups.append(
-            _sigma_group("ΣMA = 0:", _join_calc_terms(parts), "Ma", ma, _U_MOMENT)
+            _sigma_group(
+                "ΣMA = 0:",
+                _join_calc_terms(parts),
+                "Ma",
+                ma,
+                _U_MOMENT,
+                show_solution=show_solution,
+            )
         )
         fy_parts = ["Ay"]
         fy_parts.extend(_fy_terms(loads))
         groups.append(
-            _sigma_group("ΣFy = 0:", _join_calc_terms(fy_parts), "Ay", ay, _U_FORCE)
+            _sigma_group(
+                "ΣFy = 0:",
+                _join_calc_terms(fy_parts),
+                "Ay",
+                ay,
+                _U_FORCE,
+                show_solution=show_solution,
+            )
         )
         return groups
 
@@ -128,17 +157,41 @@ def _build_groups(
         by_term = _reaction_vertical_moment_term("By", rb_pos, ra_pos)
         if by_term:
             ma_parts.append(by_term)
-        groups.append(_sigma_group("ΣMa = 0:", _join_calc_terms(ma_parts), "By", by, _U_FORCE))
+        groups.append(
+            _sigma_group(
+                "ΣMa = 0:",
+                _join_calc_terms(ma_parts),
+                "By",
+                by,
+                _U_FORCE,
+                show_solution=show_solution,
+            )
+        )
         mb_parts = list(_m_terms_about(loads, rb_pos)) or ["0"]
         ay_term = _reaction_vertical_moment_term("Ay", ra_pos, rb_pos)
         if ay_term:
             mb_parts.append(ay_term)
-        groups.append(_sigma_group("ΣMb = 0:", _join_calc_terms(mb_parts), "Ay", ay, _U_FORCE))
-    groups.append(_fy_check_group(loads, ay, by))
+        groups.append(
+            _sigma_group(
+                "ΣMb = 0:",
+                _join_calc_terms(mb_parts),
+                "Ay",
+                ay,
+                _U_FORCE,
+                show_solution=show_solution,
+            )
+        )
+    if show_solution:
+        groups.append(_fy_check_group(loads, ay, by))
     return groups
 
 
-def _fx_group(loads: list[dict], ax: float) -> dict:
+def _fx_group(
+    loads: list[dict],
+    ax: float,
+    *,
+    show_solution: bool = True,
+) -> dict:
     axial: list[tuple[float, float]] = []
     for ld in loads:
         if ld.get("type") not in ("point", "inclined"):
@@ -148,6 +201,12 @@ def _fx_group(loads: list[dict], ax: float) -> dict:
             axial.append((float(ld.get("x", 0.0) or 0.0), fx))
     axial.sort(key=lambda p: p[0])
     if not axial:
+        if not show_solution:
+            return {
+                "header": "ΣFx = 0:",
+                "lines": ["Ax = 0"],
+                "answer": "",
+            }
         return {
             "header": "ΣFx = 0:",
             "lines": [],
@@ -157,7 +216,14 @@ def _fx_group(loads: list[dict], ax: float) -> dict:
     for _, fx in axial:
         mag = solver.format_number(abs(fx))
         parts.append(f"+ {mag}" if fx >= 0 else f"− {mag}")
-    return _sigma_group("ΣFx = 0:", _join_calc_terms(parts), "Ax", ax, _U_FORCE)
+    return _sigma_group(
+        "ΣFx = 0:",
+        _join_calc_terms(parts),
+        "Ax",
+        ax,
+        _U_FORCE,
+        show_solution=show_solution,
+    )
 
 
 def _fy_terms(loads: list[dict]) -> list[str]:
@@ -215,9 +281,23 @@ def _fy_check_group(loads: list[dict], ay: float, by: float | None) -> dict:
     }
 
 
-def _sigma_group(header: str, eq: str, name: str, value: float, unit: str) -> dict:
+def _sigma_group(
+    header: str,
+    eq: str,
+    name: str,
+    value: float,
+    unit: str,
+    *,
+    show_solution: bool = True,
+) -> dict:
     answer = f"{name} = {solver.format_number(value)} {unit}".strip()
     eq_clean = str(eq).strip()
+    if not show_solution:
+        return {
+            "header": header,
+            "lines": [f"{eq_clean} = 0"],
+            "answer": "",
+        }
     if eq_clean == answer or eq_clean == f"{name} = {solver.format_number(value)}":
         return {"header": header, "lines": [], "answer": answer}
     lines = [f"{eq_clean} = 0"]
@@ -309,9 +389,9 @@ def _draw_group(
 ) -> float:
     font = fonts["text"]
     header = group["header"]
-    header_w = _text_w(draw, header, font)
+    header_w = notebook_text_width(draw, header, font)
     body_x = x + header_w + _BODY_GAP
-    draw.text((x, y), header, font=font, fill=_INK, anchor="lm")
+    draw_notebook_text(draw, (x, y), header, font, _INK, "lm")
     lines = list(group["lines"])
     if lines:
         draw.text((body_x, y), lines[0], font=font, fill=_INK, anchor="lm")

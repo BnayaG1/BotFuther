@@ -66,6 +66,64 @@ def render_notebook_png_temp(extracted: dict, solved: dict) -> Path | None:
     return path
 
 
+def render_notebook_exercise_png_temp(
+    extracted: dict,
+    *,
+    cropped: bool = False,
+    with_decomposition: bool = False,
+    with_equations: bool = False,
+    with_reactions: bool = False,
+    with_normal_diagram: bool = False,
+    with_shear_diagram: bool = False,
+    with_moment_diagram: bool = False,
+) -> Path | None:
+    """PNG זמני של שרטוט תרגיל במראה המחברת."""
+    try:
+        from notebook_solution.render import (
+            render_exercise_crop_png_bytes,
+            render_exercise_decomposition_png_bytes,
+            render_exercise_equations_png_bytes,
+            render_exercise_moment_diagram_png_bytes,
+            render_exercise_normal_diagram_png_bytes,
+            render_exercise_png_bytes,
+            render_exercise_reactions_png_bytes,
+            render_exercise_shear_diagram_png_bytes,
+        )
+
+        if with_moment_diagram:
+            render = render_exercise_moment_diagram_png_bytes
+        elif with_shear_diagram:
+            render = render_exercise_shear_diagram_png_bytes
+        elif with_normal_diagram:
+            render = render_exercise_normal_diagram_png_bytes
+        elif with_reactions:
+            render = render_exercise_reactions_png_bytes
+        elif with_equations:
+            render = render_exercise_equations_png_bytes
+        elif with_decomposition:
+            render = render_exercise_decomposition_png_bytes
+        elif cropped:
+            render = render_exercise_crop_png_bytes
+        else:
+            render = render_exercise_png_bytes
+        png_bytes = render(_prepare_extracted_for_render(extracted))
+    except Exception as exc:
+        log.warning("Notebook exercise render failed: %s", exc)
+        return None
+    if not png_bytes:
+        return None
+    fd, name = tempfile.mkstemp(suffix="_notebook_exercise.png")
+    os.close(fd)
+    path = Path(name)
+    try:
+        path.write_bytes(png_bytes)
+    except OSError as exc:
+        log.warning("Notebook exercise temp write failed: %s", exc)
+        path.unlink(missing_ok=True)
+        return None
+    return path
+
+
 def render_exercise_problem_png_bytes(extracted: dict) -> bytes | None:
     """PNG של שרטוט התרגיל בלבד (קורה + עומסים) — בלי ריאקציות/דיאגרמות.
 

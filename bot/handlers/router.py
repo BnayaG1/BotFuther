@@ -51,6 +51,7 @@ from bot.access import (
     is_user_first_seen,
     looks_like_coupon_code,
     quota_status_for_user,
+    RedeemStatus,
     redeem_coupon,
     redeem_reply_hebrew,
 )
@@ -81,13 +82,18 @@ from bot.formulas import (
 try:
     from intro import (
         build_how_to_approach_keyboard,
+        build_how_to_solve_keyboard,
+        build_how_to_solve_step_keyboard,
+        build_intro_foundations_keyboard,
         build_inclined_load_keyboard,
         build_mavo_continue_keyboard,
         build_opening_keyboard,
         generate_fixed_mavo_exercise_png,
+        generate_foundations_visual,
         generate_mavo_exercise_png,
         how_to_approach_message_hebrew,
         how_to_approach_second_message_hebrew,
+        intro_foundations_page_hebrew,
         intro_topic_body_hebrew,
         mavo_followup_message_hebrew,
         opening_message_hebrew,
@@ -99,13 +105,18 @@ except Exception as exc:
     log.warning("Failed to import intro module (INTRO_AVAILABLE=False): %s", exc)
     INTRO_AVAILABLE = False
     build_how_to_approach_keyboard = None  # type: ignore[assignment]
+    build_how_to_solve_keyboard = None  # type: ignore[assignment]
+    build_how_to_solve_step_keyboard = None  # type: ignore[assignment]
+    build_intro_foundations_keyboard = None  # type: ignore[assignment]
     build_inclined_load_keyboard = None  # type: ignore[assignment]
     build_mavo_continue_keyboard = None  # type: ignore[assignment]
     build_opening_keyboard = None  # type: ignore[assignment]
     generate_fixed_mavo_exercise_png = None  # type: ignore[assignment]
+    generate_foundations_visual = None  # type: ignore[assignment]
     generate_mavo_exercise_png = None  # type: ignore[assignment]
     how_to_approach_message_hebrew = None  # type: ignore[assignment]
     how_to_approach_second_message_hebrew = None  # type: ignore[assignment]
+    intro_foundations_page_hebrew = None  # type: ignore[assignment]
     intro_topic_body_hebrew = None  # type: ignore[assignment]
     mavo_followup_message_hebrew = None  # type: ignore[assignment]
     opening_message_hebrew = None  # type: ignore[assignment]
@@ -136,7 +147,10 @@ from bot.draft_preview import (
     send_draft_preview,
     wipe_draft_conversation,
 )
-from bot.notebook_render import render_notebook_png_temp
+from bot.notebook_render import (
+    render_notebook_exercise_png_temp,
+    render_notebook_png_temp,
+)
 from bot.gemini_chat import friendly_gemini_error
 from bot.solve_mode import (
     build_bank_solve_mode_keyboard,
@@ -317,6 +331,27 @@ def telegram_user_id(update: Update) -> int:
             pass
     return 0
 
+
+def _track_usage(update: Update, action: str | None = None) -> None:
+    uid = telegram_user_id(update)
+    if uid <= 0:
+        return
+    from bot.admin_usage import record_usage, touch_usage
+
+    if action:
+        record_usage(uid, action)
+    else:
+        touch_usage(uid)
+
+
+_USAGE_MENU_ACTIONS: dict[str, str] = {
+    "main": "main",
+    "intro": "intro",
+    "formulas": "formulas",
+    "give_exercise": "practice",
+    "new": "solve",
+    "center_of_gravity": "cog",
+}
 
 
 async def _reply_text_safe(
@@ -802,6 +837,7 @@ async def sync_chat_ui_to_current_version(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """אחרי דיפלוי — בהודעה הראשונה מרענן מקלדת/תפריט כדי לא להישאר על גרסה ישנה."""
+    _track_usage(update)
     notice_msg_id = context.chat_data.pop(_CHAT_UI_VERSION_NOTICE_MSG_ID_KEY, None)
     if notice_msg_id and update.effective_chat:
         try:
@@ -844,7 +880,7 @@ async def sync_chat_ui_to_current_version(
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """מעבר למערכת ניהול אדמין."""
+    """מעבר למערכת ניהול אדמין — רק המקלדת התחתונה, בלי הודעה בצ'אט."""
     if not update.message and not update.callback_query:
         return
     uid = telegram_user_id(update)
@@ -854,33 +890,18 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         elif update.message:
             await update.message.reply_text("גישה נדחתה.")
         return
-    from bot.admin_bot import build_admin_menu_keyboard, build_admin_persistent_reply_keyboard
-    chat_id = telegram_chat_id(update)
+    from bot.admin_bot import build_admin_persistent_reply_keyboard
+
+    keyboard = build_admin_persistent_reply_keyboard()
+    # טלגרם מחליף מקלדת רק דרך הודעה. בטלפון מחיקת ההודעה סוגרת את התפריט,
+    # לכן ההודעה נשארת — בלי טקסט קריא.
     if update.message:
-        await update.message.reply_text(
-            "🛠 <b>מערכת ניהול אדמין</b>\n\n"
-            "בחר חבילה ליצירת קוד קופון:",
-            reply_markup=build_admin_menu_keyboard(),
-            parse_mode="HTML",
-        )
-        await update.message.reply_text(
-            "מקלדת ניהול פעילה בתחתית המסך. לחץ על «למהנדס» בכל שלב כדי לחזור לתפריט הראשי.",
-            reply_markup=build_admin_persistent_reply_keyboard(),
-        )
+        await update.message.reply_text("\u2060", reply_markup=keyboard)
     else:
         await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "🛠 <b>מערכת ניהול אדמין</b>\n\n"
-                "בחר חבילה ליצירת קוד קופון:"
-            ),
-            reply_markup=build_admin_menu_keyboard(),
-            parse_mode="HTML",
-        )
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="מקלדת ניהול פעילה בתחתית המסך. לחץ על «למהנדס» בכל שלב כדי לחזור לתפריט הראשי.",
-            reply_markup=build_admin_persistent_reply_keyboard(),
+            chat_id=telegram_chat_id(update),
+            text="\u2060",
+            reply_markup=keyboard,
         )
 
 
@@ -1078,12 +1099,41 @@ async def _send_formulas_menu(
                 chat_id=chat_id, text=text, reply_markup=keyboard
             )
     if sent is None and edit_message is not None:
-        append_formulas_chat_message_id(
-            chat_id, getattr(edit_message, "message_id", None)
+        try:
+            await edit_message.delete()
+        except Exception:
+            pass
+        sent = await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=keyboard,
         )
-    else:
-        append_formulas_chat_message_id(chat_id, getattr(sent, "message_id", None))
+    append_formulas_chat_message_id(
+        chat_id,
+        _safe_message_id(sent) or _safe_message_id(edit_message),
+    )
 
+
+
+def _message_has_photo(message) -> bool:
+    if message is None:
+        return False
+    photo = getattr(message, "photo", None)
+    return isinstance(photo, (tuple, list)) and len(photo) > 0
+
+
+def _safe_message_id(message) -> int | None:
+    if message is None:
+        return None
+    try:
+        mid = int(getattr(message, "message_id", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return mid if mid > 0 else None
+
+
+def _is_not_modified_error(exc: BaseException) -> bool:
+    return "not modified" in str(exc).lower()
 
 
 async def _delete_callback_message(query) -> None:
@@ -1116,13 +1166,18 @@ async def _remove_callback_keyboard(query) -> None:
 async def cleanup_formulas_chat(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
+    *,
+    keep_message_id: int | None = None,
 ) -> None:
     """מוחק מהצ'אט את כל הודעות הנוסחאות של הסשן הנוכחי."""
     ids = pop_formulas_chat_message_ids(chat_id)
+    keep = int(keep_message_id) if keep_message_id else None
     seen: set[int] = set()
     for mid in ids:
         mid_i = int(mid)
         if mid_i <= 0 or mid_i in seen:
+            continue
+        if keep is not None and mid_i == keep:
             continue
         seen.add(mid_i)
         try:
@@ -1238,11 +1293,18 @@ async def _send_main_action_menu(
     *,
     user_id: int | None = None,
     message=None,
+    edit_message=None,
 ) -> None:
     """תפריט ראשי בלבד — «בחר/י פעולה:» + כפתורים, בלי הודעת פתיחה."""
     uid = user_id if user_id is not None else chat_id
     keyboard = build_start_keyboard(user_id=uid)
     text = "בחר/י פעולה:"
+    if edit_message is not None:
+        try:
+            await edit_message.edit_text(text, reply_markup=keyboard)
+            return
+        except Exception:
+            pass
     if message is not None:
         await _reply_text_safe(message, text, reply_markup=keyboard)
         return
@@ -1256,14 +1318,27 @@ async def _send_main_action_menu(
 async def _send_intro_opening(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
+    *,
+    edit_message=None,
 ) -> None:
     """שולח את הודעת הפתיחה של מבוא לסטטיקה + כפתור המשך."""
     if not INTRO_AVAILABLE:
         return
+    text = opening_message_hebrew()
+    keyboard = build_opening_keyboard()
+    if edit_message is not None:
+        try:
+            await edit_message.edit_text(text, reply_markup=keyboard)
+            return
+        except Exception:
+            try:
+                await edit_message.delete()
+            except Exception:
+                pass
     await context.bot.send_message(
         chat_id=chat_id,
-        text=opening_message_hebrew(),
-        reply_markup=build_opening_keyboard(),
+        text=text,
+        reply_markup=keyboard,
     )
 
 async def _delete_profiles_menu_message(
@@ -1473,6 +1548,9 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     action = query.data.split(":", 1)[-1]
     chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+    usage_action = _USAGE_MENU_ACTIONS.get(action)
+    if usage_action:
+        _track_usage(update, usage_action)
 
     if action == "admin":
         await _delete_callback_message(query)
@@ -1932,22 +2010,33 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "formulas":
         await query.answer()
-        await _delete_callback_message(query)
         # כניסה מחדש — מנקים סשן נוסחאות קודם אם נשאר בצ'אט.
         await cleanup_formulas_chat(context, chat_id)
-        await _send_formulas_menu(
-            context,
-            chat_id,
-            user_id=telegram_user_id(update),
-        )
+        if _message_has_photo(query.message):
+            await _delete_callback_message(query)
+            await _send_formulas_menu(
+                context,
+                chat_id,
+                user_id=telegram_user_id(update),
+            )
+        else:
+            await _send_formulas_menu(
+                context,
+                chat_id,
+                user_id=telegram_user_id(update),
+                edit_message=query.message,
+            )
         return
     if action == "intro":
         if not INTRO_AVAILABLE:
             await query.answer("המבוא בפיתוח ולא זמין כאן כרגע.", show_alert=True)
             return
         await query.answer()
-        await _delete_callback_message(query)
-        await _send_intro_opening(context, chat_id)
+        if _message_has_photo(query.message):
+            await _delete_callback_message(query)
+            await _send_intro_opening(context, chat_id)
+        else:
+            await _send_intro_opening(context, chat_id, edit_message=query.message)
         return
     if action == "give_exercise":
         await query.answer()
@@ -2038,6 +2127,304 @@ async def on_assistant_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+_HOW_TO_SOLVE_TYPE_TEXT = "איזה סוג תרגיל אתה רוצה?"
+_HOW_TO_SOLVE_COPY_TEXT = (
+    "עכשיו כשיש לנו תרגיל, מה שנעשה זה פשוט להעתיק אותו, כל אחד והדרך שלו למחברת בצורה הבאה:"
+)
+_HOW_TO_SOLVE_DECOMPOSITION_TEXT = (
+    "עכשיו אחרי ששרטטנו מסודר את התרגיל למעלה בצד, נפתח עומסים מפורסים ואלכסוניים כדי שיהיה לנו קל יותר בהמשך התרגיל."
+)
+_HOW_TO_SOLVE_DECOMPOSED_TEXT = (
+    "עכשיו הכל מוכן בשביל שנתחיל באמת לפתור את התרגיל.\n"
+    "בשלב הזה אנחנו נשתמש במשוואות שיווי המשקל שהמטרה שלהם זה למצוא את הריאקציות. תוכל לראות את המשוואות עכשיו לפני שמוצאים בהם את הנעלמים, רק משוואות שהצבנו בהם את הנתונים.\n"
+    "לאחר מכן נפתח את המשוואות ונמצא את הריאקציות."
+)
+_HOW_TO_SOLVE_EQUATIONS_TEXT = "ועכשיו נפתח את המשוואות ונמצא את הריאקציות."
+_HOW_TO_SOLVE_REACTIONS_TEXT = (
+    "זהו, מצאנו את הריאקציות.\n"
+    "השלב הבא יהיה לסרטט את הגרפים בהתאם למה שהיה לנו עד עכשיו בתרגיל."
+)
+_HOW_TO_SOLVE_NX_INTRO_TEXT = (
+    "הגרף הראשון נקרא Nx, ונכניס לתוכו רק ואת כל הכוחות שמשפיעים על הקורה בצורה אופקית - כוחות שהולכים לצד ימין ושמאל.\n"
+    "זה ייראה ככה:"
+)
+_HOW_TO_SOLVE_NX_NOTE_TEXT = (
+    "שים לב, בגרף הזה כשאנחנו מתייחסים רק לכוחות אופקיים, צריך להקפיד על הדברים הבאים:\n"
+    "כשכח הולך ימינה, הוא נכנס למשוואה כפלוס, וכשנסרטט אותו על הגרף הוא יעלה - ולהפך!"
+)
+_HOW_TO_SOLVE_QX_INTRO_TEXT = (
+    "סיימנו עם Nx, ועכשיו נעבור לQx.\n"
+    "הסרטוט שלו למחברת יראה ככה:"
+)
+_HOW_TO_SOLVE_QX_NOTE_TEXT = (
+    "מראש צריך לדעת שאם יש לנו מומנטים בתרגיל הם לא נכנסים לגרף הזה (נשמור אותם לגרף הבא).\n"
+    "נעבור מהחלק השמאלי של הקורה, ונכניס לגרף לפי איך שצריך את כל הכוחות שפועלים בצורה אנכית - למעלה ולמטה - גם ריאקציות וגם עומסים."
+)
+_HOW_TO_SOLVE_FOLLOWUP_TEXT = {
+    "copy": _HOW_TO_SOLVE_COPY_TEXT,
+    "decomposition": _HOW_TO_SOLVE_DECOMPOSITION_TEXT,
+    "decomposed": _HOW_TO_SOLVE_DECOMPOSED_TEXT,
+    "equations": _HOW_TO_SOLVE_EQUATIONS_TEXT,
+    "reactions": _HOW_TO_SOLVE_REACTIONS_TEXT,
+    "normal_diagram": _HOW_TO_SOLVE_NX_NOTE_TEXT,
+    "shear_diagram": _HOW_TO_SOLVE_QX_NOTE_TEXT,
+}
+_HOW_TO_SOLVE_PREV_STAGE = {
+    "copy": None,
+    "decomposition": "copy",
+    "decomposed": "decomposition",
+    "equations": "decomposed",
+    "reactions": "equations",
+    "normal_diagram": "reactions",
+    "shear_diagram": "normal_diagram",
+    "complete": "shear_diagram",
+}
+_HOW_TO_SOLVE_NEXT_STAGE = {
+    "copy": "decomposition",
+    "decomposition": "decomposed",
+    "decomposed": "equations",
+    "equations": "reactions",
+    "reactions": "normal_diagram",
+    "normal_diagram": "shear_diagram",
+    "shear_diagram": "complete",
+}
+_HOW_TO_SOLVE_STATE_KEYS = (
+    "how_to_solve_extracted",
+    "how_to_solve_stage",
+    "how_to_solve_notebook_message_id",
+    "how_to_solve_intro_message_id",
+    "how_to_solve_initial_message_id",
+)
+
+
+def _clear_how_to_solve_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for key in _HOW_TO_SOLVE_STATE_KEYS:
+        context.chat_data.pop(key, None)
+
+
+def _how_to_solve_render_kwargs(continue_from: str) -> dict:
+    return {
+        "with_decomposition": continue_from in (
+            "decomposition",
+            "decomposed",
+            "equations",
+            "reactions",
+            "normal_diagram",
+            "shear_diagram",
+        ),
+        "with_equations": continue_from == "decomposed",
+        "with_reactions": continue_from == "equations",
+        "with_normal_diagram": continue_from == "reactions",
+        "with_shear_diagram": continue_from == "normal_diagram",
+        "with_moment_diagram": continue_from == "shear_diagram",
+    }
+
+
+async def _delete_how_to_solve_message(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: object,
+) -> None:
+    if message_id is None:
+        return
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=int(message_id))
+    except Exception:
+        pass
+
+
+async def _edit_how_to_solve_text(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: object,
+    text: str,
+    reply_markup: object | None = None,
+) -> bool:
+    if message_id is None:
+        return False
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=int(message_id),
+            text=text,
+            reply_markup=reply_markup,
+        )
+        return True
+    except Exception as exc:
+        if _is_not_modified_error(exc):
+            return True
+        log.debug("how-to-solve edit text failed: %s", exc)
+        return False
+
+
+async def _edit_how_to_solve_photo(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: object,
+    png_path: Path,
+    reply_markup: object | None = None,
+) -> bool:
+    if message_id is None:
+        return False
+    try:
+        await context.bot.edit_message_media(
+            chat_id=chat_id,
+            message_id=int(message_id),
+            media=InputMediaPhoto(media=png_path.read_bytes()),
+            reply_markup=reply_markup,
+        )
+        return True
+    except Exception as exc:
+        if _is_not_modified_error(exc):
+            return True
+        log.debug("how-to-solve edit photo failed: %s", exc)
+        return False
+
+
+async def _present_foundations_page(
+    context: ContextTypes.DEFAULT_TYPE,
+    query,
+    chat_id: int,
+    foundations_page_id: str,
+    foundations_text: str,
+    keyboard,
+) -> None:
+    """מציג כרטיס מבוא: עריכה באותו סוג הודעה, אחרת מחיקה ושליחה."""
+    visual_path = None
+    temp_dir = None
+    try:
+        if generate_foundations_visual is not None:
+            temp_dir = tempfile.TemporaryDirectory(prefix="intro_foundations_")
+            visual_path = generate_foundations_visual(
+                foundations_page_id, Path(temp_dir.name)
+            )
+
+        current_is_photo = _message_has_photo(query.message)
+        want_photo = visual_path is not None
+        message_id = _safe_message_id(query.message)
+
+        if want_photo and current_is_photo and message_id is not None:
+            try:
+                await context.bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    media=InputMediaPhoto(
+                        media=visual_path.read_bytes(),
+                        caption=foundations_text,
+                    ),
+                    reply_markup=keyboard,
+                )
+                _track_sent_message(chat_id, query.message)
+                return
+            except BadRequest as exc:
+                if _is_not_modified_error(exc):
+                    _track_sent_message(chat_id, query.message)
+                    return
+                log.debug("foundations edit photo failed: %s", exc)
+            except Exception as exc:
+                log.debug("foundations edit photo failed: %s", exc)
+        elif not want_photo and not current_is_photo and query.message is not None:
+            try:
+                await query.message.edit_text(
+                    foundations_text, reply_markup=keyboard
+                )
+                _track_sent_message(chat_id, query.message)
+                return
+            except BadRequest as exc:
+                if _is_not_modified_error(exc):
+                    _track_sent_message(chat_id, query.message)
+                    return
+                log.debug("foundations edit text failed: %s", exc)
+            except Exception as exc:
+                log.debug("foundations edit text failed: %s", exc)
+
+        await _delete_callback_message(query)
+        if want_photo:
+            with visual_path.open("rb") as photo:
+                sent_message = await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=foundations_text,
+                    reply_markup=keyboard,
+                )
+        else:
+            sent_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text=foundations_text,
+                reply_markup=keyboard,
+            )
+        _track_sent_message(chat_id, sent_message)
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
+
+
+async def _send_how_to_solve_photo(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    png_path: Path,
+    reply_markup: object | None = None,
+) -> int:
+    with png_path.open("rb") as photo:
+        sent = await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            reply_markup=reply_markup,
+        )
+    _track_sent_message(chat_id, sent)
+    return int(getattr(sent, "message_id", 0))
+
+
+async def _send_how_to_solve_text(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    text: str,
+    reply_markup: object | None = None,
+) -> int:
+    sent = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+    _track_sent_message(chat_id, sent)
+    return int(getattr(sent, "message_id", 0))
+
+
+async def _replace_how_to_solve_photo(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    png_path: Path,
+    reply_markup: object | None = None,
+) -> int:
+    photo_id = context.chat_data.get("how_to_solve_notebook_message_id")
+    if await _edit_how_to_solve_photo(context, chat_id, photo_id, png_path, reply_markup):
+        return int(photo_id)
+    await _delete_how_to_solve_message(context, chat_id, photo_id)
+    new_id = await _send_how_to_solve_photo(context, chat_id, png_path, reply_markup)
+    context.chat_data["how_to_solve_notebook_message_id"] = new_id
+    return new_id
+
+
+async def _replace_how_to_solve_followup(
+    context: ContextTypes.DEFAULT_TYPE,
+    query,
+    chat_id: int,
+    text: str,
+    reply_markup: object | None = None,
+) -> int | None:
+    message_id = getattr(getattr(query, "message", None), "message_id", None)
+    if await _edit_how_to_solve_text(
+        context,
+        chat_id,
+        message_id,
+        text,
+        reply_markup,
+    ):
+        return int(message_id)
+    await _delete_callback_message(query)
+    return await _send_how_to_solve_text(context, chat_id, text, reply_markup)
+
+
 async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -2064,38 +2451,116 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await query.answer()
 
-
-    if topic_id == "how_to_approach":
+    if topic_id == "how_to_solve_placeholder":
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-        await _delete_callback_message(query)
-
+        _clear_how_to_solve_state(context)
         await cleanup_practice_chat(context, chat_id)
         await _leave_formulas_chat_if_needed(context, chat_id)
         begin_practice_chat_trail(chat_id)
+        await _replace_how_to_solve_followup(
+            context,
+            query,
+            chat_id,
+            _HOW_TO_SOLVE_TYPE_TEXT,
+            build_how_to_solve_keyboard(),
+        )
+        return
 
-        first_text = how_to_approach_message_hebrew() if how_to_approach_message_hebrew is not None else ""
-        if first_text:
-            kb1 = build_mavo_continue_keyboard() if build_mavo_continue_keyboard is not None else None
-            sent_msg1 = await context.bot.send_message(
-                chat_id=chat_id,
-                text=first_text,
-                reply_markup=kb1,
-            )
-            _track_sent_message(chat_id, sent_msg1)
+    if topic_id in ("how_to_solve_supports", "how_to_solve_fixed"):
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        await _delete_callback_message(query)
+        await cleanup_practice_chat(context, chat_id)
+        await _leave_formulas_chat_if_needed(context, chat_id)
+        begin_practice_chat_trail(chat_id)
+        support_mode = (
+            "simply_supported"
+            if topic_id == "how_to_solve_supports"
+            else "cantilever"
+        )
+        try:
+            from exercise_generator.pipeline import generate_exercise
 
-        second_text = how_to_approach_second_message_hebrew() if how_to_approach_second_message_hebrew is not None else ""
-        if second_text:
-            kb2 = build_how_to_approach_keyboard() if build_how_to_approach_keyboard is not None else None
-            sent_msg2 = await context.bot.send_message(
-                chat_id=chat_id,
-                text=second_text,
-                reply_markup=kb2,
+            with tempfile.TemporaryDirectory(prefix="intro_easy_exercise_") as td:
+                artifact = generate_exercise(
+                    load_count=2,
+                    support_mode=support_mode,
+                    out_dir=Path(td),
+                    stem="easy",
+                )
+                context.chat_data["how_to_solve_extracted"] = copy.deepcopy(
+                    artifact.extracted
+                )
+                context.chat_data["how_to_solve_stage"] = "copy"
+                context.chat_data.pop("how_to_solve_notebook_message_id", None)
+                context.chat_data.pop("how_to_solve_intro_message_id", None)
+                context.chat_data.pop("how_to_solve_initial_message_id", None)
+                initial_path = render_notebook_exercise_png_temp(
+                    artifact.extracted,
+                    cropped=True,
+                )
+                if initial_path is None:
+                    raise RuntimeError("initial notebook exercise render returned no image")
+                try:
+                    with initial_path.open("rb") as photo:
+                        sent_photo = await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=photo,
+                        )
+                finally:
+                    initial_path.unlink(missing_ok=True)
+            _track_sent_message(chat_id, sent_photo)
+            context.chat_data["how_to_solve_initial_message_id"] = int(
+                getattr(sent_photo, "message_id", 0)
             )
-            _track_sent_message(chat_id, sent_msg2)
+            sent_followup = await context.bot.send_message(
+                chat_id=chat_id,
+                text="עכשיו כשיש לנו תרגיל, מה שנעשה זה פשוט להעתיק אותו, כל אחד והדרך שלו למחברת בצורה הבאה:",
+                reply_markup=build_how_to_solve_step_keyboard(),
+            )
+            _track_sent_message(chat_id, sent_followup)
+        except Exception as exc:
+            log.exception("Failed to generate easy intro exercise chat=%s: %s", chat_id, exc)
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text="לא הצלחתי להכין תרגיל כרגע. נסה/י שוב בעוד רגע.",
+                reply_markup=build_how_to_solve_keyboard(),
+            )
+            _track_sent_message(chat_id, sent)
+        return
+
+
+    foundations_page_id = "foundations_start" if topic_id == "how_to_approach" else topic_id
+    foundations_text = (
+        intro_foundations_page_hebrew(foundations_page_id)
+        if intro_foundations_page_hebrew is not None
+        else None
+    )
+    if foundations_text is not None:
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+
+        if topic_id == "how_to_approach":
+            await cleanup_practice_chat(context, chat_id)
+            await _leave_formulas_chat_if_needed(context, chat_id)
+            begin_practice_chat_trail(chat_id)
+
+        keyboard = (
+            build_intro_foundations_keyboard(foundations_page_id)
+            if build_intro_foundations_keyboard is not None
+            else None
+        )
+        await _present_foundations_page(
+            context,
+            query,
+            chat_id,
+            foundations_page_id,
+            foundations_text,
+            keyboard,
+        )
         return
 
     if topic_id in ("support_exercises", "fixed_support_exercises"):
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        _clear_how_to_solve_state(context)
         await _delete_callback_message(query)
         await cleanup_practice_chat(context, chat_id)
         begin_practice_chat_trail(chat_id)
@@ -2127,7 +2592,229 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             _track_sent_message(chat_id, sent_followup)
         return
 
+    if topic_id == "how_to_solve_back":
+        extracted = context.chat_data.get("how_to_solve_extracted")
+        stage = context.chat_data.get("how_to_solve_stage")
+        if not isinstance(extracted, dict) or not isinstance(stage, str):
+            return
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        notebook_path = None
+        try:
+            if stage == "copy":
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.get("how_to_solve_initial_message_id"),
+                )
+                _clear_how_to_solve_state(context)
+                await _replace_how_to_solve_followup(
+                    context,
+                    query,
+                    chat_id,
+                    _HOW_TO_SOLVE_TYPE_TEXT,
+                    build_how_to_solve_keyboard(),
+                )
+                return
+
+            previous_stage = _HOW_TO_SOLVE_PREV_STAGE.get(stage)
+            if previous_stage is None:
+                return
+
+            if previous_stage == "copy":
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_notebook_message_id", None),
+                )
+                context.chat_data["how_to_solve_stage"] = "copy"
+                await _replace_how_to_solve_followup(
+                    context,
+                    query,
+                    chat_id,
+                    _HOW_TO_SOLVE_COPY_TEXT,
+                    build_how_to_solve_step_keyboard(),
+                )
+                return
+
+            render_from = _HOW_TO_SOLVE_PREV_STAGE.get(previous_stage)
+            if render_from is None:
+                return
+            notebook_path = render_notebook_exercise_png_temp(
+                extracted,
+                **_how_to_solve_render_kwargs(render_from),
+            )
+            if notebook_path is None:
+                raise RuntimeError("previous notebook stage render returned no image")
+
+            if stage == "complete":
+                await _delete_callback_message(query)
+                context.chat_data.pop("how_to_solve_notebook_message_id", None)
+                intro_id = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_QX_INTRO_TEXT,
+                )
+                context.chat_data["how_to_solve_intro_message_id"] = intro_id
+                photo_id = await _send_how_to_solve_photo(
+                    context,
+                    chat_id,
+                    notebook_path,
+                )
+                context.chat_data["how_to_solve_notebook_message_id"] = photo_id
+                await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_QX_NOTE_TEXT,
+                    build_how_to_solve_step_keyboard(),
+                )
+                context.chat_data["how_to_solve_stage"] = previous_stage
+                return
+
+            if previous_stage == "reactions":
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_intro_message_id", None),
+                )
+            elif previous_stage == "normal_diagram":
+                await _edit_how_to_solve_text(
+                    context,
+                    chat_id,
+                    context.chat_data.get("how_to_solve_intro_message_id"),
+                    _HOW_TO_SOLVE_NX_INTRO_TEXT,
+                )
+
+            await _replace_how_to_solve_photo(context, chat_id, notebook_path)
+            await _replace_how_to_solve_followup(
+                context,
+                query,
+                chat_id,
+                _HOW_TO_SOLVE_FOLLOWUP_TEXT[previous_stage],
+                build_how_to_solve_step_keyboard(),
+            )
+            context.chat_data["how_to_solve_stage"] = previous_stage
+        except Exception as exc:
+            log.exception("Failed to restore notebook stage chat=%s: %s", chat_id, exc)
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text="לא הצלחתי לחזור לשלב הקודם כרגע. נסה/י שוב בעוד רגע.",
+            )
+            _track_sent_message(chat_id, sent)
+        finally:
+            if notebook_path is not None:
+                notebook_path.unlink(missing_ok=True)
+        return
+
     if topic_id == "mavo_continue":
+        extracted = context.chat_data.get("how_to_solve_extracted")
+        if not isinstance(extracted, dict):
+            return
+        stage = context.chat_data.get("how_to_solve_stage", "copy")
+        if stage not in (
+            "copy",
+            "decomposition",
+            "decomposed",
+            "equations",
+            "reactions",
+            "normal_diagram",
+            "shear_diagram",
+        ):
+            return
+        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
+        notebook_path = None
+        try:
+            notebook_path = render_notebook_exercise_png_temp(
+                extracted,
+                **_how_to_solve_render_kwargs(stage),
+            )
+            if notebook_path is None:
+                raise RuntimeError("notebook exercise render returned no image")
+            next_stage = _HOW_TO_SOLVE_NEXT_STAGE[stage]
+            step_kb = build_how_to_solve_step_keyboard()
+
+            if stage == "copy":
+                await _delete_callback_message(query)
+                photo_id = await _send_how_to_solve_photo(
+                    context,
+                    chat_id,
+                    notebook_path,
+                )
+                context.chat_data["how_to_solve_notebook_message_id"] = photo_id
+                await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_FOLLOWUP_TEXT[next_stage],
+                    step_kb,
+                )
+            elif stage in ("decomposition", "decomposed", "equations"):
+                await _replace_how_to_solve_photo(context, chat_id, notebook_path)
+                await _replace_how_to_solve_followup(
+                    context,
+                    query,
+                    chat_id,
+                    _HOW_TO_SOLVE_FOLLOWUP_TEXT[next_stage],
+                    step_kb,
+                )
+            elif stage == "reactions":
+                intro_id = await _replace_how_to_solve_followup(
+                    context,
+                    query,
+                    chat_id,
+                    _HOW_TO_SOLVE_NX_INTRO_TEXT,
+                )
+                if intro_id:
+                    context.chat_data["how_to_solve_intro_message_id"] = intro_id
+                photo_id = await _replace_how_to_solve_photo(
+                    context,
+                    chat_id,
+                    notebook_path,
+                )
+                context.chat_data["how_to_solve_notebook_message_id"] = photo_id
+                await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_FOLLOWUP_TEXT[next_stage],
+                    step_kb,
+                )
+            elif stage == "normal_diagram":
+                await _edit_how_to_solve_text(
+                    context,
+                    chat_id,
+                    context.chat_data.get("how_to_solve_intro_message_id"),
+                    _HOW_TO_SOLVE_QX_INTRO_TEXT,
+                )
+                await _replace_how_to_solve_photo(context, chat_id, notebook_path)
+                await _replace_how_to_solve_followup(
+                    context,
+                    query,
+                    chat_id,
+                    _HOW_TO_SOLVE_FOLLOWUP_TEXT[next_stage],
+                    step_kb,
+                )
+            else:
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_intro_message_id", None),
+                )
+                await _delete_callback_message(query)
+                await _replace_how_to_solve_photo(
+                    context,
+                    chat_id,
+                    notebook_path,
+                    step_kb,
+                )
+            context.chat_data["how_to_solve_stage"] = next_stage
+        except Exception as exc:
+            log.exception("Failed to send notebook exercise chat=%s: %s", chat_id, exc)
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text="לא הצלחתי להכין את שרטוט המחברת כרגע. נסה/י שוב בעוד רגע.",
+            )
+            _track_sent_message(chat_id, sent)
+        finally:
+            if notebook_path is not None:
+                notebook_path.unlink(missing_ok=True)
         return
 
     if topic_id == "distributed_load":
@@ -2592,6 +3279,7 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     reply_markup=build_opening_keyboard(),
                 )
             except BadRequest:
+                await _delete_callback_message(query)
                 chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
                 await context.bot.send_message(
                     chat_id=chat_id,
@@ -2630,19 +3318,37 @@ async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if action in ("menu",):
         await query.answer()
-        await _delete_callback_message(query)
-        await _send_formulas_menu(
-            context,
-            chat_id,
-            user_id=user_id,
-        )
+        if _message_has_photo(query.message):
+            await _delete_callback_message(query)
+            await _send_formulas_menu(
+                context,
+                chat_id,
+                user_id=user_id,
+            )
+        else:
+            await _send_formulas_menu(
+                context,
+                chat_id,
+                user_id=user_id,
+                edit_message=query.message,
+            )
         return
 
     if action == "back":
         await query.answer()
-        await _delete_callback_message(query)
-        await cleanup_formulas_chat(context, chat_id)
-        await _send_main_action_menu(context, chat_id)
+        keep_id = (
+            None
+            if _message_has_photo(query.message)
+            else _safe_message_id(query.message)
+        )
+        await cleanup_formulas_chat(context, chat_id, keep_message_id=keep_id)
+        if keep_id is not None:
+            await _send_main_action_menu(
+                context, chat_id, user_id=user_id, edit_message=query.message
+            )
+        else:
+            await _delete_callback_message(query)
+            await _send_main_action_menu(context, chat_id, user_id=user_id)
         return
 
     if action == "topic":
@@ -2721,6 +3427,7 @@ async def cmd_formulas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """פקודת /formulas — תפריט נוסחאות (מופיע גם בתפריט הפקודות של טלגרם)."""
     if not update.message:
         return
+    _track_usage(update, "formulas")
     chat_id = telegram_chat_id(update)
     await cleanup_formulas_chat(context, chat_id)
     await _send_formulas_menu(
@@ -3539,6 +4246,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     chat_id = telegram_chat_id(update)
     text = update.message.text.strip()
+    usage_action = {
+        _PERSISTENT_MAIN_LABEL: "main",
+        _START_INTRO_LABEL: "intro",
+        _PERSISTENT_FORMULAS_LABEL: "formulas",
+        _PERSISTENT_BUY_LABEL: "buy",
+        "רכישת חבילה": "buy",
+    }.get(text)
+    if usage_action:
+        _track_usage(update, usage_action)
 
     chat_data = getattr(context, "chat_data", None)
     active_inclined = chat_data.get("inclined_practice_active") if isinstance(chat_data, dict) else None
@@ -3759,9 +4475,24 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if is_admin_user(telegram_user_id(update)):
-        if text in ("רשימת משתמשים", "משתמשים") or ("משתמשים" in text and len(text) < 20):
-            from bot.admin_bot import cmd_users
+        from bot.admin_bot import (
+            ADMIN_KB_COUPONS,
+            ADMIN_KB_OVERVIEW,
+            ADMIN_KB_USERS,
+            cmd_coupons,
+            cmd_overview,
+            cmd_users,
+        )
+        if text == ADMIN_KB_OVERVIEW:
+            await cmd_overview(update, context)
+            return
+        if text in (ADMIN_KB_USERS, "רשימת משתמשים") or (
+            "משתמשים" in text and len(text) < 20
+        ):
             await cmd_users(update, context)
+            return
+        if text == ADMIN_KB_COUPONS:
+            await cmd_coupons(update, context)
             return
 
         pending_pkg_id = context.user_data.get("admin_awaiting_custom_qty")
@@ -3909,6 +4640,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         sent = await _forward_bug_report_via_admin_bot(
             report, fallback_bot=context.bot
         )
+        _track_usage(update, "bug")
         kb_done = InlineKeyboardMarkup([
             [InlineKeyboardButton("ראשי", callback_data="menu:main")],
         ])
@@ -4013,6 +4745,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if in_coupon_prompt:
                 _coupon_prompt_chats.discard(chat_id)
             result = redeem_coupon(text, telegram_user_id(update))
+            if result.status == RedeemStatus.OK:
+                _track_usage(update, "coupon")
             await _reply_text_safe(
                 update.message,
                 redeem_reply_hebrew(result),
@@ -4120,6 +4854,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not is_bank_submission:
         user_id = telegram_user_id(update)
+        _track_usage(update, "solve")
         access = check_solve_access(user_id)
         if access.status != ImageAccessStatus.OK:
             log.info(
@@ -4260,6 +4995,7 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if action == "menu":
+        _track_usage(update, "buy")
         await query.answer()
         await _delete_callback_message(query)
         await _send_purchase_menu(context, chat_id)

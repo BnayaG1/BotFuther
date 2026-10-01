@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from io import BytesIO
 
+from telegram import InputMediaPhoto
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -108,18 +109,48 @@ async def send_draft_preview(
     return True
 
 
+async def _edit_draft_photo(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+    png: bytes,
+    keyboard,
+) -> bool:
+    try:
+        await context.bot.edit_message_media(
+            chat_id=chat_id,
+            message_id=int(message_id),
+            media=InputMediaPhoto(media=png),
+            reply_markup=keyboard,
+        )
+        return True
+    except BadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return True
+        log.debug("Draft photo edit failed chat=%s mid=%s: %s", chat_id, message_id, exc)
+        return False
+    except Exception as exc:
+        log.debug("Draft photo edit failed chat=%s mid=%s: %s", chat_id, message_id, exc)
+        return False
+
+
 async def replace_draft_preview_photo(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     extracted: dict,
 ) -> tuple[bool, str | None]:
-    """מוחק שרטוט קודם ושולח חדש. מחזיר (ok, error_he)."""
+    """מעדכן שרטוט במקום; אם העריכה נכשלת — שולח חדש ומוחק את הישן."""
     png = render_exercise_problem_png_bytes(extracted)
     if not png:
         return False, "לא הצלחתי לרנדר את השרטוט אחרי העדכון."
 
     old_photo_id = get_draft_photo_message_id(chat_id)
     keyboard = build_draft_keyboard(extracted)
+    if old_photo_id is not None and await _edit_draft_photo(
+        context, chat_id, old_photo_id, png, keyboard
+    ):
+        return True, None
+
     try:
         bio = BytesIO(png)
         bio.name = "draft_preview.png"
@@ -146,7 +177,7 @@ async def refresh_draft_after_correction(
     *,
     user_message_id: int | None = None,
 ) -> tuple[bool, str | None]:
-    """אחרי תיקון: מוחק הודעת משתמש + תמונת טיוטה ישנה, שולח שרטוט מעודכן עם כפתורים."""
+    """אחרי תיקון: מעדכן שרטוט במקום ומוחק הודעת משתמש + הודעת הסבר ישנה."""
     old_photo_id = get_draft_photo_message_id(chat_id)
     old_ref = get_draft_message_ref(chat_id)
     old_instruct_id = old_ref[1] if old_ref else None
@@ -156,32 +187,42 @@ async def refresh_draft_after_correction(
         return False, "לא הצלחתי לרנדר את השרטוט אחרי העדכון."
 
     keyboard = build_draft_keyboard(extracted)
-    try:
-        bio = BytesIO(png)
-        bio.name = "draft_preview.png"
-        sent = await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=bio,
-            reply_markup=keyboard,
-        )
-    except Exception as exc:
-        log.warning("Draft fixed text send failed chat=%s: %s", chat_id, exc)
-        return False, "השרטוט עודכן, אבל שליחתו נכשלה."
+    sent_id = None
+    if old_photo_id is not None and await _edit_draft_photo(
+        context, chat_id, old_photo_id, png, keyboard
+    ):
+        sent_id = old_photo_id
+    else:
+        try:
+            bio = BytesIO(png)
+            bio.name = "draft_preview.png"
+            sent = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=bio,
+                reply_markup=keyboard,
+            )
+        except Exception as exc:
+            log.warning("Draft fixed text send failed chat=%s: %s", chat_id, exc)
+            return False, "השרטוט עודכן, אבל שליחתו נכשלה."
+        sent_id = sent.message_id
 
     set_draft_pending(
         chat_id,
         extracted,
         "",
-        message_id=sent.message_id,
-        photo_message_id=sent.message_id,
+        message_id=sent_id,
+        photo_message_id=sent_id,
         clear_edit=True,
     )
 
-    # מחיקות אחרי שליחה מוצלחת — כדי שלא נישאר בלי טיוטה אם משהו נכשל באמצע
     await _delete_message_silent(context, chat_id, user_message_id)
-    if old_photo_id is not None and old_photo_id != sent.message_id:
+    if old_photo_id is not None and old_photo_id != sent_id:
         await _delete_message_silent(context, chat_id, old_photo_id)
-    if old_instruct_id is not None and old_instruct_id != sent.message_id and old_instruct_id != old_photo_id:
+    if (
+        old_instruct_id is not None
+        and old_instruct_id != sent_id
+        and old_instruct_id != old_photo_id
+    ):
         await _delete_message_silent(context, chat_id, old_instruct_id)
     return True, None
 

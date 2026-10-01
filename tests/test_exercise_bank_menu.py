@@ -141,7 +141,10 @@ async def test_leaving_to_formulas_deletes_practice_chat_messages():
     query.answer = AsyncMock()
     query.message = MagicMock(spec=Message)
     query.message.chat_id = chat_id
+    query.message.message_id = 88
+    query.message.photo = ()
     query.message.delete = AsyncMock()
+    query.message.edit_text = AsyncMock(return_value=MagicMock(message_id=88))
     update.callback_query = query
     update.effective_user = User(id=901, is_bot=False, first_name="T")
 

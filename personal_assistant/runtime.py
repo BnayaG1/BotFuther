@@ -382,20 +382,69 @@ async def _send_with_keyboard(
         pass
 
 
+async def _edit_or_send_assistant_text(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    text: str,
+    *,
+    send_text: SendTextFn,
+    reply_markup: InlineKeyboardMarkup,
+    prefer_edit: bool,
+) -> None:
+    ids = pop_assistant_message_ids(chat_id)
+    if prefer_edit and len(ids) == 1:
+        mid = int(ids[0])
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=mid,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            append_assistant_message_id(chat_id, mid)
+            return
+        except BadRequest as exc:
+            if "not modified" in str(exc).lower():
+                append_assistant_message_id(chat_id, mid)
+                return
+            log.debug("assistant edit text failed: %s", exc)
+        except Exception as exc:
+            log.debug("assistant edit text failed: %s", exc)
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+    else:
+        for mid in ids:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=int(mid))
+            except Exception:
+                pass
+    await _send_with_keyboard(
+        context,
+        chat_id,
+        text,
+        send_text=send_text,
+        reply_markup=reply_markup,
+    )
+
+
 async def _send_progress_screen(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     progress: AssistantProgress,
     *,
     send_text: SendTextFn,
+    prefer_edit: bool = False,
 ) -> None:
     text = screen_text_for_progress(progress)
-    await _send_with_keyboard(
+    await _edit_or_send_assistant_text(
         context,
         chat_id,
         text,
         send_text=send_text,
         reply_markup=keyboard_for_progress(progress),
+        prefer_edit=prefer_edit,
     )
 
 
@@ -405,7 +454,6 @@ async def _send_finish_screen(
     *,
     send_text: SendTextFn,
 ) -> None:
-    await _delete_tracked_messages(context, chat_id)
     finish_kb = InlineKeyboardMarkup(
         [
             [
@@ -416,12 +464,13 @@ async def _send_finish_screen(
             [InlineKeyboardButton("ראשי", callback_data="menu:main")],
         ]
     )
-    await _send_with_keyboard(
+    await _edit_or_send_assistant_text(
         context,
         chat_id,
         "אוקי נראה שסיימת את התרגיל. רוצה לקבל את הפתרון המלא לתרגיל הזה?",
         send_text=send_text,
         reply_markup=finish_kb,
+        prefer_edit=True,
     )
 
 
@@ -479,9 +528,10 @@ async def handle_assistant_action(
                 "אין הודעה קודמת לחזור אליה.",
             )
             return
-        await _delete_tracked_messages(context, chat_id)
         set_personal_assistant_progress(chat_id, restored)
-        await _send_progress_screen(context, chat_id, restored, send_text=send_text)
+        await _send_progress_screen(
+            context, chat_id, restored, send_text=send_text, prefer_edit=True
+        )
         return
 
     if action == _ASSISTANT_TO_REACTIONS:
@@ -560,9 +610,10 @@ async def handle_assistant_action(
             )
             return
         _push_personal_assistant_history(chat_id, progress)
-        await _delete_tracked_messages(context, chat_id)
         set_personal_assistant_progress(chat_id, jumped)
-        await _send_progress_screen(context, chat_id, jumped, send_text=send_text)
+        await _send_progress_screen(
+            context, chat_id, jumped, send_text=send_text, prefer_edit=True
+        )
         return
 
     if action != _ASSISTANT_NEXT:
@@ -586,7 +637,6 @@ async def handle_assistant_action(
         or progress.equation in (ReactionEquation.STABILITY_FY, ReactionEquation.DONE)
     )
     _push_personal_assistant_history(chat_id, progress)
-    await _delete_tracked_messages(context, chat_id)
     progress = advance_on_next(progress)
     if was_at_last_reaction and isinstance(progress, ReactionProgress):
         progress.equation = ReactionEquation.DONE
@@ -596,7 +646,9 @@ async def handle_assistant_action(
     ):
         await _send_finish_screen(context, chat_id, send_text=send_text)
         return
-    await _send_progress_screen(context, chat_id, progress, send_text=send_text)
+    await _send_progress_screen(
+        context, chat_id, progress, send_text=send_text, prefer_edit=True
+    )
 
 
 async def deliver_assistant_after_approve(

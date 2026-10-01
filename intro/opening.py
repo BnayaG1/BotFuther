@@ -36,6 +36,7 @@ _HOW_TO_APPROACH_SECOND_TEXT = (
 )
 
 _INTRO_MAIN_BUTTONS = [
+    ("how_to_solve_placeholder", "איך פותרים תרגיל"),
     ("how_to_approach", "מבוא"),
     ("distributed_load", "עומס מפורס"),
     ("inclined_load", "עומס אלכסוני"),
@@ -44,6 +45,49 @@ _INTRO_MAIN_BUTTONS = [
 _HOW_TO_APPROACH_BUTTONS = [
     ("fixed_support_exercises", "ריתום"),
     ("support_exercises", "סמכים"),
+]
+
+_FOUNDATIONS_PAGES = {
+    "foundations_start": (
+        "מבוא לסטטיקה\n"
+        "\n"
+        "ארבעה צעדים קצרים. רק מה שצריך כדי להתחיל לפתור."
+    ),
+    "foundations_index": (
+        "תוכן העניינים\n"
+        "\n"
+        "מומלץ לעבור לפי הסדר. כל חלק מתמקד במה שצריך לדעת למבחן."
+    ),
+    "foundations_concept": (
+        "1 מתוך 4\n"
+        "ברוב התרגילים המטרה היא למצוא את הריאקציות של הסמכים."
+    ),
+    "foundations_loads": (
+        "2 מתוך 4\n"
+        "לפני המשוואות: מזהים סמכים, מפרקים כוח אלכסוני וממירים עומס מפורס."
+    ),
+    "foundations_equilibrium": (
+        "3 מתוך 4\n"
+        "מתחילים בדרך כלל במומנטים סביב סמך, ואז משלימים את משוואות הכוחות."
+    ),
+    "foundations_workflow": (
+        "4 מתוך 4\n"
+        "שרטוט, הכנת העומסים, פתרון במומנטים ובדיקה בעזרת סכום הכוחות."
+    ),
+    "foundations_summary": (
+        "סיימת את המבוא לסטטיקה\n"
+        "\n"
+        "זה כל הבסיס: שרטוט נכון, הכנת עומסים ושלוש משוואות שיווי משקל.\n"
+        "עכשיו עוברים לתרגול."
+    ),
+}
+
+_FOUNDATIONS_ORDER = [
+    "foundations_concept",
+    "foundations_loads",
+    "foundations_equilibrium",
+    "foundations_workflow",
+    "foundations_summary",
 ]
 
 _INTRO_TOPIC_BODIES: dict[str, Callable[[], str]] = {
@@ -74,6 +118,21 @@ def build_opening_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def build_how_to_solve_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("2 סמכים", callback_data="intro:how_to_solve_supports")],
+        [InlineKeyboardButton("ריתום", callback_data="intro:how_to_solve_fixed")],
+        [InlineKeyboardButton("חזור", callback_data="intro:main")],
+    ])
+
+
+def build_how_to_solve_step_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("המשך", callback_data="intro:mavo_continue")],
+        [InlineKeyboardButton("חזור", callback_data="intro:how_to_solve_back")],
+    ])
+
+
 def build_how_to_approach_keyboard() -> InlineKeyboardMarkup:
     row = [
         InlineKeyboardButton(title, callback_data=f"intro:{topic_id}")
@@ -85,6 +144,50 @@ def build_how_to_approach_keyboard() -> InlineKeyboardMarkup:
 def build_mavo_continue_keyboard() -> InlineKeyboardMarkup:
     row = [InlineKeyboardButton("המשך", callback_data="intro:mavo_continue")]
     return InlineKeyboardMarkup([row])
+
+
+def intro_foundations_page_hebrew(page_id: str) -> str | None:
+    return _FOUNDATIONS_PAGES.get(page_id)
+
+
+def build_intro_foundations_keyboard(page_id: str) -> InlineKeyboardMarkup:
+    if page_id == "foundations_start":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("מתחילים", callback_data="intro:foundations_concept")],
+            [InlineKeyboardButton("תוכן העניינים", callback_data="intro:foundations_index")],
+            [InlineKeyboardButton("חזרה ללימוד בסיס", callback_data="intro:main")],
+        ])
+
+    if page_id == "foundations_index":
+        rows = [
+            [InlineKeyboardButton("מה מחפשים בתרגיל?", callback_data="intro:foundations_concept")],
+            [InlineKeyboardButton("עומסים וסמכים", callback_data="intro:foundations_loads")],
+            [InlineKeyboardButton("שיווי משקל ומומנטים", callback_data="intro:foundations_equilibrium")],
+            [InlineKeyboardButton("סדר עבודה במבחן", callback_data="intro:foundations_workflow")],
+            [InlineKeyboardButton("חזרה", callback_data="intro:foundations_start")],
+        ]
+        return InlineKeyboardMarkup(rows)
+
+    if page_id == "foundations_summary":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("חזרה ללימוד בסיס", callback_data="intro:main")],
+            [InlineKeyboardButton("לעבור שוב על המבוא", callback_data="intro:foundations_start")],
+        ])
+
+    if page_id in _FOUNDATIONS_ORDER:
+        index = _FOUNDATIONS_ORDER.index(page_id)
+        rows = []
+        if index < len(_FOUNDATIONS_ORDER) - 1:
+            rows.append([InlineKeyboardButton("המשך", callback_data=f"intro:{_FOUNDATIONS_ORDER[index + 1]}")])
+        rows.append([
+            InlineKeyboardButton("הקודם", callback_data=f"intro:{_FOUNDATIONS_ORDER[index - 1] if index > 0 else 'foundations_start'}"),
+            InlineKeyboardButton("תוכן", callback_data="intro:foundations_index"),
+        ])
+        return InlineKeyboardMarkup(rows)
+
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("חזרה למבוא", callback_data="intro:foundations_start")]
+    ])
 
 
 def mavo_followup_message_hebrew(exercise_type: str = "סמכים") -> str:
@@ -114,6 +217,10 @@ def parse_intro_callback(data: str) -> str | None:
     topic_id = data.split(":", 1)[-1]
     valid_ids = {
         "how_to_approach",
+        "how_to_solve_placeholder",
+        "how_to_solve_supports",
+        "how_to_solve_fixed",
+        "how_to_solve_back",
         "main",
         "mavo_continue",
         "practice_inclined",
@@ -123,6 +230,8 @@ def parse_intro_callback(data: str) -> str | None:
         "inclined_show_solution",
         "distributed_try_again",
         "distributed_show_solution",
+        "foundations_index",
+        *_FOUNDATIONS_PAGES.keys(),
         *_INTRO_TOPIC_BODIES.keys(),
     }
     if topic_id in valid_ids:

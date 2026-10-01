@@ -129,6 +129,33 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             redeemed_at REAL,
             expires_at REAL
         );
+        CREATE TABLE IF NOT EXISTS admin_usage_event (
+            user_id INTEGER NOT NULL,
+            ts REAL NOT NULL,
+            action TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_usage_event_ts
+            ON admin_usage_event (ts);
+        CREATE INDEX IF NOT EXISTS idx_admin_usage_event_user_ts
+            ON admin_usage_event (user_id, ts);
+        CREATE INDEX IF NOT EXISTS idx_admin_usage_event_action_ts
+            ON admin_usage_event (action, ts);
+        CREATE TABLE IF NOT EXISTS admin_user_session (
+            user_id INTEGER PRIMARY KEY,
+            session_started_at REAL NOT NULL,
+            last_seen_at REAL NOT NULL,
+            total_session_sec REAL NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS admin_closed_session (
+            user_id INTEGER NOT NULL,
+            started_at REAL NOT NULL,
+            ended_at REAL NOT NULL,
+            duration_sec REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_closed_session_ended
+            ON admin_closed_session (ended_at);
+        CREATE INDEX IF NOT EXISTS idx_admin_closed_session_started
+            ON admin_closed_session (started_at);
         """
     )
     try:

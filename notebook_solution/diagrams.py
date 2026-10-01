@@ -27,6 +27,8 @@ def draw_diagrams(
     solved: dict,
     problem: Problem,
     eq_bottom: float = 0.0,
+    *,
+    include_details: bool = True,
 ) -> None:
     del solved
     data = _curves(extracted)
@@ -47,7 +49,54 @@ def draw_diagrams(
     _panel(draw, xs, normals, axis_n, _GREEN, "N(x)", "t", fonts, down=False, half=half)
     _panel(draw, xs, shears, axis_q, _BLUE, "Q(x)", "t", fonts, down=False, half=half)
     _panel(draw, xs, moments, axis_m, _RED, "M(x)", "tm", fonts, down=True, half=half)
-    _draw_point_details(draw, xs, normals, shears, moments, problem, fonts, top, eq_bottom)
+    if include_details:
+        _draw_point_details(draw, xs, normals, shears, moments, problem, fonts, top, eq_bottom)
+
+
+def draw_normal_diagram(
+    image: Image.Image,
+    extracted: dict,
+    problem: Problem,
+) -> None:
+    """מצייר רק את דיאגרמת N(x), במיקום שלה בפתרון המלא."""
+    data = _curves(extracted)
+    if data is None:
+        return
+    xs, normals, _shears, _moments = data
+    draw = ImageDraw.Draw(image)
+    fonts = _fonts()
+    dim_rows = 2 if len(problem.stations) > 2 else 1
+    _, page_h = page_pixel_size()
+    top = _BEAM_Y + 112 + dim_rows * 46 + _CELL_PX * 4
+    bottom = page_h - _CELL_PX * 3
+    block = max(160.0, (bottom - top) / 3.0)
+    half = block * 0.42
+    axis_n = top + block * 0.5
+    _panel(draw, xs, normals, axis_n, _GREEN, "N(x)", "t", fonts, down=False, half=half)
+
+
+def draw_normal_shear_diagrams(
+    image: Image.Image,
+    extracted: dict,
+    problem: Problem,
+) -> None:
+    """מצייר את דיאגרמות N(x) ו־Q(x) במיקומן בפתרון המלא."""
+    data = _curves(extracted)
+    if data is None:
+        return
+    xs, normals, shears, _moments = data
+    draw = ImageDraw.Draw(image)
+    fonts = _fonts()
+    dim_rows = 2 if len(problem.stations) > 2 else 1
+    _, page_h = page_pixel_size()
+    top = _BEAM_Y + 112 + dim_rows * 46 + _CELL_PX * 4
+    bottom = page_h - _CELL_PX * 3
+    block = max(160.0, (bottom - top) / 3.0)
+    half = block * 0.42
+    axis_n = top + block * 0.5
+    axis_q = top + block * 1.5
+    _panel(draw, xs, normals, axis_n, _GREEN, "N(x)", "t", fonts, down=False, half=half)
+    _panel(draw, xs, shears, axis_q, _BLUE, "Q(x)", "t", fonts, down=False, half=half)
 
 
 def _curves(extracted: dict) -> tuple[list[float], list[float], list[float], list[float]] | None:

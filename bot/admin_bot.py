@@ -1,28 +1,37 @@
 # -*- coding: utf-8 -*-
-"""בוט אדמין — ניהול ויצירת קודי קופון למורשים בלבד."""
+"""בוט אדמין — בקרה, שימוש, משתמשים ויצירת קופונים."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     ReplyKeyboardMarkup,
     Update,
 )
 from telegram.ext import ContextTypes
 
-from bot.access import get_user_info, init_access_db, list_users_first_seen
-from bot.config import ADMIN_USER_IDS, get_admin_user_ids, is_admin_user
+from bot.admin_usage import (
+    USERS_PAGE_SIZE,
+    format_overview_text,
+    format_user_card_text,
+    format_users_page_text,
+    list_users_page,
+)
+from bot.config import ADMIN_USER_IDS, get_admin_user_ids
 from bot.generate_coupons import generate_coupon_codes
-from bot.purchase import ADMIN_PACKAGE_CATALOG, PACKAGE_CATALOG, PackageOption, get_package
+from bot.purchase import ADMIN_PACKAGE_CATALOG, get_package
 
 
 log = logging.getLogger("beam_admin")
 
 _UNAUTHORIZED_TEXT = "גישה נדחתה."
+
+ADMIN_KB_ENGINEER = "למהנדס"
+ADMIN_KB_OVERVIEW = "סקירה"
+ADMIN_KB_USERS = "משתמשים"
+ADMIN_KB_COUPONS = "קופונים"
 
 
 def _is_admin(update: Update) -> bool:
@@ -35,18 +44,10 @@ def _is_admin(update: Update) -> bool:
     return int(user.id) in admin_ids
 
 
-
-
-
-
-
-
 def build_admin_persistent_reply_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
-        ["למהנדס", "רשימת משתמשים"],
-        [pkg.label_admin_keyboard() for pkg in ADMIN_PACKAGE_CATALOG[:2]],
-        [pkg.label_admin_keyboard() for pkg in ADMIN_PACKAGE_CATALOG[2:4]],
-        [ADMIN_PACKAGE_CATALOG[4].label_admin_keyboard()],
+        [ADMIN_KB_ENGINEER, ADMIN_KB_OVERVIEW],
+        [ADMIN_KB_USERS, ADMIN_KB_COUPONS],
     ]
     return ReplyKeyboardMarkup(
         buttons,
@@ -63,7 +64,6 @@ def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
         )
         for pkg in ADMIN_PACKAGE_CATALOG
     ]
-    # 2 כפתורים בשורה
     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
     return InlineKeyboardMarkup(rows)
 
@@ -84,6 +84,70 @@ def build_quantity_keyboard(package_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def build_users_page_keyboard(items: list[dict], total: int, offset: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        uid = int(item["user_id"])
+        uname = item.get("username")
+        label = f"@{uname}" if uname else str(uid)
+        if len(label) > 28:
+            label = label[:27] + "…"
+        rows.append(
+            [InlineKeyboardButton(label, callback_data=f"admin:user:{uid}:{offset}")]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if offset > 0:
+        prev_off = max(0, offset - USERS_PAGE_SIZE)
+        nav.append(InlineKeyboardButton("הקודם", callback_data=f"admin:users:{prev_off}"))
+    if offset + len(items) < total:
+        next_off = offset + USERS_PAGE_SIZE
+        nav.append(InlineKeyboardButton("הבא", callback_data=f"admin:users:{next_off}"))
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(rows)
+
+
+def build_user_card_keyboard(offset: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("חזרה לרשימה", callback_data=f"admin:users:{max(0, int(offset))}")]]
+    )
+
+
+async def _admin_show(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    reply_markup=None,
+) -> None:
+    query = update.callback_query
+    if query and query.message:
+        try:
+            await query.message.edit_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            return
+        except Exception:
+            pass
+        try:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            return
+        except Exception:
+            pass
+    if update.message:
+        await update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -91,15 +155,83 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(_UNAUTHORIZED_TEXT)
         return
     await update.message.reply_text(
-        "בוט אדמין ליצירת קופונים.\n"
+        "\u2060",
+        reply_markup=build_admin_persistent_reply_keyboard(),
+    )
+
+
+async def cmd_overview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update):
+        if update.callback_query:
+            await update.callback_query.answer(_UNAUTHORIZED_TEXT, show_alert=True)
+        elif update.message:
+            await update.message.reply_text(_UNAUTHORIZED_TEXT)
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    await _admin_show(update, context, format_overview_text())
+
+
+async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update):
+        if update.callback_query:
+            await update.callback_query.answer(_UNAUTHORIZED_TEXT, show_alert=True)
+        elif update.message:
+            await update.message.reply_text(_UNAUTHORIZED_TEXT)
+        return
+    offset = 0
+    query = update.callback_query
+    if query and query.data and query.data.startswith("admin:users:"):
+        try:
+            offset = max(0, int(query.data.split(":")[2]))
+        except (IndexError, ValueError):
+            offset = 0
+    items, total = list_users_page(offset=offset, limit=USERS_PAGE_SIZE)
+    if query:
+        await query.answer()
+    await _admin_show(
+        update,
+        context,
+        format_users_page_text(items, total, offset),
+        build_users_page_keyboard(items, total, offset) if items else None,
+    )
+
+
+async def cmd_coupons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _is_admin(update):
+        await update.message.reply_text(_UNAUTHORIZED_TEXT)
+        return
+    await update.message.reply_text(
         "בחר חבילה ליצירת קוד קופון:",
         reply_markup=build_admin_menu_keyboard(),
     )
-    # שליחת/רענון המקלדת הקבועה בתחתית המסך
-    await update.message.reply_text(
-        "מקלדת ניהול פעילה בתחתית המסך.",
-        reply_markup=build_admin_persistent_reply_keyboard(),
-    )
+
+
+async def cmd_user_card(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    offset: int = 0,
+) -> None:
+    if not _is_admin(update):
+        if update.callback_query:
+            await update.callback_query.answer(_UNAUTHORIZED_TEXT, show_alert=True)
+        return
+    text = format_user_card_text(int(user_id))
+    if text is None:
+        if update.callback_query:
+            await update.callback_query.answer("משתמש לא נמצא.", show_alert=True)
+        elif update.message:
+            await update.message.reply_text(
+                f"משתמש <code>{user_id}</code> לא נמצא במערכת.",
+                parse_mode="HTML",
+            )
+        return
+    if update.callback_query:
+        await update.callback_query.answer()
+    await _admin_show(update, context, text, build_user_card_keyboard(offset))
 
 
 async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -110,11 +242,16 @@ async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     text = update.message.text.strip()
-    if "משתמשים" in text or "רשימ" in text:
+    if text == ADMIN_KB_OVERVIEW:
+        await cmd_overview(update, context)
+        return
+    if text in (ADMIN_KB_USERS, "רשימת משתמשים") or ("משתמשים" in text and len(text) < 20):
         await cmd_users(update, context)
         return
+    if text == ADMIN_KB_COUPONS or "קופון" in text or "יצירת" in text:
+        await cmd_coupons(update, context)
+        return
 
-    # המתנה לכמות מותאמת
     pending_pkg_id = context.user_data.get("admin_awaiting_custom_qty")
     if pending_pkg_id:
         if text.isdigit() and 1 <= int(text) <= 500:
@@ -132,9 +269,8 @@ async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             code_text = "\n".join(f"<code>{c}</code>" for c in codes)
             await update.message.reply_text(code_text, parse_mode="HTML")
             return
-        else:
-            await update.message.reply_text("אנא הכנס מספר תקין בין 1 ל-500.")
-            return
+        await update.message.reply_text("אנא הכנס מספר תקין בין 1 ל-500.")
+        return
 
     for pkg in ADMIN_PACKAGE_CATALOG:
         if text == pkg.label_hebrew() or text == pkg.label_admin_keyboard() or pkg.package_id in text:
@@ -145,55 +281,10 @@ async def on_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             return
 
-    if "יצירת" in text or "קופון" in text:
-        await cmd_start(update, context)
-    else:
-        await update.message.reply_text(
-            "תפריט ניהול אדמין:",
-            reply_markup=build_admin_persistent_reply_keyboard(),
-        )
-
-
-
-async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message:
-        return
-    if not _is_admin(update):
-        await update.message.reply_text(_UNAUTHORIZED_TEXT)
-        return
-    admin_ids = set(ADMIN_USER_IDS if ADMIN_USER_IDS else get_admin_user_ids())
-    rows = list_users_first_seen()  # ללא סינון — כולל אדמינים
-    if not rows:
-        await update.message.reply_text("אין משתמשים במערכת.")
-        return
-
-    total = len(rows)
-    lines = [
-        f"<b>רשימת משתמשים במערכת</b> (סה״כ: {total})\n"
-    ]
-
-    for idx, row in enumerate(rows, 1):
-        uid = row[0]
-        ts = row[1]
-        uname = row[2] if len(row) > 2 else None
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d/%m/%Y %H:%M")
-        is_admin_user = uid in admin_ids
-
-        if uname:
-            user_str = f'<a href="https://t.me/{uname}">@{uname}</a>'
-            user_field = f"@{uname}"
-        else:
-            user_str = f'<a href="tg://user?id={uid}">פרופיל ({uid})</a>'
-            user_field = f"ללא שם משתמש (ID: <code>{uid}</code>)"
-
-        admin_tag = " [אדמין]" if is_admin_user else ""
-        lines.append(
-            f"<b>{idx}. {user_str}{admin_tag}</b>\n"
-            f"   • שם משתמש: {user_field}\n"
-            f"   • הצטרפ/ה: {dt}\n"
-        )
-
-    await update.message.reply_text("\n".join(lines).strip(), parse_mode="HTML")
+    await update.message.reply_text(
+        "\u2060",
+        reply_markup=build_admin_persistent_reply_keyboard(),
+    )
 
 
 async def cmd_dbpath(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -233,38 +324,14 @@ async def cmd_user_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("מזהה משתמש לא תקין.")
         return
 
-    info = get_user_info(target_uid)
-    if not info:
-        await update.message.reply_text(f"משתמש <code>{target_uid}</code> לא נמצא במערכת.", parse_mode="HTML")
+    text = format_user_card_text(target_uid)
+    if not text:
+        await update.message.reply_text(
+            f"משתמש <code>{target_uid}</code> לא נמצא במערכת.",
+            parse_mode="HTML",
+        )
         return
-
-    uid = info["user_id"]
-    uname = info["username"]
-    dt = datetime.fromtimestamp(info["first_seen_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-
-    if uname:
-        chat_link = f'<a href="https://t.me/{uname}">@{uname} (לחץ לפתיחת שיחה)</a>'
-    else:
-        chat_link = f'<a href="tg://user?id={uid}">פרופיל משתמש ({uid})</a> (ללא יוזרניים בטלגרם)'
-
-    coupon_str = "אין קופון פעיל"
-    if info["active_coupon"]:
-        cp = info["active_coupon"]
-        exp_dt = datetime.fromtimestamp(cp["expires_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        vip_tag = " [VIP]" if cp["is_vip"] else ""
-        coupon_str = f"קוד: <code>{cp['code']}</code> ({cp['period_days']} ימים){vip_tag} — בתוקף עד {exp_dt}"
-
-    bank_str = "פתוח" if info["bank_unlocked"] else "סגור"
-
-    text = (
-        f"<b>פרטי משתמש: {uid}</b>\n\n"
-        f"• <b>שיחה ישירה בטלגרם</b>: {chat_link}\n"
-        f"• <b>תאריך הצטרפות</b>: {dt}\n"
-        f"• <b>סטטוס קופון</b>: {coupon_str}\n"
-        f"• <b>מאגר תרגילים</b>: {bank_str}"
-    )
     await update.message.reply_text(text, parse_mode="HTML")
-
 
 
 async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -290,6 +357,28 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     await user_msg.delete()
                 except Exception:
                     pass
+        return
+
+    if data == "admin:overview":
+        await cmd_overview(update, context)
+        return
+
+    if data.startswith("admin:users:"):
+        await cmd_users(update, context)
+        return
+
+    if data.startswith("admin:user:"):
+        parts = data.split(":")
+        if len(parts) < 3:
+            await query.answer()
+            return
+        try:
+            target_uid = int(parts[2])
+            offset = int(parts[3]) if len(parts) > 3 else 0
+        except ValueError:
+            await query.answer()
+            return
+        await cmd_user_card(update, context, target_uid, offset)
         return
 
     if data.startswith("admin:pick:"):
@@ -346,5 +435,3 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         chat_id = query.message.chat_id if query.message else update.effective_user.id
         await context.bot.send_message(chat_id=chat_id, text=code_text, parse_mode="HTML")
         return
-
-

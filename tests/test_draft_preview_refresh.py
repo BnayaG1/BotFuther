@@ -35,6 +35,7 @@ async def test_refresh_draft_after_correction_sends_fixed_with_approve():
     context.bot.send_photo = AsyncMock(return_value=MagicMock(message_id=201))
     context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=202))
     context.bot.delete_message = AsyncMock()
+    context.bot.edit_message_media = AsyncMock()
 
     with patch(
         "bot.draft_preview.render_exercise_problem_png_bytes",
@@ -49,8 +50,10 @@ async def test_refresh_draft_after_correction_sends_fixed_with_approve():
 
     assert ok is True
     assert err is None
-    context.bot.send_photo.assert_awaited()
-    kwargs = context.bot.send_photo.await_args.kwargs
+    context.bot.edit_message_media.assert_awaited_once()
+    assert context.bot.edit_message_media.await_args.kwargs["message_id"] == 99
+    context.bot.send_photo.assert_not_awaited()
+    kwargs = context.bot.edit_message_media.await_args.kwargs
     assert kwargs["reply_markup"] is not None
     buttons = [
         btn.callback_data
@@ -63,13 +66,12 @@ async def test_refresh_draft_after_correction_sends_fixed_with_approve():
         call.kwargs.get("message_id") or call.args[1]
         for call in context.bot.delete_message.await_args_list
     }
-    # user correction + old instruct + old photo
     assert 150 in deleted
     assert 100 in deleted
-    assert 99 in deleted
+    assert 99 not in deleted
 
     ref = get_draft_message_ref(chat_id)
-    assert ref == (chat_id, 201)
+    assert ref == (chat_id, 99)
     stored = get_stored_vision_extracted(chat_id)
     assert stored is not None
     clear_vision_context(chat_id)

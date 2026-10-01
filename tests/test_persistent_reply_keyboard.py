@@ -267,15 +267,17 @@ async def test_on_text_admin_button_triggers_admin_system(monkeypatch):
         with patch.object(handlers, "telegram_user_id", return_value=9999):
             await handlers.on_text(update, context)
 
-    assert update.message.reply_text.await_count == 2
-    args0, kwargs0 = update.message.reply_text.await_args_list[0]
-    assert "אדמין" in args0[0]
-    args1, kwargs1 = update.message.reply_text.await_args_list[1]
-    assert "מקלדת ניהול" in args1[0]
-    admin_kb = kwargs1.get("reply_markup")
+    assert update.message.reply_text.await_count == 1
+    _args, kwargs = update.message.reply_text.await_args
+    admin_kb = kwargs.get("reply_markup")
     assert isinstance(admin_kb, ReplyKeyboardMarkup)
     admin_texts = [btn.text for row in admin_kb.keyboard for btn in row]
     assert handlers._PERSISTENT_ENGINEER_LABEL in admin_texts
+    from bot.admin_bot import ADMIN_KB_COUPONS, ADMIN_KB_OVERVIEW, ADMIN_KB_USERS
+    assert ADMIN_KB_OVERVIEW in admin_texts
+    assert ADMIN_KB_USERS in admin_texts
+    assert ADMIN_KB_COUPONS in admin_texts
+    update.message.reply_text.return_value.delete.assert_not_awaited()
 
 
 @pytest.mark.anyio

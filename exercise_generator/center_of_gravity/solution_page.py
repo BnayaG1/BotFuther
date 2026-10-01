@@ -18,7 +18,14 @@ from exercise_generator.center_of_gravity.solve import (
     solve_cog_exercise,
 )
 from notebook_solution.page import _CELL_PX, image_to_png, new_page
-from notebook_solution.sketch import _FONT_FILES, _INK, _arrow, _pen
+from notebook_solution.sketch import (
+    _FONT_FILES,
+    _INK,
+    _arrow,
+    _pen,
+    draw_notebook_text,
+    notebook_text_width,
+)
 from notebook_solution.stamp import paste_brand_stamp
 
 _FILL = (212, 199, 172)
@@ -109,8 +116,11 @@ def _fmt(value: float, decimals: int = 2) -> str:
 
 
 def _text_w(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> float:
-    box = draw.textbbox((0, 0), text, font=font)
-    return float(box[2] - box[0])
+    return notebook_text_width(draw, text, font)
+
+
+def _ink(draw, xy, text, font, anchor, fill=_INK) -> None:
+    draw_notebook_text(draw, xy, text, font, fill, anchor)
 
 
 # ---------- שרטוט החתך ----------
@@ -154,9 +164,9 @@ def _draw_sketch(
     top_py = at(0.0, max_y)[1]
     axis_end = min(left + span_x * scale + 60, _SKETCH_X1)
     _arrow(draw, (origin_px - 60, origin_py), (axis_end, origin_py), width=2)
-    draw.text((axis_end + 14, origin_py), "X", font=fonts["head"], fill=_INK, anchor="lm")
+    _ink(draw, (axis_end + 14, origin_py), "X", font=fonts["head"], fill=_INK, anchor="lm")
     _arrow(draw, (origin_px, origin_py + 46), (origin_px, top_py - 60), width=2)
-    draw.text((origin_px - 20, top_py - 74), "Y", font=fonts["head"], fill=_INK, anchor="rm")
+    _ink(draw, (origin_px - 20, top_py - 74), "Y", font=fonts["head"], fill=_INK, anchor="rm")
 
     total_area = 0.0
     moment_x = 0.0
@@ -174,7 +184,7 @@ def _draw_sketch(
 
     legend_y = _LEGEND_TOP
     for row in solution.rows:
-        draw.text(
+        _ink(draw, 
             (_SKETCH_X0 + 20, legend_y),
             f"{row.index} - {row.label}",
             font=fonts["legend"],
@@ -195,11 +205,11 @@ def _draw_centroid_axes(
     """מרכז הכובד הגלובלי והצירים המרכזיים xx, yy — עליהם מחושבים Ixx, Iyy."""
     cx_px, cy_px = centre
     _pen(draw, (cx_px - 130, cy_px), (axis_end, cy_px), width=1)
-    draw.text((axis_end + 14, cy_px), "xx", font=fonts["legend"], fill=_INK, anchor="lm")
+    _ink(draw, (axis_end + 14, cy_px), "xx", font=fonts["legend"], fill=_INK, anchor="lm")
     _pen(draw, (cx_px, top_py - 50), (cx_px, base_py + 40), width=1)
-    draw.text((cx_px + 30, top_py - 44), "yy", font=fonts["legend"], fill=_INK, anchor="lm")
+    _ink(draw, (cx_px + 30, top_py - 44), "yy", font=fonts["legend"], fill=_INK, anchor="lm")
     _cross(draw, cx_px, cy_px)
-    draw.text((cx_px + 26, cy_px - 34), "C", font=fonts["head"], fill=_INK, anchor="lm")
+    _ink(draw, (cx_px + 26, cy_px - 34), "C", font=fonts["head"], fill=_INK, anchor="lm")
 
 
 def _cross(draw: ImageDraw.ImageDraw, x: float, y: float) -> None:
@@ -234,7 +244,7 @@ def _outline_path(draw: ImageDraw.ImageDraw, points: list[tuple[float, float]]) 
 def _mark(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, font: ImageFont.ImageFont) -> None:
     r = 20
     draw.ellipse((x - r, y - r, x + r, y + r), fill=_PAPER, outline=_INK, width=2)
-    draw.text((x, y), text, font=font, fill=_INK, anchor="mm")
+    _ink(draw, (x, y), text, font=font, fill=_INK, anchor="mm")
 
 
 # ---------- טבלת הנתונים ----------
@@ -266,7 +276,7 @@ def _draw_table(draw: ImageDraw.ImageDraw, solution: CogSolution, fonts: dict) -
 
     y = _TABLE_Y + _ROW_H / 2.0
     for center, title in zip(centers, headers):
-        draw.text((center, y), title, font=fonts["head"], fill=_INK, anchor="mm")
+        _ink(draw, (center, y), title, font=fonts["head"], fill=_INK, anchor="mm")
     header_line_y = _TABLE_Y + _ROW_H
     _pen(draw, (_TABLE_X, header_line_y), (table_right, header_line_y), width=3)
 
@@ -285,7 +295,7 @@ def _draw_table(draw: ImageDraw.ImageDraw, solution: CogSolution, fonts: dict) -
             _fmt(row.dy),
         )
         for center, cell in zip(centers, cells):
-            draw.text((center, y + _ROW_H / 2.0), cell, font=fonts["cell"], fill=_INK, anchor="mm")
+            _ink(draw, (center, y + _ROW_H / 2.0), cell, font=fonts["cell"], fill=_INK, anchor="mm")
         y += _ROW_H
 
     _pen(draw, (_TABLE_X, y), (table_right, y), width=3)
@@ -299,7 +309,7 @@ def _draw_table(draw: ImageDraw.ImageDraw, solution: CogSolution, fonts: dict) -
     )
     for center, cell in zip(centers, sums):
         if cell:
-            draw.text((center, y + _ROW_H / 2.0), cell, font=fonts["cell"], fill=_INK, anchor="mm")
+            _ink(draw, (center, y + _ROW_H / 2.0), cell, font=fonts["cell"], fill=_INK, anchor="mm")
     bottom = y + _ROW_H
     _pen(draw, (_TABLE_X, bottom), (table_right, bottom), width=3)
 
@@ -323,8 +333,8 @@ def _fraction(
     den_w = _text_w(draw, denominator, font)
     width = max(num_w, den_w) + 24
     center = x + width / 2.0
-    draw.text((center, y - 42), numerator, font=font, fill=_INK, anchor="mm")
-    draw.text((center, y + 42), denominator, font=font, fill=_INK, anchor="mm")
+    _ink(draw, (center, y - 42), numerator, font=font, fill=_INK, anchor="mm")
+    _ink(draw, (center, y + 42), denominator, font=font, fill=_INK, anchor="mm")
     _pen(draw, (x, y), (x + width, y), width=3)
     return width
 
@@ -341,13 +351,13 @@ def _draw_centroid_formulas(
     for y, name, symbolic, moment, value in blocks:
         x = _FORMULA_X
         label = f"{name} ="
-        draw.text((x, y), label, font=font, fill=_INK, anchor="lm")
+        _ink(draw, (x, y), label, font=font, fill=_INK, anchor="lm")
         x += _text_w(draw, label, font) + 30
         x += _fraction(draw, x, y, symbolic, "ΣA", font) + 30
-        draw.text((x, y), "=", font=font, fill=_INK, anchor="lm")
+        _ink(draw, (x, y), "=", font=font, fill=_INK, anchor="lm")
         x += _text_w(draw, "=", font) + 30
         x += _fraction(draw, x, y, moment, sum_area, font) + 30
-        draw.text((x, y), "=", font=font, fill=_INK, anchor="lm")
+        _ink(draw, (x, y), "=", font=font, fill=_INK, anchor="lm")
         x += _text_w(draw, "=", font) + 30
         _boxed(draw, x, y, f"{name} = {_fmt(value)} cm", font)
 
@@ -383,15 +393,15 @@ def _draw_inertia_formulas(
         ),
     )
     for y, name, symbolic, terms, value in blocks:
-        draw.text((_FORMULA_X, y), f"{name} = {symbolic} =", font=font, fill=_INK, anchor="lm")
+        _ink(draw, (_FORMULA_X, y), f"{name} = {symbolic} =", font=font, fill=_INK, anchor="lm")
 
         substitution = " + ".join(terms)
         x = _FORMULA_X + _INERTIA_INDENT
         sub_font = _fit_font(draw, substitution, _FORMULA_MAX_X - x, font)
-        draw.text((x, y + _INERTIA_LINE_H), substitution, font=sub_font, fill=_INK, anchor="lm")
+        _ink(draw, (x, y + _INERTIA_LINE_H), substitution, font=sub_font, fill=_INK, anchor="lm")
 
         result_y = y + 2 * _INERTIA_LINE_H
-        draw.text((x, result_y), "=", font=font, fill=_INK, anchor="lm")
+        _ink(draw, (x, result_y), "=", font=font, fill=_INK, anchor="lm")
         _boxed(
             draw,
             x + _text_w(draw, "=", font) + 30,
@@ -410,4 +420,4 @@ def _boxed(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, font: Image
     _pen(draw, (right, top), (right, bottom), width=2)
     _pen(draw, (right, bottom), (left, bottom), width=2)
     _pen(draw, (left, bottom), (left, top), width=2)
-    draw.text((x, y), text, font=font, fill=_INK, anchor="lm")
+    _ink(draw, (x, y), text, font=font, fill=_INK, anchor="lm")
