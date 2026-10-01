@@ -7,6 +7,7 @@ import logging
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LinkPreviewOptions,
     ReplyKeyboardMarkup,
     Update,
 )
@@ -27,6 +28,7 @@ from bot.purchase import ADMIN_PACKAGE_CATALOG, get_package
 log = logging.getLogger("beam_admin")
 
 _UNAUTHORIZED_TEXT = "גישה נדחתה."
+_NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 ADMIN_KB_ENGINEER = "למהנדס"
 ADMIN_KB_OVERVIEW = "סקירה"
@@ -89,9 +91,11 @@ def build_users_page_keyboard(items: list[dict], total: int, offset: int) -> Inl
     for item in items:
         uid = int(item["user_id"])
         uname = item.get("username")
-        label = f"@{uname}" if uname else str(uid)
-        if len(label) > 28:
-            label = label[:27] + "…"
+        name = f"@{uname}" if uname else str(uid)
+        short = (item.get("access_short") or "").strip()
+        label = f"{name} · {short}" if short else name
+        if len(label) > 40:
+            label = label[:39] + "…"
         rows.append(
             [InlineKeyboardButton(label, callback_data=f"admin:user:{uid}:{offset}")]
         )
@@ -126,6 +130,7 @@ async def _admin_show(
                 text,
                 reply_markup=reply_markup,
                 parse_mode="HTML",
+                link_preview_options=_NO_PREVIEW,
             )
             return
         except Exception:
@@ -136,6 +141,7 @@ async def _admin_show(
                 text=text,
                 reply_markup=reply_markup,
                 parse_mode="HTML",
+                link_preview_options=_NO_PREVIEW,
             )
             return
         except Exception:
@@ -145,6 +151,7 @@ async def _admin_show(
             text,
             reply_markup=reply_markup,
             parse_mode="HTML",
+            link_preview_options=_NO_PREVIEW,
         )
 
 
@@ -186,13 +193,13 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             offset = max(0, int(query.data.split(":")[2]))
         except (IndexError, ValueError):
             offset = 0
-    items, total = list_users_page(offset=offset, limit=USERS_PAGE_SIZE)
+    items, total, summary = list_users_page(offset=offset, limit=USERS_PAGE_SIZE)
     if query:
         await query.answer()
     await _admin_show(
         update,
         context,
-        format_users_page_text(items, total, offset),
+        format_users_page_text(items, total, offset, summary),
         build_users_page_keyboard(items, total, offset) if items else None,
     )
 

@@ -16,7 +16,7 @@ from bot.access import (
 log = logging.getLogger("beam_admin")
 
 SESSION_GAP_SEC = 30 * 60
-USERS_PAGE_SIZE = 8
+USERS_PAGE_SIZE = 6
 
 USAGE_ACTIONS: tuple[str, ...] = (
     "main",
@@ -247,21 +247,136 @@ def format_overview_text(stats: dict | None = None, *, now: float | None = None)
     )
 
 
-def _coupon_user_ids_unlocked(conn, now: float) -> set[int]:
+def _fmt_ago(ts: float | None, now: float) -> str:
+    if ts is None:
+        return "אין פעילות"
+    delta = max(0.0, now - float(ts))
+    if delta < 60:
+        return "עכשיו"
+    if delta < 3600:
+        return f"לפני {max(1, int(delta // 60))} דק׳"
+    if delta < 86400:
+        return f"לפני {max(1, int(delta // 3600))} שע׳"
+    days = int(delta // 86400)
+    if days == 1:
+        return "אתמול"
+    if days < 7:
+        return f"לפני {days} ימים"
+    return _fmt_when(ts, now)
+
+
+def _fmt_left(sec: float) -> str:
+    left = max(0.0, float(sec))
+    if left <= 0:
+        return "פג"
+    if left < 3600:
+        return f"עוד {max(1, int((left + 59) // 60))} דק׳"
+    if left < 86400:
+        return f"עוד {max(1, int((left + 3599) // 3600))} שע׳"
+    days = int((left + 86399) // 86400)
+    if days == 1:
+        return "עוד יום"
+    return f"עוד {days} ימים"
+
+
+def _period_short(days: int) -> str:
+    return {
+        30: "חודש",
+        60: "חודשיים",
+        90: "3 חודשים",
+        120: "4 חודשים",
+    }.get(int(days), f"{int(days)} ימים")
+
+
+def _active_coupon_join() -> str:
+    return (
+        "LEFT JOIN coupons c ON c.rowid = ("
+        "SELECT c2.rowid FROM coupons c2 "
+        "WHERE c2.redeemed_by = f.user_id AND c2.expires_at > ? "
+        "ORDER BY c2.expires_at DESC LIMIT 1)"
+    )
+
+
+def _access_fields(first_seen: float, quota, expires_at, period_days, now: float) -> dict:
+    if quota is not None and expires_at is not None:
+        left = float(expires_at) - now
+        is_vip = int(quota) >= 999
+        if is_vip:
+            return {
+                "access_kind": "vip",
+                "access_short": "VIP",
+                "access_line": f"VIP · {_fmt_left(left)}",
+            }
+        period = _period_short(int(period_days or 0))
+        return {
+            "access_kind": "coupon",
+            "access_short": period,
+            "access_line": f"{period} · {_fmt_left(left)}",
+        }
+    window_left = FORMULAS_FREE_WINDOW_SEC - (now - first_seen)
+    if window_left > 0:
+        return {
+            "access_kind": "window",
+            "access_short": "חלון",
+            "access_line": f"חלון חינם · {_fmt_left(window_left)}",
+        }
+    return {
+        "access_kind": "none",
+        "access_short": "בלי",
+        "access_line": "בלי גישה",
+    }
+
+
+def _counts_for_users(conn, user_ids: list[int]) -> dict[int, dict[str, int]]:
+    grouped: dict[int, dict[str, int]] = {uid: {} for uid in user_ids}
+    if not user_ids:
+        return grouped
+    marks = ",".join("?" for _ in user_ids)
     rows = conn.execute(
-        "SELECT DISTINCT redeemed_by FROM coupons "
-        "WHERE redeemed_by IS NOT NULL AND expires_at > ?",
+        f"SELECT user_id, action, COUNT(*) AS n FROM admin_usage_event "
+        f"WHERE user_id IN ({marks}) GROUP BY user_id, action",
+        tuple(user_ids),
+    ).fetchall()
+    for row in rows:
+        uid = int(row["user_id"])
+        action = str(row["action"])
+        if uid in grouped and action in USAGE_ACTION_SET and action != "main":
+            grouped[uid][action] = int(row["n"])
+    return grouped
+
+
+def _top_usage(counts: dict[str, int], limit: int = 3) -> list[tuple[str, int]]:
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [(action, n) for action, n in ranked if n > 0][:limit]
+
+
+def _users_summary_unlocked(conn, now: float) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT f.first_seen_at, c.daily_quota AS quota, c.expires_at, c.period_days "
+        "FROM user_first_seen f "
+        f"{_active_coupon_join()} "
+        "WHERE f.user_id > 0",
         (now,),
     ).fetchall()
-    return {int(r["redeemed_by"]) for r in rows if r["redeemed_by"] is not None}
+    summary = {"total": 0, "vip": 0, "coupon": 0, "window": 0, "none": 0}
+    for row in rows:
+        summary["total"] += 1
+        kind = _access_fields(
+            float(row["first_seen_at"]),
+            row["quota"],
+            row["expires_at"],
+            row["period_days"],
+            now,
+        )["access_kind"]
+        summary[kind] += 1
+    return summary
 
 
-def _status_label(uid: int, first_seen: float, coupon_ids: set[int], now: float) -> str:
-    if uid in coupon_ids:
-        return "קופון"
-    if (now - first_seen) < FORMULAS_FREE_WINDOW_SEC:
-        return "חלון חינם"
-    return "בלי"
+def _row_dwell(row) -> float:
+    if row["last_seen_at"] is None or row["session_started_at"] is None:
+        return 0.0
+    total = float(row["total_session_sec"] or 0.0)
+    return total + max(0.0, float(row["last_seen_at"]) - float(row["session_started_at"]))
 
 
 def list_users_page(
@@ -269,42 +384,54 @@ def list_users_page(
     offset: int = 0,
     limit: int = USERS_PAGE_SIZE,
     now: float | None = None,
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict], int, dict[str, int]]:
     ts = _ts(now)
     off = max(0, int(offset))
     lim = max(1, int(limit))
     conn = _connect()
     with _db_lock:
-        total = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM user_first_seen WHERE user_id > 0"
-            ).fetchone()[0]
-        )
-        coupon_ids = _coupon_user_ids_unlocked(conn, ts)
+        summary = _users_summary_unlocked(conn, ts)
         rows = conn.execute(
-            "SELECT f.user_id, f.first_seen_at, f.username, s.last_seen_at "
+            "SELECT f.user_id, f.first_seen_at, f.username, "
+            "s.last_seen_at, s.session_started_at, s.total_session_sec, "
+            "c.daily_quota AS quota, c.expires_at, c.period_days "
             "FROM user_first_seen f "
             "LEFT JOIN admin_user_session s ON s.user_id = f.user_id "
+            f"{_active_coupon_join()} "
             "WHERE f.user_id > 0 "
-            "ORDER BY COALESCE(s.last_seen_at, f.first_seen_at) DESC, f.user_id DESC "
+            "ORDER BY COALESCE(s.last_seen_at, 0) DESC, f.first_seen_at DESC, f.user_id DESC "
             "LIMIT ? OFFSET ?",
-            (lim, off),
+            (ts, lim, off),
         ).fetchall()
+        ids = [int(row["user_id"]) for row in rows]
+        counts = _counts_for_users(conn, ids)
         items = []
         for row in rows:
             uid = int(row["user_id"])
             first_seen = float(row["first_seen_at"])
             last_seen = float(row["last_seen_at"]) if row["last_seen_at"] is not None else None
+            access = _access_fields(
+                first_seen,
+                row["quota"],
+                row["expires_at"],
+                row["period_days"],
+                ts,
+            )
+            top = _top_usage(counts.get(uid, {}))
             items.append(
                 {
                     "user_id": uid,
                     "username": row["username"],
                     "first_seen_at": first_seen,
                     "last_seen_at": last_seen,
-                    "status": _status_label(uid, first_seen, coupon_ids, ts),
+                    "dwell_sec": _row_dwell(row),
+                    "usage_line": " · ".join(
+                        f"{ACTION_LABEL_HEBREW[action]} {n}" for action, n in top
+                    ),
+                    **access,
                 }
             )
-        return items, total
+        return items, summary["total"], summary
 
 
 def user_dwell_sec(user_id: int, *, now: float | None = None) -> float:
@@ -351,20 +478,65 @@ def user_last_seen(user_id: int) -> float | None:
         return float(row["last_seen_at"])
 
 
-def format_users_page_text(items: list[dict], total: int, offset: int, *, now: float | None = None) -> str:
+def _session_count(user_id: int) -> int:
+    conn = _connect()
+    with _db_lock:
+        closed = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM admin_closed_session WHERE user_id = ?",
+                (int(user_id),),
+            ).fetchone()[0]
+        )
+        open_row = conn.execute(
+            "SELECT 1 FROM admin_user_session WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    return closed + (1 if open_row is not None else 0)
+
+
+def format_users_page_text(
+    items: list[dict],
+    total: int,
+    offset: int,
+    summary: dict | None = None,
+    *,
+    now: float | None = None,
+) -> str:
     ts = _ts(now)
-    lines = [f"<b>משתמשים</b> (סה״כ: {total})"]
+    counts = summary or {}
+    lines = [
+        "<b>משתמשים</b>",
+        (
+            f"{total} רשומים · "
+            f"VIP {counts.get('vip', 0)} · "
+            f"קופון {counts.get('coupon', 0)} · "
+            f"חלון {counts.get('window', 0)} · "
+            f"בלי {counts.get('none', 0)}"
+        ),
+    ]
+    if items:
+        lines.append(f"{offset + 1}–{offset + len(items)} מתוך {total}")
     if not items:
+        lines.append("")
         lines.append("אין משתמשים במערכת.")
         return "\n".join(lines)
+    lines.append("")
     for idx, item in enumerate(items, start=offset + 1):
         uname = item.get("username")
         name = f"@{uname}" if uname else str(item["user_id"])
-        seen = item.get("last_seen_at") or item.get("first_seen_at")
-        lines.append(
-            f"{idx}. {name} · {_fmt_when(seen, ts)} · {item.get('status') or 'בלי'}"
-        )
-    return "\n".join(lines)
+        lines.append(f"<b>{idx}. {name}</b>")
+        lines.append(item.get("access_line") or "בלי גישה")
+        activity = _fmt_ago(item.get("last_seen_at"), ts) if item.get("last_seen_at") else "אין פעילות"
+        detail = [activity]
+        usage = (item.get("usage_line") or "").strip()
+        if usage:
+            detail.append(usage)
+        dwell = float(item.get("dwell_sec") or 0)
+        if dwell >= 60:
+            detail.append(f"שהייה {_fmt_duration(dwell)}")
+        lines.append(" · ".join(detail))
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def format_user_card_text(user_id: int, *, now: float | None = None) -> str | None:
@@ -375,35 +547,62 @@ def format_user_card_text(user_id: int, *, now: float | None = None) -> str | No
     uid = int(info["user_id"])
     uname = info.get("username")
     if uname:
-        chat_link = f'<a href="https://t.me/{uname}">@{uname}</a>'
+        title = f"@{uname}"
+        chat_link = f'<a href="https://t.me/{uname}">פתיחת שיחה</a>'
     else:
-        chat_link = f'<a href="tg://user?id={uid}">פרופיל ({uid})</a>'
+        title = str(uid)
+        chat_link = f'<a href="tg://user?id={uid}">פתיחת שיחה</a>'
 
-    coupon_str = "אין קופון פעיל"
-    if info.get("active_coupon"):
-        cp = info["active_coupon"]
-        exp_dt = datetime.fromtimestamp(cp["expires_at"], tz=_IL_TZ).strftime("%d/%m/%Y %H:%M")
-        vip_tag = " [VIP]" if cp.get("is_vip") else ""
-        coupon_str = (
-            f"<code>{cp['code']}</code> ({cp['period_days']} ימים){vip_tag} — עד {exp_dt}"
+    coupon = info.get("active_coupon")
+    access = _access_fields(
+        float(info["first_seen_at"]),
+        999999 if coupon and coupon.get("is_vip") else (1 if coupon else None),
+        coupon["expires_at"] if coupon else None,
+        coupon["period_days"] if coupon else None,
+        ts,
+    )
+    if coupon:
+        exp_dt = datetime.fromtimestamp(coupon["expires_at"], tz=_IL_TZ).strftime("%d/%m/%Y %H:%M")
+        access_body = (
+            f"{access['access_line']}\n"
+            f"עד {exp_dt}\n"
+            f"קוד <code>{coupon['code']}</code>"
         )
+    else:
+        access_body = access["access_line"]
 
     last_seen = user_last_seen(uid)
+    if last_seen is None:
+        seen_line = "אין פעילות"
+    else:
+        seen_line = f"{_fmt_ago(last_seen, ts)} · {_fmt_when(last_seen, ts)}"
+
     counts = user_action_counts(uid)
-    usage_lines = []
-    for action in USAGE_ACTIONS:
-        n = counts.get(action, 0)
-        if n:
-            usage_lines.append(f"   {ACTION_LABEL_HEBREW[action]} — {n}")
-    usage_block = "\n".join(usage_lines) if usage_lines else "   אין עדיין"
+    ranked = sorted(
+        ((action, n) for action, n in counts.items() if n > 0 and action != "main"),
+        key=lambda item: (-item[1], item[0]),
+    )
+    if ranked:
+        usage_block = "\n".join(
+            f"{ACTION_LABEL_HEBREW[action]}  {n}" for action, n in ranked
+        )
+    else:
+        usage_block = "עדיין לא נרשם שימוש"
+
+    sessions = _session_count(uid)
+    dwell = _fmt_duration(user_dwell_sec(uid, now=ts))
+    bank = "פתוח" if info.get("bank_unlocked") else "סגור"
 
     return (
-        f"<b>משתמש {uid}</b>\n\n"
-        f"• שיחה: {chat_link}\n"
-        f"• הצטרפות: {_fmt_when(info['first_seen_at'], ts)}\n"
-        f"• נראה לאחרונה: {_fmt_when(last_seen or info['first_seen_at'], ts)}\n"
-        f"• שהייה: {_fmt_duration(user_dwell_sec(uid, now=ts))}\n"
-        f"• קופון: {coupon_str}\n"
-        f"• מאגר תרגילים: {'פתוח' if info.get('bank_unlocked') else 'סגור'}\n"
-        f"• שימוש:\n{usage_block}"
+        f"<b>{title}</b>\n"
+        f"{chat_link} · <code>{uid}</code>\n\n"
+        f"<b>גישה</b>\n"
+        f"{access_body}\n"
+        f"מאגר תרגילים {bank}\n\n"
+        f"<b>פעילות</b>\n"
+        f"הצטרפות {_fmt_when(info['first_seen_at'], ts)}\n"
+        f"נראה {seen_line}\n"
+        f"שהייה {dwell} · {sessions} סשנים\n\n"
+        f"<b>שימוש</b>\n"
+        f"{usage_block}"
     )

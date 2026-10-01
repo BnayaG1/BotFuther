@@ -115,17 +115,24 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
                     "username": "john_doe",
                     "first_seen_at": 1_700_000_000.0,
                     "last_seen_at": 1_700_000_000.0,
-                    "status": "קופון",
+                    "access_line": "VIP · עוד 10 ימים",
+                    "access_short": "VIP",
+                    "usage_line": "פתרון 2",
+                    "dwell_sec": 120,
                 },
                 {
                     "user_id": 222,
                     "username": None,
                     "first_seen_at": 1_700_000_060.0,
                     "last_seen_at": None,
-                    "status": "בלי",
+                    "access_line": "בלי גישה",
+                    "access_short": "בלי",
+                    "usage_line": "",
+                    "dwell_sec": 0,
                 },
             ],
             2,
+            {"total": 2, "vip": 1, "coupon": 0, "window": 0, "none": 1},
         ),
     )
 
@@ -139,9 +146,11 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0]
-    assert "סה״כ: 2" in text
+    assert "2 רשומים" in text
     assert "@john_doe" in text
     assert "222" in text
+    assert "VIP · עוד 10 ימים" in text
+    assert "בלי גישה" in text
 
 
 @pytest.mark.anyio
