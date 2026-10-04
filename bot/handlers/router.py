@@ -2223,10 +2223,8 @@ _HOW_TO_SOLVE_NEXT_STAGE = {
 async def _cleanup_how_to_solve_end_phase_messages(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
-    *,
-    drop_initial_exercise_photo: bool = False,
 ) -> None:
-    """מוחק הודעות הסבר/תרגיל ישנות שלא צריכות להישאר בשלב פירוט הנקודות."""
+    """מוחק הודעות הסבר ישנות שלא צריכות להישאר בשלב פירוט הנקודות."""
     stale_keys = (
         "how_to_solve_moment_intro_message_id",
         "how_to_solve_moment_note_message_id",
@@ -2237,12 +2235,23 @@ async def _cleanup_how_to_solve_end_phase_messages(
             chat_id,
             context.chat_data.pop(key, None),
         )
-    if drop_initial_exercise_photo:
-        await _delete_how_to_solve_message(
-            context,
-            chat_id,
-            context.chat_data.pop("how_to_solve_initial_message_id", None),
-        )
+
+
+async def _drop_how_to_solve_exercise_photo(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    """מוחק את תמונת התרגיל המקורית — רק אחרי סיום המסלול (המשך אחרון)."""
+    await _delete_how_to_solve_message(
+        context,
+        chat_id,
+        context.chat_data.pop("how_to_solve_initial_message_id", None),
+    )
+    ex_mid = get_exercise_image_message_id(chat_id)
+    if ex_mid is not None:
+        await _delete_how_to_solve_message(context, chat_id, ex_mid)
+        clear_exercise_image_message_id(chat_id)
+    context.chat_data.pop("how_to_solve_reuse_practice_exercise", None)
 
 
 def _how_to_solve_render_kwargs(continue_from: str) -> dict:
@@ -2717,6 +2726,7 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     raise RuntimeError("notebook all diagram details render returned no image")
                 await _delete_callback_message(query)
                 await _cleanup_how_to_solve_end_phase_messages(context, chat_id)
+                await _drop_how_to_solve_exercise_photo(context, chat_id)
                 await _replace_how_to_solve_photo(
                     context,
                     chat_id,
@@ -2771,11 +2781,7 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 if notebook_path is None:
                     raise RuntimeError("notebook nx details render returned no image")
                 await _delete_callback_message(query)
-                await _cleanup_how_to_solve_end_phase_messages(
-                    context,
-                    chat_id,
-                    drop_initial_exercise_photo=True,
-                )
+                await _cleanup_how_to_solve_end_phase_messages(context, chat_id)
                 await _replace_how_to_solve_photo(
                     context,
                     chat_id,
