@@ -1964,6 +1964,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "statics":
         await query.answer()
+        await _drop_how_to_solve_exercise_photo(context, chat_id)
         _clear_how_to_solve_state(context)
         clicked_mid = query.message.message_id if query.message else None
         await _delete_choose_topic_prompt(
@@ -2056,6 +2057,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if action == "give_exercise":
         await query.answer()
+        await _drop_how_to_solve_exercise_photo(context, chat_id)
         _clear_how_to_solve_state(context)
         await _delete_callback_message(query)
         await _deliver_generated_exercise(
@@ -2726,7 +2728,6 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     raise RuntimeError("notebook all diagram details render returned no image")
                 await _delete_callback_message(query)
                 await _cleanup_how_to_solve_end_phase_messages(context, chat_id)
-                await _drop_how_to_solve_exercise_photo(context, chat_id)
                 await _replace_how_to_solve_photo(
                     context,
                     chat_id,
