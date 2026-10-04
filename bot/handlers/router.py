@@ -83,6 +83,7 @@ try:
     from intro import (
         build_how_to_solve_keyboard,
         build_how_to_solve_step_keyboard,
+        build_how_to_solve_finish_keyboard,
         build_inclined_load_keyboard,
         build_opening_keyboard,
         intro_topic_body_hebrew,
@@ -96,6 +97,7 @@ except Exception as exc:
     INTRO_AVAILABLE = False
     build_how_to_solve_keyboard = None  # type: ignore[assignment]
     build_how_to_solve_step_keyboard = None  # type: ignore[assignment]
+    build_how_to_solve_finish_keyboard = None  # type: ignore[assignment]
     build_inclined_load_keyboard = None  # type: ignore[assignment]
     build_opening_keyboard = None  # type: ignore[assignment]
     intro_topic_body_hebrew = None  # type: ignore[assignment]
@@ -137,6 +139,12 @@ from bot.solve_mode import (
     parse_bank_mode_action,
     parse_menu_mode_action,
     select_solve_mode,
+)
+from bot.how_to_solve_guide import (
+    HOW_TO_SOLVE_COPY_TEXT as _HOW_TO_SOLVE_COPY_TEXT,
+    clear_how_to_solve_state as _clear_how_to_solve_state,
+    has_active_how_to_solve,
+    send_how_to_solve_opening,
 )
 from personal_assistant.runtime import (
     deliver_after_draft_approve,
@@ -1227,6 +1235,7 @@ async def cleanup_practice_chat(
             pass
     if clear_progress:
         clear_pending_bank_exercise(chat_id)
+        _clear_how_to_solve_state(context)
         try:
             from personal_assistant.runtime import clear_personal_assistant_progress
 
@@ -1955,6 +1964,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if action == "statics":
         await query.answer()
+        _clear_how_to_solve_state(context)
         clicked_mid = query.message.message_id if query.message else None
         await _delete_choose_topic_prompt(
             context, chat_id, keep_message_id=clicked_mid
@@ -2046,6 +2056,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if action == "give_exercise":
         await query.answer()
+        _clear_how_to_solve_state(context)
         await _delete_callback_message(query)
         await _deliver_generated_exercise(
             context,
@@ -2134,9 +2145,6 @@ async def on_assistant_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 _HOW_TO_SOLVE_TYPE_TEXT = "איזה סוג תרגיל אתה רוצה?"
-_HOW_TO_SOLVE_COPY_TEXT = (
-    "עכשיו כשיש לנו תרגיל, מה שנעשה זה פשוט להעתיק אותו, כל אחד והדרך שלו למחברת בצורה הבאה:"
-)
 _HOW_TO_SOLVE_DECOMPOSITION_TEXT = (
     "עכשיו אחרי ששרטטנו מסודר את התרגיל למעלה בצד, נפתח עומסים מפורסים ואלכסוניים כדי שיהיה לנו קל יותר בהמשך התרגיל."
 )
@@ -2166,6 +2174,18 @@ _HOW_TO_SOLVE_QX_NOTE_TEXT = (
     "מראש צריך לדעת שאם יש לנו מומנטים בתרגיל הם לא נכנסים לגרף הזה (נשמור אותם לגרף הבא).\n"
     "נעבור מהחלק השמאלי של הקורה, ונכניס לגרף לפי איך שצריך את כל הכוחות שפועלים בצורה אנכית - למעלה ולמטה - גם ריאקציות וגם עומסים."
 )
+_HOW_TO_SOLVE_MOMENT_INTRO_TEXT = "וככה נראית התוספת של גרף המומנט:"
+_HOW_TO_SOLVE_MOMENT_NOTE_TEXT = (
+    "גרף המומנט נבנה בהתאם לגרף שמעליו - Qx, עם תוספת של מומנטים.\n"
+    "הבניה של הגרף הזה מתבססת על חישוב השטחים שנוצרים בגרף שמעליו, פלוס הוספה של מומנטים, "
+    "כשמומנט חיובי מקפיץ את הגרף בהתאם לערך של המומנט למטה, ושלילי למעלה."
+)
+_HOW_TO_SOLVE_GRAPHS_DONE_TEXT = (
+    "עכשיו שסיימנו לסרטט את הגרפים, נעבור לפירוט הנקודות שעל פיהם הגרפים משתנים."
+)
+_HOW_TO_SOLVE_NX_POINTS_TEXT = "זה פירוק של הגרף על כל נקודה בו."
+_HOW_TO_SOLVE_QX_POINTS_TEXT = "זה הפירוק של הגרף Qx."
+_HOW_TO_SOLVE_MX_POINTS_TEXT = "וזה פירוט הנקודות של הגרף האחרון."
 _HOW_TO_SOLVE_FOLLOWUP_TEXT = {
     "copy": _HOW_TO_SOLVE_COPY_TEXT,
     "decomposition": _HOW_TO_SOLVE_DECOMPOSITION_TEXT,
@@ -2184,6 +2204,9 @@ _HOW_TO_SOLVE_PREV_STAGE = {
     "normal_diagram": "reactions",
     "shear_diagram": "normal_diagram",
     "complete": "shear_diagram",
+    "nx_point_details": "complete",
+    "qx_point_details": "nx_point_details",
+    "mx_point_details": "qx_point_details",
 }
 _HOW_TO_SOLVE_NEXT_STAGE = {
     "copy": "decomposition",
@@ -2193,19 +2216,33 @@ _HOW_TO_SOLVE_NEXT_STAGE = {
     "reactions": "normal_diagram",
     "normal_diagram": "shear_diagram",
     "shear_diagram": "complete",
+    "complete": "nx_point_details",
+    "nx_point_details": "qx_point_details",
+    "qx_point_details": "mx_point_details",
 }
-_HOW_TO_SOLVE_STATE_KEYS = (
-    "how_to_solve_extracted",
-    "how_to_solve_stage",
-    "how_to_solve_notebook_message_id",
-    "how_to_solve_intro_message_id",
-    "how_to_solve_initial_message_id",
-)
-
-
-def _clear_how_to_solve_state(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for key in _HOW_TO_SOLVE_STATE_KEYS:
-        context.chat_data.pop(key, None)
+async def _cleanup_how_to_solve_end_phase_messages(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    drop_initial_exercise_photo: bool = False,
+) -> None:
+    """מוחק הודעות הסבר/תרגיל ישנות שלא צריכות להישאר בשלב פירוט הנקודות."""
+    stale_keys = (
+        "how_to_solve_moment_intro_message_id",
+        "how_to_solve_moment_note_message_id",
+    )
+    for key in stale_keys:
+        await _delete_how_to_solve_message(
+            context,
+            chat_id,
+            context.chat_data.pop(key, None),
+        )
+    if drop_initial_exercise_photo:
+        await _delete_how_to_solve_message(
+            context,
+            chat_id,
+            context.chat_data.pop("how_to_solve_initial_message_id", None),
+        )
 
 
 def _how_to_solve_render_kwargs(continue_from: str) -> dict:
@@ -2223,6 +2260,9 @@ def _how_to_solve_render_kwargs(continue_from: str) -> dict:
         "with_normal_diagram": continue_from == "reactions",
         "with_shear_diagram": continue_from == "normal_diagram",
         "with_moment_diagram": continue_from == "shear_diagram",
+        "with_moment_nx_details": continue_from == "complete",
+        "with_moment_nx_qx_details": continue_from == "nx_point_details",
+        "with_moment_all_details": continue_from == "qx_point_details",
     }
 
 
@@ -2406,46 +2446,24 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             else "cantilever"
         )
         try:
-            from exercise_generator.pipeline import generate_exercise
+            from exercise_generator.pipeline import (
+                HOW_TO_SOLVE_LOAD_KINDS,
+                generate_exercise,
+            )
 
             with tempfile.TemporaryDirectory(prefix="intro_easy_exercise_") as td:
                 artifact = generate_exercise(
-                    load_count=3,
+                    load_kinds=HOW_TO_SOLVE_LOAD_KINDS,
                     support_mode=support_mode,
                     out_dir=Path(td),
                     stem="easy",
                 )
-                context.chat_data["how_to_solve_extracted"] = copy.deepcopy(
-                    artifact.extracted
-                )
-                context.chat_data["how_to_solve_stage"] = "copy"
-                context.chat_data.pop("how_to_solve_notebook_message_id", None)
-                context.chat_data.pop("how_to_solve_intro_message_id", None)
-                context.chat_data.pop("how_to_solve_initial_message_id", None)
-                initial_path = render_notebook_exercise_png_temp(
+                await send_how_to_solve_opening(
+                    context,
+                    chat_id,
                     artifact.extracted,
-                    cropped=True,
+                    track_message=lambda _cid, sent: _track_sent_message(_cid, sent),
                 )
-                if initial_path is None:
-                    raise RuntimeError("initial notebook exercise render returned no image")
-                try:
-                    with initial_path.open("rb") as photo:
-                        sent_photo = await context.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=photo,
-                        )
-                finally:
-                    initial_path.unlink(missing_ok=True)
-            _track_sent_message(chat_id, sent_photo)
-            context.chat_data["how_to_solve_initial_message_id"] = int(
-                getattr(sent_photo, "message_id", 0)
-            )
-            sent_followup = await context.bot.send_message(
-                chat_id=chat_id,
-                text="עכשיו כשיש לנו תרגיל, מה שנעשה זה פשוט להעתיק אותו, כל אחד והדרך שלו למחברת בצורה הבאה:",
-                reply_markup=build_how_to_solve_step_keyboard(),
-            )
-            _track_sent_message(chat_id, sent_followup)
         except Exception as exc:
             log.exception("Failed to generate easy intro exercise chat=%s: %s", chat_id, exc)
             sent = await context.bot.send_message(
@@ -2485,6 +2503,93 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if previous_stage is None:
                 return
 
+            if stage == "mx_point_details":
+                await _delete_callback_message(query)
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_mx_points_message_id", None),
+                )
+                notebook_path = render_notebook_exercise_png_temp(
+                    extracted,
+                    with_moment_nx_qx_details=True,
+                )
+                if notebook_path is None:
+                    raise RuntimeError("notebook nx/qx details render returned no image")
+                await _replace_how_to_solve_photo(context, chat_id, notebook_path)
+                qx_points_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_QX_POINTS_TEXT,
+                    build_how_to_solve_step_keyboard(),
+                )
+                if qx_points_mid:
+                    context.chat_data["how_to_solve_qx_points_message_id"] = qx_points_mid
+                context.chat_data["how_to_solve_stage"] = "qx_point_details"
+                return
+
+            if stage == "qx_point_details":
+                await _delete_callback_message(query)
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_qx_points_message_id", None),
+                )
+                notebook_path = render_notebook_exercise_png_temp(
+                    extracted,
+                    with_moment_nx_details=True,
+                )
+                if notebook_path is None:
+                    raise RuntimeError("notebook nx details render returned no image")
+                await _replace_how_to_solve_photo(context, chat_id, notebook_path)
+                nx_points_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_NX_POINTS_TEXT,
+                    build_how_to_solve_step_keyboard(),
+                )
+                if nx_points_mid:
+                    context.chat_data["how_to_solve_nx_points_message_id"] = nx_points_mid
+                context.chat_data["how_to_solve_stage"] = "nx_point_details"
+                return
+
+            if stage == "nx_point_details":
+                await _delete_callback_message(query)
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_nx_points_message_id", None),
+                )
+                notebook_path = render_notebook_exercise_png_temp(
+                    extracted,
+                    with_moment_diagram=True,
+                )
+                if notebook_path is None:
+                    raise RuntimeError("notebook moment render returned no image")
+                await _replace_how_to_solve_photo(context, chat_id, notebook_path)
+                intro_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_MOMENT_INTRO_TEXT,
+                )
+                if intro_mid:
+                    context.chat_data["how_to_solve_moment_intro_message_id"] = intro_mid
+                note_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_MOMENT_NOTE_TEXT,
+                )
+                if note_mid:
+                    context.chat_data["how_to_solve_moment_note_message_id"] = note_mid
+                await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_GRAPHS_DONE_TEXT,
+                    build_how_to_solve_step_keyboard(),
+                )
+                context.chat_data["how_to_solve_stage"] = "complete"
+                return
+
             if previous_stage == "copy":
                 await _delete_how_to_solve_message(
                     context,
@@ -2513,6 +2618,16 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
             if stage == "complete":
                 await _delete_callback_message(query)
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_moment_intro_message_id", None),
+                )
+                await _delete_how_to_solve_message(
+                    context,
+                    chat_id,
+                    context.chat_data.pop("how_to_solve_moment_note_message_id", None),
+                )
                 context.chat_data.pop("how_to_solve_notebook_message_id", None)
                 intro_id = await _send_how_to_solve_text(
                     context,
@@ -2583,11 +2698,100 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "reactions",
             "normal_diagram",
             "shear_diagram",
+            "complete",
+            "nx_point_details",
+            "qx_point_details",
         ):
             return
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         notebook_path = None
         try:
+            step_kb = build_how_to_solve_step_keyboard()
+
+            if stage == "qx_point_details":
+                notebook_path = render_notebook_exercise_png_temp(
+                    extracted,
+                    **_how_to_solve_render_kwargs(stage),
+                )
+                if notebook_path is None:
+                    raise RuntimeError("notebook all diagram details render returned no image")
+                await _delete_callback_message(query)
+                await _cleanup_how_to_solve_end_phase_messages(context, chat_id)
+                await _replace_how_to_solve_photo(
+                    context,
+                    chat_id,
+                    notebook_path,
+                )
+                finish_kb = (
+                    build_how_to_solve_finish_keyboard()
+                    if build_how_to_solve_finish_keyboard is not None
+                    else step_kb
+                )
+                mx_points_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_MX_POINTS_TEXT,
+                    finish_kb,
+                )
+                if mx_points_mid:
+                    context.chat_data["how_to_solve_mx_points_message_id"] = mx_points_mid
+                context.chat_data["how_to_solve_stage"] = "mx_point_details"
+                return
+
+            if stage == "nx_point_details":
+                notebook_path = render_notebook_exercise_png_temp(
+                    extracted,
+                    **_how_to_solve_render_kwargs(stage),
+                )
+                if notebook_path is None:
+                    raise RuntimeError("notebook nx/qx details render returned no image")
+                await _delete_callback_message(query)
+                await _cleanup_how_to_solve_end_phase_messages(context, chat_id)
+                await _replace_how_to_solve_photo(
+                    context,
+                    chat_id,
+                    notebook_path,
+                )
+                qx_points_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_QX_POINTS_TEXT,
+                    step_kb,
+                )
+                if qx_points_mid:
+                    context.chat_data["how_to_solve_qx_points_message_id"] = qx_points_mid
+                context.chat_data["how_to_solve_stage"] = "qx_point_details"
+                return
+
+            if stage == "complete":
+                notebook_path = render_notebook_exercise_png_temp(
+                    extracted,
+                    **_how_to_solve_render_kwargs(stage),
+                )
+                if notebook_path is None:
+                    raise RuntimeError("notebook nx details render returned no image")
+                await _delete_callback_message(query)
+                await _cleanup_how_to_solve_end_phase_messages(
+                    context,
+                    chat_id,
+                    drop_initial_exercise_photo=True,
+                )
+                await _replace_how_to_solve_photo(
+                    context,
+                    chat_id,
+                    notebook_path,
+                )
+                nx_points_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_NX_POINTS_TEXT,
+                    step_kb,
+                )
+                if nx_points_mid:
+                    context.chat_data["how_to_solve_nx_points_message_id"] = nx_points_mid
+                context.chat_data["how_to_solve_stage"] = "nx_point_details"
+                return
+
             notebook_path = render_notebook_exercise_png_temp(
                 extracted,
                 **_how_to_solve_render_kwargs(stage),
@@ -2595,7 +2799,6 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if notebook_path is None:
                 raise RuntimeError("notebook exercise render returned no image")
             next_stage = _HOW_TO_SOLVE_NEXT_STAGE[stage]
-            step_kb = build_how_to_solve_step_keyboard()
 
             if stage == "copy":
                 await _delete_callback_message(query)
@@ -2662,11 +2865,30 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     chat_id,
                     context.chat_data.pop("how_to_solve_intro_message_id", None),
                 )
-                await _delete_callback_message(query)
+                intro_mid = await _replace_how_to_solve_followup(
+                    context,
+                    query,
+                    chat_id,
+                    _HOW_TO_SOLVE_MOMENT_INTRO_TEXT,
+                )
+                if intro_mid:
+                    context.chat_data["how_to_solve_moment_intro_message_id"] = intro_mid
                 await _replace_how_to_solve_photo(
                     context,
                     chat_id,
                     notebook_path,
+                )
+                note_mid = await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_MOMENT_NOTE_TEXT,
+                )
+                if note_mid:
+                    context.chat_data["how_to_solve_moment_note_message_id"] = note_mid
+                await _send_how_to_solve_text(
+                    context,
+                    chat_id,
+                    _HOW_TO_SOLVE_GRAPHS_DONE_TEXT,
                     step_kb,
                 )
             context.chat_data["how_to_solve_stage"] = next_stage
@@ -4460,7 +4682,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _prompt_bug_report(update.message)
         return
 
-    if has_active_assistant_progress(chat_id):
+    if has_active_how_to_solve(context):
         await _reply_text_safe(
             update.message,
             "מעולה, כאן משתמשים בכפתור למעלה — «המשך».",

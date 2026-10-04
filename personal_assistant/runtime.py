@@ -682,14 +682,6 @@ async def deliver_assistant_after_approve(
 
     clear_assistant_prev_stack(chat_id)
     clear_personal_assistant_progress(chat_id)
-    start_opening(chat_id, extracted)
-    plan_text, menu_text = build_opening_messages_hebrew(extracted)
-
-    sent = await send_text(context, chat_id, plan_text)
-    try:
-        append_assistant_message_id(chat_id, int(getattr(sent, "message_id", 0)))
-    except Exception:
-        pass
 
     if draft_msg_id is not None:
         try:
@@ -697,13 +689,31 @@ async def deliver_assistant_after_approve(
         except BadRequest:
             pass
 
-    await _send_with_keyboard(
-        context,
-        chat_id,
-        menu_text,
-        send_text=send_text,
-        reply_markup=build_opening_keyboard(extracted),
-    )
+    from bot.how_to_solve_guide import send_how_to_solve_opening
+    from bot.solution_session import append_practice_chat_message_id
+
+    def _track_message(_chat_id: int, sent: object) -> None:
+        try:
+            append_practice_chat_message_id(
+                _chat_id, int(getattr(sent, "message_id", 0) or 0)
+            )
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        await send_how_to_solve_opening(
+            context,
+            chat_id,
+            extracted,
+            track_message=_track_message,
+        )
+    except Exception as exc:
+        log.exception("Failed to start how-to-solve guide chat=%s: %s", chat_id, exc)
+        await send_text(
+            context,
+            chat_id,
+            "לא הצלחתי להכין את מדריך הפתרון כרגע. נסה/י שוב בעוד רגע.",
+        )
 
 
 async def deliver_after_draft_approve(

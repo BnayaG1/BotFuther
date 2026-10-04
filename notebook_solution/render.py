@@ -117,6 +117,44 @@ def render_exercise_moment_diagram_png_bytes(extracted: dict) -> bytes | None:
     return image_to_png(image)
 
 
+def _render_exercise_moment_details_png_bytes(
+    extracted: dict,
+    detail_diagrams: tuple[str, ...],
+) -> bytes | None:
+    problem = parse_problem(extracted if isinstance(extracted, dict) else {})
+    if problem is None:
+        return None
+    image = new_page()
+    draw_exercise(image, problem)
+    draw_decomposition(image, problem)
+    eq_bottom = draw_equilibrium(image, extracted, {})
+    draw_diagrams(
+        image,
+        extracted,
+        {},
+        problem,
+        eq_bottom,
+        include_details=True,
+        detail_diagrams=detail_diagrams,
+    )
+    return image_to_png(image)
+
+
+def render_exercise_moment_nx_details_png_bytes(extracted: dict) -> bytes | None:
+    """דף מחברת עם כל הגרפים ופירוט נקודות Nx בלבד."""
+    return _render_exercise_moment_details_png_bytes(extracted, ("Nx",))
+
+
+def render_exercise_moment_nx_qx_details_png_bytes(extracted: dict) -> bytes | None:
+    """דף מחברת עם כל הגרפים ופירוט נקודות Nx ו־Qx."""
+    return _render_exercise_moment_details_png_bytes(extracted, ("Nx", "Qx"))
+
+
+def render_exercise_moment_all_details_png_bytes(extracted: dict) -> bytes | None:
+    """דף מחברת עם כל הגרפים ופירוט נקודות Nx, Qx ו־Mx."""
+    return _render_exercise_moment_details_png_bytes(extracted, ("Nx", "Qx", "Mx"))
+
+
 def render_png_bytes(extracted: dict, solved: dict) -> bytes | None:
     """PNG של דף המחברת. שרטוט התרגיל בפינה השמאלית העליונה כשיש נתונים."""
     image = new_page()

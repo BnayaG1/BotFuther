@@ -295,6 +295,7 @@ def build_example(
     seed: int | None = None,
     rng: random.Random | None = None,
     load_count: int | None = None,
+    load_kinds: tuple[str, ...] | None = None,
     support_mode: str | None = None,
 ) -> Exercise:
     r = rng if rng is not None else make_rng(seed)
@@ -307,8 +308,20 @@ def build_example(
         fixed_side = "left"
     else:
         raise ValueError("support_mode must be simply_supported, cantilever, or None")
-    if load_count is None:
+    if load_kinds is not None:
+        if load_count is not None:
+            raise ValueError("load_kinds and load_count are mutually exclusive")
+        kinds = list(load_kinds)
+        n_dist = sum(1 for kind in kinds if kind == "distributed")
+        other_kinds = [kind for kind in kinds if kind != "distributed"]
+        n_total = len(kinds)
+        kinds = shuffled_load_kinds(r, n_dist, other_kinds)
+        udl_weights = random_udl_weights(r, n_dist)
+    elif load_count is None:
         n_total, n_dist, other_kinds = pick_load_composition(r)
+        kinds = shuffled_load_kinds(r, n_dist, other_kinds)
+        assert len(kinds) == n_total
+        udl_weights = random_udl_weights(r, n_dist)
     elif load_count == 2:
         n_total = 2
         regular_kinds = [
@@ -320,6 +333,9 @@ def build_example(
         else:
             n_dist = 0
             other_kinds = ["inclined", r.choice(regular_kinds)]
+        kinds = shuffled_load_kinds(r, n_dist, other_kinds)
+        assert len(kinds) == n_total
+        udl_weights = random_udl_weights(r, n_dist)
     elif load_count == 3:
         n_total = 3
         n_dist = 1
@@ -327,13 +343,11 @@ def build_example(
             kind for kind in NON_DISTRIBUTED_KINDS if kind != "inclined"
         ]
         other_kinds = ["inclined", r.choice(regular_kinds)]
+        kinds = shuffled_load_kinds(r, n_dist, other_kinds)
+        assert len(kinds) == n_total
+        udl_weights = random_udl_weights(r, n_dist)
     else:
         raise ValueError("load_count must be 2, 3, or None")
-    kinds = shuffled_load_kinds(r, n_dist, other_kinds)
-    assert len(kinds) == n_total
-
-    # מפורסים: שלמים ב־[1,7], כולם שונים זה מזה
-    udl_weights = random_udl_weights(r, n_dist)
 
     if mode == "cantilever":
         assert fixed_side in ("left", "right")

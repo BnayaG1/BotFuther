@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -250,7 +251,16 @@ async def test_assistant_after_approve_does_not_render_notebook():
         },
     }
 
-    with patch("bot.notebook_render.render_notebook_png_temp") as mock_render:
+    context.bot.send_photo = AsyncMock(return_value=MagicMock(message_id=901))
+    context.bot.send_message = AsyncMock(return_value=MagicMock(message_id=902))
+    context.chat_data = {}
+    png = Path(__file__).with_name("_tmp_hts_test.png")
+    png.write_bytes(b"fake")
+
+    with patch(
+        "bot.notebook_render.render_notebook_exercise_png_temp",
+        return_value=png,
+    ) as mock_render:
         await pa_runtime.deliver_assistant_after_approve(
             context,
             chat_id,
@@ -262,10 +272,10 @@ async def test_assistant_after_approve_does_not_render_notebook():
             edit_draft_message=edit_draft,
         )
 
-    mock_render.assert_not_called()
-    send_text.assert_awaited()
-    bodies = [call.args[2] for call in send_text.await_args_list]
-    assert any("מדובר בתרגיל" in b or "איך תרצה להמשיך" in b for b in bodies)
+    mock_render.assert_called_once()
+    send_text.assert_not_awaited()
+    assert context.chat_data.get("how_to_solve_stage") == "copy"
+    assert isinstance(context.chat_data.get("how_to_solve_extracted"), dict)
     context.bot.delete_message.assert_awaited_once_with(
         chat_id=chat_id, message_id=12
     )

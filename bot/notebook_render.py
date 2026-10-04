@@ -76,6 +76,9 @@ def render_notebook_exercise_png_temp(
     with_normal_diagram: bool = False,
     with_shear_diagram: bool = False,
     with_moment_diagram: bool = False,
+    with_moment_nx_details: bool = False,
+    with_moment_nx_qx_details: bool = False,
+    with_moment_all_details: bool = False,
 ) -> Path | None:
     """PNG זמני של שרטוט תרגיל במראה המחברת."""
     try:
@@ -84,13 +87,22 @@ def render_notebook_exercise_png_temp(
             render_exercise_decomposition_png_bytes,
             render_exercise_equations_png_bytes,
             render_exercise_moment_diagram_png_bytes,
+            render_exercise_moment_nx_details_png_bytes,
+            render_exercise_moment_nx_qx_details_png_bytes,
+            render_exercise_moment_all_details_png_bytes,
             render_exercise_normal_diagram_png_bytes,
             render_exercise_png_bytes,
             render_exercise_reactions_png_bytes,
             render_exercise_shear_diagram_png_bytes,
         )
 
-        if with_moment_diagram:
+        if with_moment_all_details:
+            render = render_exercise_moment_all_details_png_bytes
+        elif with_moment_nx_qx_details:
+            render = render_exercise_moment_nx_qx_details_png_bytes
+        elif with_moment_nx_details:
+            render = render_exercise_moment_nx_details_png_bytes
+        elif with_moment_diagram:
             render = render_exercise_moment_diagram_png_bytes
         elif with_shear_diagram:
             render = render_exercise_shear_diagram_png_bytes

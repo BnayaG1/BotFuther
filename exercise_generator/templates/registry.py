@@ -60,15 +60,17 @@ def build_family(
     *,
     seed: int | None = None,
     load_count: int | None = None,
+    load_kinds: tuple[str, ...] | None = None,
     support_mode: str | None = None,
 ) -> Exercise:
     builder = get_builder(family_id)
-    if load_count is None and support_mode is None:
+    if load_count is None and load_kinds is None and support_mode is None:
         return builder(seed=seed)
     if family_id != LOCKED_FAMILY:
         raise ValueError("custom generation options require the locked exercise family")
     return builder(
         seed=seed,
         load_count=load_count,
+        load_kinds=load_kinds,
         support_mode=support_mode,
     )

@@ -29,6 +29,7 @@ def draw_diagrams(
     eq_bottom: float = 0.0,
     *,
     include_details: bool = True,
+    detail_diagrams: tuple[str, ...] = ("Nx", "Qx", "Mx"),
 ) -> None:
     del solved
     data = _curves(extracted)
@@ -50,7 +51,18 @@ def draw_diagrams(
     _panel(draw, xs, shears, axis_q, _BLUE, "Q(x)", "t", fonts, down=False, half=half)
     _panel(draw, xs, moments, axis_m, _RED, "M(x)", "tm", fonts, down=True, half=half)
     if include_details:
-        _draw_point_details(draw, xs, normals, shears, moments, problem, fonts, top, eq_bottom)
+        _draw_point_details(
+            draw,
+            xs,
+            normals,
+            shears,
+            moments,
+            problem,
+            fonts,
+            top,
+            eq_bottom,
+            detail_diagrams=detail_diagrams,
+        )
 
 
 def draw_normal_diagram(
@@ -266,13 +278,18 @@ def _draw_point_details(
     fonts: dict,
     top: float,
     eq_bottom: float,
+    *,
+    detail_diagrams: tuple[str, ...] = ("Nx", "Qx", "Mx"),
 ) -> None:
     if not problem.stations:
+        return
+    columns = [name for name in ("Nx", "Qx", "Mx") if name in detail_diagrams]
+    if not columns:
         return
     page_w, page_h = page_pixel_size()
     left = float(_BEAM_X0 + _BEAM_SPAN + _CELL_PX * 8)
     right = page_w - _CELL_PX * 4
-    col_w = (right - left) / 3
+    col_w = (right - left) / len(columns)
     min_y = max(top, eq_bottom + _CELL_PX * 3)
     bottom = page_h - _CELL_PX * 3
     n = len(problem.stations)
@@ -288,9 +305,27 @@ def _draw_point_details(
     n_lefts = [_sample_left(xs, normals, x) for x, _ in problem.stations]
     q_lefts = [_sample_left(xs, shears, x) for x, _ in problem.stations]
     m_lefts = [_sample_left(xs, moments, x) for x, _ in problem.stations]
-    _draw_detail_col(draw, left, y0, "Nx", "N", "t", problem.stations, n_vals, _GREEN, fonts, line_h, n_lefts)
-    _draw_detail_col(draw, left + col_w, y0, "Qx", "Q", "t", problem.stations, q_vals, _BLUE, fonts, line_h, q_lefts)
-    _draw_detail_col(draw, left + 2 * col_w, y0, "Mx", "M", "tm", problem.stations, m_vals, _RED, fonts, line_h, m_lefts)
+    col_specs = {
+        "Nx": ("Nx", "N", "t", n_vals, _GREEN, n_lefts),
+        "Qx": ("Qx", "Q", "t", q_vals, _BLUE, q_lefts),
+        "Mx": ("Mx", "M", "tm", m_vals, _RED, m_lefts),
+    }
+    for index, name in enumerate(columns):
+        title, sym, unit, vals, color, lefts = col_specs[name]
+        _draw_detail_col(
+            draw,
+            left + col_w * index,
+            y0,
+            title,
+            sym,
+            unit,
+            problem.stations,
+            vals,
+            color,
+            fonts,
+            line_h,
+            lefts,
+        )
 
 
 def _draw_detail_col(

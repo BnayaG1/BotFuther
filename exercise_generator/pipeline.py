@@ -20,6 +20,12 @@ from exercise_generator.templates.registry import (
 )
 from exercise_generator.validate import require_valid
 
+HOW_TO_SOLVE_LOAD_KINDS: tuple[str, str, str] = (
+    "inclined",
+    "distributed",
+    "moment",
+)
+
 
 @dataclass
 class GeneratedArtifact:
@@ -34,6 +40,7 @@ def generate_exercise(
     family: str | None = None,
     seed: int | None = None,
     load_count: int | None = None,
+    load_kinds: tuple[str, ...] | None = None,
     support_mode: str | None = None,
     out_dir: Path | str | None = None,
     stem: str = "ex_0001",
@@ -47,6 +54,7 @@ def generate_exercise(
         family_id,
         seed=effective_seed,
         load_count=load_count,
+        load_kinds=load_kinds,
         support_mode=support_mode,
     )
     require_valid(exercise)
@@ -98,4 +106,10 @@ def generate_batch(
     return results
 
 
-__all__ = ["GeneratedArtifact", "LOCKED_FAMILY", "generate_batch", "generate_exercise"]
+__all__ = [
+    "GeneratedArtifact",
+    "HOW_TO_SOLVE_LOAD_KINDS",
+    "LOCKED_FAMILY",
+    "generate_batch",
+    "generate_exercise",
+]

@@ -50,6 +50,15 @@ def build_how_to_solve_step_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def build_how_to_solve_finish_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("ראשי", callback_data="menu:statics"),
+            InlineKeyboardButton("לתרגול", callback_data="menu:give_exercise"),
+        ],
+    ])
+
+
 def intro_topic_body_hebrew(topic_id: str) -> str | None:
     func = _INTRO_TOPIC_BODIES.get(topic_id)
     if func is None:
