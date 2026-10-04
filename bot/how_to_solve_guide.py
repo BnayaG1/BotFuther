@@ -24,6 +24,7 @@ HOW_TO_SOLVE_STATE_KEYS = (
     "how_to_solve_notebook_message_id",
     "how_to_solve_intro_message_id",
     "how_to_solve_initial_message_id",
+    "how_to_solve_reuse_practice_exercise",
     "how_to_solve_moment_intro_message_id",
     "how_to_solve_moment_note_message_id",
     "how_to_solve_nx_points_message_id",
@@ -57,27 +58,34 @@ async def send_how_to_solve_opening(
     extracted: dict,
     *,
     track_message: TrackMessageFn | None = None,
+    skip_initial_exercise_photo: bool = False,
 ) -> None:
     """שולח תמונת תרגיל + הודעת «העתקה» עם כפתורי המשך/חזור."""
     from bot.notebook_render import render_notebook_exercise_png_temp
 
     init_how_to_solve_state(context, extracted)
-    initial_path = render_notebook_exercise_png_temp(extracted, cropped=True)
-    if initial_path is None:
-        raise RuntimeError("initial notebook exercise render returned no image")
+    if skip_initial_exercise_photo:
+        context.chat_data["how_to_solve_reuse_practice_exercise"] = True
 
     def _track(sent: object | None) -> None:
         if track_message is None or sent is None:
             return
         track_message(chat_id, sent)
 
+    initial_path = None
+    if not skip_initial_exercise_photo:
+        initial_path = render_notebook_exercise_png_temp(extracted, cropped=True)
+        if initial_path is None:
+            raise RuntimeError("initial notebook exercise render returned no image")
+
     try:
-        with initial_path.open("rb") as photo:
-            sent_photo = await context.bot.send_photo(chat_id=chat_id, photo=photo)
-        _track(sent_photo)
-        context.chat_data["how_to_solve_initial_message_id"] = int(
-            getattr(sent_photo, "message_id", 0) or 0
-        )
+        if initial_path is not None:
+            with initial_path.open("rb") as photo:
+                sent_photo = await context.bot.send_photo(chat_id=chat_id, photo=photo)
+            _track(sent_photo)
+            context.chat_data["how_to_solve_initial_message_id"] = int(
+                getattr(sent_photo, "message_id", 0) or 0
+            )
         sent_followup = await context.bot.send_message(
             chat_id=chat_id,
             text=HOW_TO_SOLVE_COPY_TEXT,
@@ -85,4 +93,5 @@ async def send_how_to_solve_opening(
         )
         _track(sent_followup)
     finally:
-        initial_path.unlink(missing_ok=True)
+        if initial_path is not None:
+            initial_path.unlink(missing_ok=True)

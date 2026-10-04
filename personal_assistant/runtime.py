@@ -690,7 +690,10 @@ async def deliver_assistant_after_approve(
             pass
 
     from bot.how_to_solve_guide import send_how_to_solve_opening
-    from bot.solution_session import append_practice_chat_message_id
+    from bot.solution_session import append_practice_chat_message_id, get_solution_session
+
+    session = get_solution_session(chat_id)
+    skip_initial_photo = bool(session is not None and session.from_practice)
 
     def _track_message(_chat_id: int, sent: object) -> None:
         try:
@@ -706,6 +709,7 @@ async def deliver_assistant_after_approve(
             chat_id,
             extracted,
             track_message=_track_message,
+            skip_initial_exercise_photo=skip_initial_photo,
         )
     except Exception as exc:
         log.exception("Failed to start how-to-solve guide chat=%s: %s", chat_id, exc)
