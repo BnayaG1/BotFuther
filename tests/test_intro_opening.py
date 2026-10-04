@@ -25,70 +25,16 @@ def test_opening_message_and_topic_buttons():
     assert isinstance(kb, InlineKeyboardMarkup)
     buttons = [btn for row in kb.inline_keyboard for btn in row]
     labels = [btn.text for btn in buttons]
-    assert labels == ["איך פותרים תרגיל", "מבוא", "עומס מפורס", "עומס אלכסוני"]
+    assert labels == ["איך פותרים תרגיל", "עומס מפורס", "עומס אלכסוני"]
 
-    sub_kb = opening.build_how_to_approach_keyboard()
-    assert isinstance(sub_kb, InlineKeyboardMarkup)
-    sub_buttons = [btn for row in sub_kb.inline_keyboard for btn in row]
-    sub_labels = [btn.text for btn in sub_buttons]
-    assert sub_labels == ["ריתום", "סמכים"]
-
-    assert opening.parse_intro_callback("intro:how_to_approach") == "how_to_approach"
     assert opening.parse_intro_callback("intro:how_to_solve_placeholder") == "how_to_solve_placeholder"
     assert opening.parse_intro_callback("intro:distributed_load") == "distributed_load"
     assert opening.parse_intro_callback("intro:inclined_load") == "inclined_load"
     assert opening.parse_intro_callback("intro:practice_inclined") == "practice_inclined"
-    assert opening.parse_intro_callback("intro:fixed_support_exercises") == "fixed_support_exercises"
-    assert opening.parse_intro_callback("intro:support_exercises") == "support_exercises"
     assert opening.parse_intro_callback("intro:main") == "main"
     assert opening.parse_intro_callback("menu:intro") is None
-
-
-def test_foundations_lesson_pages_and_navigation():
-    page_ids = [
-        "foundations_start",
-        "foundations_index",
-        "foundations_concept",
-        "foundations_loads",
-        "foundations_equilibrium",
-        "foundations_workflow",
-        "foundations_summary",
-    ]
-
-    for page_id in page_ids:
-        assert opening.intro_foundations_page_hebrew(page_id)
-        assert isinstance(opening.build_intro_foundations_keyboard(page_id), InlineKeyboardMarkup)
-        assert opening.parse_intro_callback(f"intro:{page_id}") == page_id
-
-
-def test_build_mavo_exercise():
-    ex = opening.build_mavo_exercise()
-    assert ex.L == 10.0
-    assert len(ex.supports) == 2
-    assert ex.supports[0].type == "pin" and ex.supports[0].x == 0.0
-    assert ex.supports[1].type == "roller" and ex.supports[1].x == 10.0
-    assert len(ex.loads) == 2
-    assert ex.loads[0].x == 3.0 and ex.loads[0].Fy == 10.0
-    assert ex.loads[1].x == 8.0 and ex.loads[1].Fx == 5.0
-    assert len(ex.dim_row_top.segments) == 3
-    assert ex.dim_row_top.segments[0].x1 == 0.0 and ex.dim_row_top.segments[0].x2 == 3.0
-    assert ex.dim_row_top.segments[1].x1 == 3.0 and ex.dim_row_top.segments[1].x2 == 8.0
-    assert ex.dim_row_top.segments[2].x1 == 8.0 and ex.dim_row_top.segments[2].x2 == 10.0
-    assert len(ex.dim_row_bottom.segments) == 1
-    assert ex.dim_row_bottom.segments[0].x1 == 0.0 and ex.dim_row_bottom.segments[0].x2 == 10.0
-
-
-def test_build_fixed_mavo_exercise():
-    ex = opening.build_fixed_mavo_exercise()
-    assert ex.L == 10.0
-    assert ex.support_mode == "cantilever"
-    assert len(ex.supports) == 1
-    assert ex.supports[0].type == "fixed" and ex.supports[0].x == 0.0
-    assert len(ex.loads) == 2
-    assert ex.loads[0].x == 3.0 and ex.loads[0].Fy == 10.0
-    assert ex.loads[1].x == 8.0 and ex.loads[1].Fx == 5.0
-    assert len(ex.dim_row_top.segments) == 3
-    assert len(ex.dim_row_bottom.segments) == 1
+    assert opening.parse_intro_callback("intro:how_to_approach") is None
+    assert opening.parse_intro_callback("intro:foundations_start") is None
 
 
 @pytest.mark.anyio
@@ -120,119 +66,6 @@ async def test_menu_intro_sends_opening():
     )
     context.bot.send_message.assert_not_awaited()
     query.message.delete.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_on_intro_callback_how_to_approach():
-    update = MagicMock()
-    query = MagicMock()
-    query.data = "intro:how_to_approach"
-    query.answer = AsyncMock()
-    query.message = MagicMock()
-    query.message.chat_id = 991008
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_chat = MagicMock(id=991008)
-
-    context = MagicMock()
-    context.bot.send_message = AsyncMock()
-    context.bot.send_photo = AsyncMock()
-
-    await handlers.on_intro_callback(update, context)
-
-    query.answer.assert_awaited()
-    context.bot.send_message.assert_not_called()
-    context.bot.send_photo.assert_awaited_once()
-    sent = context.bot.send_photo.await_args.kwargs
-    assert sent["caption"] == opening.intro_foundations_page_hebrew("foundations_start")
-    assert isinstance(sent.get("reply_markup"), InlineKeyboardMarkup)
-    labels = [btn.text for row in sent["reply_markup"].inline_keyboard for btn in row]
-    assert labels == ["מתחילים", "תוכן העניינים", "חזרה ללימוד בסיס"]
-
-
-@pytest.mark.anyio
-async def test_foundations_continue_edits_photo_in_place():
-    update = MagicMock()
-    query = MagicMock()
-    query.data = "intro:foundations_concept"
-    query.answer = AsyncMock()
-    query.message = MagicMock()
-    query.message.chat_id = 991018
-    query.message.message_id = 501
-    query.message.photo = (MagicMock(),)
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_chat = MagicMock(id=991018)
-
-    context = MagicMock()
-    context.bot.send_message = AsyncMock()
-    context.bot.send_photo = AsyncMock()
-    context.bot.edit_message_media = AsyncMock()
-
-    await handlers.on_intro_callback(update, context)
-
-    query.answer.assert_awaited()
-    context.bot.edit_message_media.assert_awaited_once()
-    kwargs = context.bot.edit_message_media.await_args.kwargs
-    assert kwargs["message_id"] == 501
-    assert kwargs["media"].caption == opening.intro_foundations_page_hebrew("foundations_concept")
-    context.bot.send_photo.assert_not_awaited()
-    context.bot.send_message.assert_not_awaited()
-    query.message.delete.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_on_intro_callback_support_exercises():
-    update = MagicMock()
-    query = MagicMock()
-    query.data = "intro:support_exercises"
-    query.answer = AsyncMock()
-    query.message = MagicMock()
-    query.message.chat_id = 991009
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_chat = MagicMock(id=991009)
-
-    context = MagicMock()
-    context.bot.send_message = AsyncMock()
-    context.bot.send_photo = AsyncMock()
-
-    await handlers.on_intro_callback(update, context)
-
-    query.answer.assert_awaited()
-    query.message.delete.assert_awaited_once()
-    context.bot.send_photo.assert_awaited_once()
-    context.bot.send_message.assert_awaited_once()
-    msg_args = context.bot.send_message.await_args.kwargs
-    assert "תרגיל סמכים פשוט" in msg_args["text"]
-    assert isinstance(msg_args.get("reply_markup"), InlineKeyboardMarkup)
-
-
-@pytest.mark.anyio
-async def test_on_intro_callback_fixed_support_exercises():
-    update = MagicMock()
-    query = MagicMock()
-    query.data = "intro:fixed_support_exercises"
-    query.answer = AsyncMock()
-    query.message = MagicMock()
-    query.message.chat_id = 991010
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_chat = MagicMock(id=991010)
-
-    context = MagicMock()
-    context.bot.send_message = AsyncMock()
-    context.bot.send_photo = AsyncMock()
-
-    await handlers.on_intro_callback(update, context)
-
-    query.answer.assert_awaited()
-    query.message.delete.assert_awaited_once()
-    context.bot.send_photo.assert_awaited_once()
-    context.bot.send_message.assert_awaited_once()
-    msg_args = context.bot.send_message.await_args.kwargs
-    assert "תרגיל ריתום פשוט" in msg_args["text"]
-    assert isinstance(msg_args.get("reply_markup"), InlineKeyboardMarkup)
 
 
 @pytest.mark.anyio

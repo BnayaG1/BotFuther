@@ -1,113 +1,30 @@
 # -*- coding: utf-8 -*-
-"""קובץ פתיחה — הודעת מבוא לסטטיקה + כפתורי נושאים."""
+"""קובץ פתיחה — הודעת לימוד בסיס + כפתורי נושאים."""
 from __future__ import annotations
 
 from collections.abc import Callable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from pathlib import Path
-
-from exercise_generator.geometry import row_from_breaks
-from exercise_generator.schema import (
-    Exercise,
-    LabeledPoint,
-    PointLoad,
-    Support,
-)
 from intro.distributed_load import body_hebrew as distributed_load_body_hebrew
-from intro.fixed_support_exercises import body_hebrew as fixed_support_body_hebrew
 from intro.inclined_load import body_hebrew as inclined_load_body_hebrew
-from intro.support_exercises import body_hebrew as support_body_hebrew
 
 _OPENING_TEXT = "לאן תרצה לקחת את זה?"
 
-_HOW_TO_APPROACH_FIRST_TEXT = (
-    "בסטטיקה, העקרון המנחה הוא שבסופו ש דבר הכל מתאפס ל-0, ובחודשים הראשונים של הלמידה התרגילים ייראו ככה:\n"
-    "קורה + 2 סמכים\\ריתום + עומסים.\n"
-    "\n"
-    "זה הכל.\n"
-    "\n"
-    "אם אתה רוצה רגע להבין מה עומד מאחורי התרגילים לחץ על הכפתור הבא"
-)
-
-_HOW_TO_APPROACH_SECOND_TEXT = (
-    "במידה ואתה רוצה ללמוד תכלס איך לפתור תרגילים בחר את סוג התרגיל ונעבור על איך פותרים אותו"
-)
-
 _INTRO_MAIN_BUTTONS = [
     ("how_to_solve_placeholder", "איך פותרים תרגיל"),
-    ("how_to_approach", "מבוא"),
     ("distributed_load", "עומס מפורס"),
     ("inclined_load", "עומס אלכסוני"),
-]
-
-_HOW_TO_APPROACH_BUTTONS = [
-    ("fixed_support_exercises", "ריתום"),
-    ("support_exercises", "סמכים"),
-]
-
-_FOUNDATIONS_PAGES = {
-    "foundations_start": (
-        "מבוא לסטטיקה\n"
-        "\n"
-        "ארבעה צעדים קצרים. רק מה שצריך כדי להתחיל לפתור."
-    ),
-    "foundations_index": (
-        "תוכן העניינים\n"
-        "\n"
-        "מומלץ לעבור לפי הסדר. כל חלק מתמקד במה שצריך לדעת למבחן."
-    ),
-    "foundations_concept": (
-        "1 מתוך 4\n"
-        "ברוב התרגילים המטרה היא למצוא את הריאקציות של הסמכים."
-    ),
-    "foundations_loads": (
-        "2 מתוך 4\n"
-        "לפני המשוואות: מזהים סמכים, מפרקים כוח אלכסוני וממירים עומס מפורס."
-    ),
-    "foundations_equilibrium": (
-        "3 מתוך 4\n"
-        "מתחילים בדרך כלל במומנטים סביב סמך, ואז משלימים את משוואות הכוחות."
-    ),
-    "foundations_workflow": (
-        "4 מתוך 4\n"
-        "שרטוט, הכנת העומסים, פתרון במומנטים ובדיקה בעזרת סכום הכוחות."
-    ),
-    "foundations_summary": (
-        "סיימת את המבוא לסטטיקה\n"
-        "\n"
-        "זה כל הבסיס: שרטוט נכון, הכנת עומסים ושלוש משוואות שיווי משקל.\n"
-        "עכשיו עוברים לתרגול."
-    ),
-}
-
-_FOUNDATIONS_ORDER = [
-    "foundations_concept",
-    "foundations_loads",
-    "foundations_equilibrium",
-    "foundations_workflow",
-    "foundations_summary",
 ]
 
 _INTRO_TOPIC_BODIES: dict[str, Callable[[], str]] = {
     "distributed_load": distributed_load_body_hebrew,
     "inclined_load": inclined_load_body_hebrew,
-    "support_exercises": support_body_hebrew,
-    "fixed_support_exercises": fixed_support_body_hebrew,
 }
 
 
 def opening_message_hebrew() -> str:
     return _OPENING_TEXT
-
-
-def how_to_approach_message_hebrew() -> str:
-    return _HOW_TO_APPROACH_FIRST_TEXT
-
-
-def how_to_approach_second_message_hebrew() -> str:
-    return _HOW_TO_APPROACH_SECOND_TEXT
 
 
 def build_opening_keyboard() -> InlineKeyboardMarkup:
@@ -133,73 +50,6 @@ def build_how_to_solve_step_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def build_how_to_approach_keyboard() -> InlineKeyboardMarkup:
-    row = [
-        InlineKeyboardButton(title, callback_data=f"intro:{topic_id}")
-        for topic_id, title in _HOW_TO_APPROACH_BUTTONS
-    ]
-    return InlineKeyboardMarkup([row])
-
-
-def build_mavo_continue_keyboard() -> InlineKeyboardMarkup:
-    row = [InlineKeyboardButton("המשך", callback_data="intro:mavo_continue")]
-    return InlineKeyboardMarkup([row])
-
-
-def intro_foundations_page_hebrew(page_id: str) -> str | None:
-    return _FOUNDATIONS_PAGES.get(page_id)
-
-
-def build_intro_foundations_keyboard(page_id: str) -> InlineKeyboardMarkup:
-    if page_id == "foundations_start":
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("מתחילים", callback_data="intro:foundations_concept")],
-            [InlineKeyboardButton("תוכן העניינים", callback_data="intro:foundations_index")],
-            [InlineKeyboardButton("חזרה ללימוד בסיס", callback_data="intro:main")],
-        ])
-
-    if page_id == "foundations_index":
-        rows = [
-            [InlineKeyboardButton("מה מחפשים בתרגיל?", callback_data="intro:foundations_concept")],
-            [InlineKeyboardButton("עומסים וסמכים", callback_data="intro:foundations_loads")],
-            [InlineKeyboardButton("שיווי משקל ומומנטים", callback_data="intro:foundations_equilibrium")],
-            [InlineKeyboardButton("סדר עבודה במבחן", callback_data="intro:foundations_workflow")],
-            [InlineKeyboardButton("חזרה", callback_data="intro:foundations_start")],
-        ]
-        return InlineKeyboardMarkup(rows)
-
-    if page_id == "foundations_summary":
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("חזרה ללימוד בסיס", callback_data="intro:main")],
-            [InlineKeyboardButton("לעבור שוב על המבוא", callback_data="intro:foundations_start")],
-        ])
-
-    if page_id in _FOUNDATIONS_ORDER:
-        index = _FOUNDATIONS_ORDER.index(page_id)
-        rows = []
-        if index < len(_FOUNDATIONS_ORDER) - 1:
-            rows.append([InlineKeyboardButton("המשך", callback_data=f"intro:{_FOUNDATIONS_ORDER[index + 1]}")])
-        rows.append([
-            InlineKeyboardButton("הקודם", callback_data=f"intro:{_FOUNDATIONS_ORDER[index - 1] if index > 0 else 'foundations_start'}"),
-            InlineKeyboardButton("תוכן", callback_data="intro:foundations_index"),
-        ])
-        return InlineKeyboardMarkup(rows)
-
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("חזרה למבוא", callback_data="intro:foundations_start")]
-    ])
-
-
-def mavo_followup_message_hebrew(exercise_type: str = "סמכים") -> str:
-    return (
-        f"מעולה, ככה נראה תרגיל {exercise_type} פשוט.\n"
-        "\n"
-        "כשאתה ניגש לתרגיל, דבר ראשון אתה מעתיק למחברת את התרגיל בצורה מסודרת עם קווי המדידות. אם יש עומסים מפורסים או אלכסוניים, אתה מפרק אותם לפני שמתחילים לפתור את התרגיל.\n"
-        "\n"
-        "לחץ המשך ונמשיך"
-    )
-
-
 def intro_topic_body_hebrew(topic_id: str) -> str | None:
     func = _INTRO_TOPIC_BODIES.get(topic_id)
     if func is None:
@@ -216,7 +66,6 @@ def parse_intro_callback(data: str) -> str | None:
         return None
     topic_id = data.split(":", 1)[-1]
     valid_ids = {
-        "how_to_approach",
         "how_to_solve_placeholder",
         "how_to_solve_supports",
         "how_to_solve_fixed",
@@ -230,70 +79,8 @@ def parse_intro_callback(data: str) -> str | None:
         "inclined_show_solution",
         "distributed_try_again",
         "distributed_show_solution",
-        "foundations_index",
-        *_FOUNDATIONS_PAGES.keys(),
         *_INTRO_TOPIC_BODIES.keys(),
     }
     if topic_id in valid_ids:
         return topic_id
     return None
-
-
-def build_mavo_exercise() -> Exercise:
-    return Exercise(
-        L=10.0,
-        support_mode="simply_supported",
-        supports=[
-            Support(label="A", type="pin", x=0.0),
-            Support(label="B", type="roller", x=10.0),
-        ],
-        loads=[
-            PointLoad(type="point", x=3.0, Fy=10.0, Fx=0.0),
-            PointLoad(type="point", x=8.0, Fy=0.0, Fx=5.0),
-        ],
-        labeled_points=[
-            LabeledPoint(label="C", x=3.0),
-            LabeledPoint(label="D", x=8.0),
-        ],
-        dim_row_top=row_from_breaks([0.0, 3.0, 8.0, 10.0]),
-        dim_row_bottom=row_from_breaks([0.0, 10.0]),
-        family="intro_mavo",
-    )
-
-
-def generate_mavo_exercise_png(out_dir: Path, stem: str = "mavo_exercise") -> Path:
-    from exercise_generator.render.export import render_exercise_png
-
-    ex = build_mavo_exercise()
-    out_path = out_dir / f"{stem}.png"
-    return render_exercise_png(ex, out_path)
-
-
-def build_fixed_mavo_exercise() -> Exercise:
-    return Exercise(
-        L=10.0,
-        support_mode="cantilever",
-        supports=[
-            Support(label="A", type="fixed", x=0.0),
-        ],
-        loads=[
-            PointLoad(type="point", x=3.0, Fy=10.0, Fx=0.0),
-            PointLoad(type="point", x=8.0, Fy=0.0, Fx=5.0),
-        ],
-        labeled_points=[
-            LabeledPoint(label="B", x=3.0),
-            LabeledPoint(label="C", x=8.0),
-            LabeledPoint(label="D", x=10.0),
-        ],
-        dim_row_top=row_from_breaks([0.0, 3.0, 8.0, 10.0]),
-        dim_row_bottom=row_from_breaks([0.0, 10.0]),
-        family="intro_fixed_mavo",
-    )
-
-
-def generate_fixed_mavo_exercise_png(out_dir: Path, stem: str = "fixed_mavo_exercise") -> Path:
-    from exercise_generator.render.export import render_exercise_png
-
-    ex = build_fixed_mavo_exercise()
-    out_path = out_dir / f"{stem}.png"
-    return render_exercise_png(ex, out_path)

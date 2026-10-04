@@ -81,21 +81,11 @@ from bot.formulas import (
 )
 try:
     from intro import (
-        build_how_to_approach_keyboard,
         build_how_to_solve_keyboard,
         build_how_to_solve_step_keyboard,
-        build_intro_foundations_keyboard,
         build_inclined_load_keyboard,
-        build_mavo_continue_keyboard,
         build_opening_keyboard,
-        generate_fixed_mavo_exercise_png,
-        generate_foundations_visual,
-        generate_mavo_exercise_png,
-        how_to_approach_message_hebrew,
-        how_to_approach_second_message_hebrew,
-        intro_foundations_page_hebrew,
         intro_topic_body_hebrew,
-        mavo_followup_message_hebrew,
         opening_message_hebrew,
         parse_intro_callback,
     )
@@ -104,21 +94,11 @@ try:
 except Exception as exc:
     log.warning("Failed to import intro module (INTRO_AVAILABLE=False): %s", exc)
     INTRO_AVAILABLE = False
-    build_how_to_approach_keyboard = None  # type: ignore[assignment]
     build_how_to_solve_keyboard = None  # type: ignore[assignment]
     build_how_to_solve_step_keyboard = None  # type: ignore[assignment]
-    build_intro_foundations_keyboard = None  # type: ignore[assignment]
     build_inclined_load_keyboard = None  # type: ignore[assignment]
-    build_mavo_continue_keyboard = None  # type: ignore[assignment]
     build_opening_keyboard = None  # type: ignore[assignment]
-    generate_fixed_mavo_exercise_png = None  # type: ignore[assignment]
-    generate_foundations_visual = None  # type: ignore[assignment]
-    generate_mavo_exercise_png = None  # type: ignore[assignment]
-    how_to_approach_message_hebrew = None  # type: ignore[assignment]
-    how_to_approach_second_message_hebrew = None  # type: ignore[assignment]
-    intro_foundations_page_hebrew = None  # type: ignore[assignment]
     intro_topic_body_hebrew = None  # type: ignore[assignment]
-    mavo_followup_message_hebrew = None  # type: ignore[assignment]
     opening_message_hebrew = None  # type: ignore[assignment]
     parse_intro_callback = None  # type: ignore[assignment]
 
@@ -1339,7 +1319,7 @@ async def _send_intro_opening(
     *,
     edit_message=None,
 ) -> None:
-    """שולח את הודעת הפתיחה של מבוא לסטטיקה + כפתור המשך."""
+    """שולח את הודעת הפתיחה של לימוד בסיס + כפתורי נושאים."""
     if not INTRO_AVAILABLE:
         return
     text = opening_message_hebrew()
@@ -2055,7 +2035,7 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if action == "intro":
         if not INTRO_AVAILABLE:
-            await query.answer("המבוא בפיתוח ולא זמין כאן כרגע.", show_alert=True)
+            await query.answer("לימוד בסיס בפיתוח ולא זמין כאן כרגע.", show_alert=True)
             return
         await query.answer()
         if _message_has_photo(query.message):
@@ -2307,84 +2287,6 @@ async def _edit_how_to_solve_photo(
         return False
 
 
-async def _present_foundations_page(
-    context: ContextTypes.DEFAULT_TYPE,
-    query,
-    chat_id: int,
-    foundations_page_id: str,
-    foundations_text: str,
-    keyboard,
-) -> None:
-    """מציג כרטיס מבוא: עריכה באותו סוג הודעה, אחרת מחיקה ושליחה."""
-    visual_path = None
-    temp_dir = None
-    try:
-        if generate_foundations_visual is not None:
-            temp_dir = tempfile.TemporaryDirectory(prefix="intro_foundations_")
-            visual_path = generate_foundations_visual(
-                foundations_page_id, Path(temp_dir.name)
-            )
-
-        current_is_photo = _message_has_photo(query.message)
-        want_photo = visual_path is not None
-        message_id = _safe_message_id(query.message)
-
-        if want_photo and current_is_photo and message_id is not None:
-            try:
-                await context.bot.edit_message_media(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    media=InputMediaPhoto(
-                        media=visual_path.read_bytes(),
-                        caption=foundations_text,
-                    ),
-                    reply_markup=keyboard,
-                )
-                _track_sent_message(chat_id, query.message)
-                return
-            except BadRequest as exc:
-                if _is_not_modified_error(exc):
-                    _track_sent_message(chat_id, query.message)
-                    return
-                log.debug("foundations edit photo failed: %s", exc)
-            except Exception as exc:
-                log.debug("foundations edit photo failed: %s", exc)
-        elif not want_photo and not current_is_photo and query.message is not None:
-            try:
-                await query.message.edit_text(
-                    foundations_text, reply_markup=keyboard
-                )
-                _track_sent_message(chat_id, query.message)
-                return
-            except BadRequest as exc:
-                if _is_not_modified_error(exc):
-                    _track_sent_message(chat_id, query.message)
-                    return
-                log.debug("foundations edit text failed: %s", exc)
-            except Exception as exc:
-                log.debug("foundations edit text failed: %s", exc)
-
-        await _delete_callback_message(query)
-        if want_photo:
-            with visual_path.open("rb") as photo:
-                sent_message = await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo,
-                    caption=foundations_text,
-                    reply_markup=keyboard,
-                )
-        else:
-            sent_message = await context.bot.send_message(
-                chat_id=chat_id,
-                text=foundations_text,
-                reply_markup=keyboard,
-            )
-        _track_sent_message(chat_id, sent_message)
-    finally:
-        if temp_dir is not None:
-            temp_dir.cleanup()
-
-
 async def _send_how_to_solve_photo(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -2554,69 +2456,6 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             _track_sent_message(chat_id, sent)
         return
 
-
-    foundations_page_id = "foundations_start" if topic_id == "how_to_approach" else topic_id
-    foundations_text = (
-        intro_foundations_page_hebrew(foundations_page_id)
-        if intro_foundations_page_hebrew is not None
-        else None
-    )
-    if foundations_text is not None:
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-
-        if topic_id == "how_to_approach":
-            await cleanup_practice_chat(context, chat_id)
-            await _leave_formulas_chat_if_needed(context, chat_id)
-            begin_practice_chat_trail(chat_id)
-
-        keyboard = (
-            build_intro_foundations_keyboard(foundations_page_id)
-            if build_intro_foundations_keyboard is not None
-            else None
-        )
-        await _present_foundations_page(
-            context,
-            query,
-            chat_id,
-            foundations_page_id,
-            foundations_text,
-            keyboard,
-        )
-        return
-
-    if topic_id in ("support_exercises", "fixed_support_exercises"):
-        chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
-        _clear_how_to_solve_state(context)
-        await _delete_callback_message(query)
-        await cleanup_practice_chat(context, chat_id)
-        begin_practice_chat_trail(chat_id)
-
-        is_fixed = topic_id == "fixed_support_exercises"
-        gen_func = generate_fixed_mavo_exercise_png if is_fixed else generate_mavo_exercise_png
-        prefix = "exgen_fixed_mavo_" if is_fixed else "exgen_mavo_"
-        ex_label = "ריתום" if is_fixed else "סמכים"
-
-        if gen_func is not None:
-            with tempfile.TemporaryDirectory(prefix=prefix) as td:
-                png_path = gen_func(Path(td))
-                with png_path.open("rb") as photo:
-                    sent_photo = await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=photo,
-                        reply_markup=build_persistent_keyboard(),
-                    )
-                _track_sent_message(chat_id, sent_photo)
-
-        if mavo_followup_message_hebrew is not None:
-            followup_text = mavo_followup_message_hebrew(ex_label)
-            kb = build_mavo_continue_keyboard() if build_mavo_continue_keyboard is not None else None
-            sent_followup = await context.bot.send_message(
-                chat_id=chat_id,
-                text=followup_text,
-                reply_markup=kb,
-            )
-            _track_sent_message(chat_id, sent_followup)
-        return
 
     if topic_id == "how_to_solve_back":
         extracted = context.chat_data.get("how_to_solve_extracted")
