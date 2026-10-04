@@ -36,7 +36,7 @@ DB_PATH = Path(_raw_access_db).resolve() if _raw_access_db else (APP_DIR / "acce
 FORMULAS_FREE_WINDOW_SEC = 24 * 3600
 # המתנה מינימלית בין שימושים בפתרון (חשב) ובתרגול.
 FEATURE_COOLDOWN_SEC = float(IMAGE_COOLDOWN_SEC) if IMAGE_COOLDOWN_SEC > 0 else 600.0
-# אחרי חלון 24ש': פעם אחת לכל יכולת בחלון זה.
+# אחרי חלון 24ש' (ללא קופון): פעם ב-24 שעות לכל יכולת, מהרגע האחרון שקיבל.
 FEATURE_DAILY_LIMIT_SEC = 24 * 3600.0
 
 
@@ -337,17 +337,20 @@ def _evaluate_feature_access(
     if is_vip:
         return ImageAccessResult(status=ImageAccessStatus.OK, **base)
 
-    if last_used_at is not None and phase == UserAccessPhase.RESTRICTED:
-        daily_left = _cooldown_remaining_sec(
-            last_used_at, now, cooldown_sec=FEATURE_DAILY_LIMIT_SEC
-        )
-        if daily_left is not None:
-            return ImageAccessResult(
-                status=ImageAccessStatus.DAILY_LIMIT,
-                window_reset_sec=daily_left,
-                cooldown_remaining_sec=daily_left,
-                **base,
+    if phase == UserAccessPhase.RESTRICTED:
+        if last_used_at is not None:
+            daily_left = _cooldown_remaining_sec(
+                last_used_at, now, cooldown_sec=FEATURE_DAILY_LIMIT_SEC
             )
+            if daily_left is not None:
+                return ImageAccessResult(
+                    status=ImageAccessStatus.DAILY_LIMIT,
+                    window_reset_sec=daily_left,
+                    cooldown_remaining_sec=daily_left,
+                    **base,
+                )
+        return ImageAccessResult(status=ImageAccessStatus.OK, **base)
+
     cool = _cooldown_remaining_sec(
         last_used_at, now, cooldown_sec=FEATURE_COOLDOWN_SEC
     )
@@ -551,9 +554,27 @@ def _feature_label_hebrew(feature: str | None) -> str:
     return "פתרון"
 
 
+def _restricted_24h_reply_hebrew(
+    label: str,
+    *,
+    secs: float,
+) -> str:
+    hours = max(1, int((secs + 3599) // 3600))
+    return (
+        f"אפשר להשתמש ב«{label}» שוב בעוד כ-{hours} שעות "
+        f"(פעם ב-24 שעות מהרגע האחרון שקיבלת)."
+    )
+
+
 def image_access_reply_hebrew(result: ImageAccessResult) -> str:
     label = _feature_label_hebrew(result.feature)
+    phase = result.phase or UserAccessPhase.RESTRICTED
     if result.status == ImageAccessStatus.COOLDOWN:
+        if phase == UserAccessPhase.RESTRICTED:
+            secs = result.cooldown_remaining_sec or result.window_reset_sec or 0.0
+            if secs <= 0 and FEATURE_DAILY_LIMIT_SEC > 0:
+                secs = FEATURE_DAILY_LIMIT_SEC
+            return _restricted_24h_reply_hebrew(label, secs=secs)
         secs = result.cooldown_remaining_sec or 0.0
         mins = max(1, int((secs + 59) // 60))
         wait_mins = (
@@ -571,12 +592,20 @@ def image_access_reply_hebrew(result: ImageAccessResult) -> str:
         ImageAccessStatus.TRIAL_EXHAUSTED,
         ImageAccessStatus.NO_ENTITLEMENT,
     ):
-        return "הגעת למגבלת השימוש היומית."
+        secs = result.cooldown_remaining_sec or result.window_reset_sec or 0.0
+        return _restricted_24h_reply_hebrew(label, secs=secs)
     return ""
 
 
 def _status_line_hebrew(label: str, res: ImageAccessResult) -> str:
+    phase = res.phase or UserAccessPhase.RESTRICTED
     if res.status == ImageAccessStatus.COOLDOWN:
+        if phase == UserAccessPhase.RESTRICTED:
+            secs = res.cooldown_remaining_sec or res.window_reset_sec or 0.0
+            if secs <= 0 and FEATURE_DAILY_LIMIT_SEC > 0:
+                secs = FEATURE_DAILY_LIMIT_SEC
+            hours = max(1, int((secs + 3599) // 3600))
+            return f"{label}: זמין שוב בעוד כ-{hours} שעות (מחזור 24 שעות)."
         secs = res.cooldown_remaining_sec or 0.0
         mins = max(1, int((secs + 59) // 60))
         return f"{label}: זמין שוב בעוד כ-{mins} דקות."
@@ -585,8 +614,8 @@ def _status_line_hebrew(label: str, res: ImageAccessResult) -> str:
         ImageAccessStatus.QUOTA_EXCEEDED,
     ):
         secs = res.cooldown_remaining_sec or res.window_reset_sec or 0.0
-        mins = max(1, int((secs + 59) // 60))
-        return f"{label}: נעשה שימוש היום — זמין שוב בעוד כ-{mins} דקות."
+        hours = max(1, int((secs + 3599) // 3600))
+        return f"{label}: זמין שוב בעוד כ-{hours} שעות (מחזור 24 שעות)."
     return f"{label}: זמין עכשיו."
 
 
@@ -594,11 +623,13 @@ def quota_status_reply_hebrew(result: ImageAccessResult) -> str:
     phase = result.phase or UserAccessPhase.RESTRICTED
     lines: list[str] = []
     if phase == UserAccessPhase.PRIVILEGED:
-        lines.append("מצב: 24 השעות הראשונות (גישה חופשית).")
-        lines.append("פתרון ותרגול: המתנה קצרה בין שימושים.")
+        lines.append("מצב: גישה מועדפת (24 שעות ראשונות או קופון).")
+        lines.append("פתרון ותרגול: המתנה של 10 דקות בין שימושים.")
     else:
-        lines.append("מצב: גישה בסיסית.")
-        lines.append("פתרון ותרגול: פעם אחת ביממה לכל יכולת, עם המתנה בין שימושים.")
+        lines.append("מצב: גישה בסיסית (ללא קופון בתוקף).")
+        lines.append(
+            "פתרון ותרגול: פעם ב-24 שעות לכל יכולת, מהרגע האחרון שקיבלת."
+        )
     lines.append(_status_line_hebrew("פתרון", result))
     return "\n".join(lines)
 

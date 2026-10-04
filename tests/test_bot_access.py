@@ -80,7 +80,7 @@ def test_daily_limit_reply(access_db, monkeypatch):
     blocked = access.consume_solve_slot(user_id)
     assert blocked.status == access.ImageAccessStatus.DAILY_LIMIT
     msg = access.image_access_reply_hebrew(blocked)
-    assert "מגבלת" in msg
+    assert "24 שעות" in msg
 
 
 def test_restricted_solve_once_per_day(cooldown_db, monkeypatch):

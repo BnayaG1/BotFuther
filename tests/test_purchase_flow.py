@@ -41,6 +41,7 @@ def test_parse_buy_callback():
 def test_purchase_keyboards():
     menu_kb = build_purchase_menu_keyboard()
     assert len(menu_kb.inline_keyboard[0]) == 4
+    assert menu_kb.inline_keyboard[0][0].callback_data == "buy:confirm:6_30"
 
     confirm_kb = build_package_confirm_keyboard("6_30")
     assert confirm_kb.inline_keyboard[0][0].callback_data == "buy:confirm:6_30"
@@ -75,7 +76,7 @@ async def test_on_buy_callback_menu_shows_packages():
 
 
 @pytest.mark.anyio
-async def test_on_buy_callback_pkg_shows_confirmation():
+async def test_on_buy_callback_pkg_shows_payment_instructions():
     update = MagicMock(spec=Update)
     query = MagicMock(spec=CallbackQuery)
     query.data = "buy:pkg:6_30"
@@ -83,6 +84,7 @@ async def test_on_buy_callback_pkg_shows_confirmation():
     query.message = MagicMock(spec=Message)
     query.message.chat_id = 9922
     query.message.delete = AsyncMock()
+    query.message.edit_text = AsyncMock()
     update.callback_query = query
     update.effective_user = User(id=22, is_bot=False, first_name="T")
 
@@ -93,8 +95,9 @@ async def test_on_buy_callback_pkg_shows_confirmation():
     await on_buy_callback(update, context)
 
     query.answer.assert_awaited_once()
-    query.message.delete.assert_awaited_once()
-    context.bot.send_message.assert_awaited_once()
+    query.message.edit_text.assert_awaited_once()
+    args, kwargs = query.message.edit_text.await_args
+    assert "לתשלום בביט" in kwargs.get("text", args[0] if args else "")
 
 
 @pytest.mark.anyio
@@ -106,6 +109,7 @@ async def test_on_buy_callback_confirm_shows_payment_instructions():
     query.message = MagicMock(spec=Message)
     query.message.chat_id = 9933
     query.message.delete = AsyncMock()
+    query.message.edit_text = AsyncMock()
     update.callback_query = query
     update.effective_user = User(id=33, is_bot=False, first_name="T")
 
@@ -116,7 +120,6 @@ async def test_on_buy_callback_confirm_shows_payment_instructions():
     await on_buy_callback(update, context)
 
     query.answer.assert_awaited_once()
-    query.message.delete.assert_awaited_once()
-    context.bot.send_message.assert_awaited_once()
-    args, kwargs = context.bot.send_message.await_args
-    assert "לתשלום בביט" in kwargs.get("text", args[1] if len(args) > 1 else "")
+    query.message.edit_text.assert_awaited_once()
+    args, kwargs = query.message.edit_text.await_args
+    assert "לתשלום בביט" in kwargs.get("text", args[0] if args else "")

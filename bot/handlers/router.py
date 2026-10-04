@@ -57,11 +57,9 @@ from bot.access import (
 )
 
 from bot.purchase import (
-    build_package_confirm_keyboard,
     build_payment_keyboard,
     build_purchase_menu_keyboard,
     get_package,
-    package_confirm_text_hebrew,
     parse_buy_callback,
     payment_instructions_hebrew,
     purchase_menu_intro_hebrew,
@@ -389,6 +387,24 @@ async def _send_text_safe(
             raise
         return await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
+
+
+async def _ensure_practice_access(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int | None,
+) -> bool:
+    if user_id is None:
+        return True
+    access = check_practice_feature_access(int(user_id))
+    if access.status == ImageAccessStatus.OK:
+        return True
+    await _send_denied_with_purchase(
+        context,
+        chat_id,
+        image_access_reply_hebrew(access),
+    )
+    return False
 
 
 async def _send_denied_with_purchase(
@@ -2915,6 +2931,8 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         user_id = telegram_user_id(update)
         await _delete_callback_message(query)
+        if not await _ensure_practice_access(context, chat_id, user_id):
+            return
 
         await cleanup_practice_chat(context, chat_id)
         await _leave_formulas_chat_if_needed(context, chat_id)
@@ -2998,6 +3016,8 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         user_id = telegram_user_id(update)
         await _delete_callback_message(query)
+        if not await _ensure_practice_access(context, chat_id, user_id):
+            return
 
         await cleanup_practice_chat(context, chat_id)
         await _leave_formulas_chat_if_needed(context, chat_id)
@@ -3077,6 +3097,8 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         user_id = telegram_user_id(update)
         await _delete_callback_message(query)
+        if not await _ensure_practice_access(context, chat_id, user_id):
+            return
         try:
             from intro.distributed_load.generator import (
                 generate_on_support_exercise as generate_distributed_on_support_exercise,
@@ -3126,6 +3148,8 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         user_id = telegram_user_id(update)
         await _delete_callback_message(query)
+        if not await _ensure_practice_access(context, chat_id, user_id):
+            return
         try:
             from intro.distributed_load.generator import generate_exercise as generate_distributed_exercise
         except ImportError as exc:
@@ -3187,6 +3211,8 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
         user_id = telegram_user_id(update)
         await _delete_callback_message(query)
+        if not await _ensure_practice_access(context, chat_id, user_id):
+            return
         try:
             from intro.inclined_load import practice_prompt_hebrew
             from intro.inclined_load.generator import generate_exercise as generate_inclined_exercise
@@ -5033,6 +5059,37 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass
 
 
+async def _deliver_package_payment(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    pkg,
+    *,
+    query=None,
+) -> None:
+    """מציג הוראות ביט — מעדיף לערוך את הודעת תפריט הרכישה במקום שלב אישור."""
+    text = payment_instructions_hebrew(pkg)
+    keyboard = build_payment_keyboard()
+    message = getattr(query, "message", None) if query is not None else None
+    if message is not None:
+        try:
+            await message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return
+        except BadRequest as exc:
+            log.debug("Package payment edit failed chat=%s: %s", chat_id, exc)
+        await _delete_callback_message(query)
+    await _send_text_safe(
+        context,
+        chat_id,
+        text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
+
+
 async def _send_purchase_menu(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -5095,36 +5152,13 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _send_purchase_menu(context, chat_id)
         return
 
-    if action == "pkg":
+    if action in ("pkg", "confirm"):
         pkg = get_package(arg)
         if pkg is None:
             await query.answer("החבילה לא נמצאה", show_alert=True)
             return
         await query.answer()
-        await _delete_callback_message(query)
-        await _send_text_safe(
-            context,
-            chat_id,
-            package_confirm_text_hebrew(pkg),
-            reply_markup=build_package_confirm_keyboard(pkg.package_id),
-            parse_mode="HTML",
-        )
-        return
-
-    if action == "confirm":
-        pkg = get_package(arg)
-        if pkg is None:
-            await query.answer("החבילה לא נמצאה", show_alert=True)
-            return
-        await query.answer()
-        await _delete_callback_message(query)
-        await _send_text_safe(
-            context,
-            chat_id,
-            payment_instructions_hebrew(pkg),
-            reply_markup=build_payment_keyboard(),
-            parse_mode="HTML",
-        )
+        await _deliver_package_payment(context, chat_id, pkg, query=query)
         return
 
 

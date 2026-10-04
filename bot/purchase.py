@@ -94,7 +94,7 @@ def build_purchase_menu_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
             _period_label(pkg.period_days),
-            callback_data=f"buy:pkg:{pkg.package_id}",
+            callback_data=f"buy:confirm:{pkg.package_id}",
         )
         for pkg in PACKAGE_CATALOG
     ]
