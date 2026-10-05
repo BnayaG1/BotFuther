@@ -33,6 +33,18 @@ def test_admin_menu_keyboard_includes_vip_option():
     assert len(callbacks) == 5  # 4 רגילות + VIP אחד
 
 
+def test_admin_overview_keyboard_has_refresh():
+    from bot.admin_bot import build_overview_keyboard
+
+    keyboard = build_overview_keyboard()
+    labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+    assert "רענון" in labels
+    assert "משתמשים" in labels
+    assert "admin:overview" in callbacks
+    assert "admin:users:0" in callbacks
+
+
 def test_admin_persistent_reply_keyboard():
     from bot.admin_bot import (
         ADMIN_KB_COUPONS,

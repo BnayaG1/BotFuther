@@ -16,32 +16,56 @@ from bot.access import (
 log = logging.getLogger("beam_admin")
 
 SESSION_GAP_SEC = 30 * 60
+LIVE_WINDOW_SEC = 15 * 60
 USERS_PAGE_SIZE = 6
+RECENT_EVENTS_LIMIT = 10
 
 USAGE_ACTIONS: tuple[str, ...] = (
+    "start",
     "main",
     "intro",
+    "intro_practice",
     "solve",
+    "notebook",
+    "assistant",
     "practice",
     "formulas",
     "cog",
+    "cog_practice",
     "buy",
-    "bug",
+    "pay",
     "coupon",
+    "bug",
+    "denied",
 )
 USAGE_ACTION_SET = frozenset(USAGE_ACTIONS)
+NAV_ACTIONS = frozenset({"start", "main"})
 
 ACTION_LABEL_HEBREW: dict[str, str] = {
+    "start": "פתיחה",
     "main": "ראשי",
     "intro": "לימוד בסיס",
+    "intro_practice": "תרגול לימוד",
     "solve": "פתרון",
+    "notebook": "מחברת",
+    "assistant": "מדריך",
     "practice": "תרגול",
     "formulas": "נוסחאות",
     "cog": "מרכז כובד",
+    "cog_practice": "תרגול כובד",
     "buy": "רכישה",
+    "pay": "תשלום",
+    "coupon": "קופון",
     "bug": "דיווח",
-    "coupon": "מימוש קופון",
+    "denied": "נחסם",
 }
+
+USAGE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("עבודה", ("solve", "notebook", "assistant", "practice")),
+    ("לימוד", ("intro", "intro_practice", "formulas", "cog", "cog_practice")),
+    ("מסחרי", ("buy", "pay", "coupon")),
+    ("קשב", ("bug", "denied")),
+)
 
 _IL_TZ = timezone(timedelta(hours=3))
 
@@ -131,8 +155,39 @@ def _count_new_users(conn, start: float, end: float) -> int:
 
 def _count_active_users(conn, start: float, end: float) -> int:
     row = conn.execute(
-        "SELECT COUNT(DISTINCT user_id) FROM admin_usage_event WHERE ts >= ? AND ts < ?",
+        "SELECT COUNT(*) FROM admin_user_session "
+        "WHERE last_seen_at >= ? AND last_seen_at < ?",
         (start, end),
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def _count_live_users(conn, now: float) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM admin_user_session WHERE last_seen_at >= ?",
+        (now - LIVE_WINDOW_SEC,),
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def _count_events(conn, start: float, end: float) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM admin_usage_event WHERE ts >= ? AND ts < ?",
+        (start, end),
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def _count_new_engaged(conn, start: float, end: float) -> int:
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT f.user_id) FROM user_first_seen f "
+        "WHERE f.user_id > 0 AND f.first_seen_at >= ? AND f.first_seen_at < ? "
+        "AND EXISTS ("
+        "  SELECT 1 FROM admin_usage_event e "
+        "  WHERE e.user_id = f.user_id AND e.ts >= ? AND e.ts < ? "
+        "  AND e.action NOT IN ('start', 'main')"
+        ")",
+        (start, end, start, end),
     ).fetchone()
     return int(row[0] if row else 0)
 
@@ -180,6 +235,7 @@ def overview_stats(*, now: float | None = None) -> dict:
     with _db_lock:
         return {
             "now": ts,
+            "live": _count_live_users(conn, ts),
             "day": _window_bundle(conn, day_start, ts),
             "week": _window_bundle(conn, week_start, ts),
         }
@@ -193,8 +249,10 @@ def _window_bundle(conn, start: float, end: float) -> dict:
         "end": end,
         "active_users": _count_active_users(conn, start, end),
         "new_users": _count_new_users(conn, start, end),
+        "new_engaged": _count_new_engaged(conn, start, end),
         "sessions": sessions,
         "avg_dwell_sec": avg,
+        "events": _count_events(conn, start, end),
         "actions": _action_counts(conn, start, end),
     }
 
@@ -217,34 +275,77 @@ def _fmt_when(ts: float | None, now: float) -> str:
     return dt.strftime("%d/%m/%Y %H:%M")
 
 
+def _group_line(label: str, actions: dict[str, int], keys: tuple[str, ...]) -> str | None:
+    parts: list[str] = []
+    for key in keys:
+        count = int(actions.get(key, 0))
+        if count <= 0:
+            continue
+        parts.append(f"{ACTION_LABEL_HEBREW.get(key, key)} {count}")
+    if not parts:
+        return None
+    return f"• {label}: {' · '.join(parts)}"
+
+
 def format_overview_text(stats: dict | None = None, *, now: float | None = None) -> str:
     data = stats if stats is not None else overview_stats(now=now)
+    ts = float(data.get("now") or _ts(now))
+    live = int(data.get("live") or 0)
+    stamp = datetime.fromtimestamp(ts, tz=_IL_TZ).strftime("%d/%m/%Y %H:%M:%S")
 
     def block(title: str, bundle: dict) -> str:
+        actions = bundle["actions"]
         ranked = sorted(
             bundle["actions"].items(),
             key=lambda item: (-item[1], USAGE_ACTIONS.index(item[0]) if item[0] in USAGE_ACTION_SET else 99),
         )
-        lines = [f"<b>{title}</b>"]
-        lines.append(f"• פעילים: <b>{bundle['active_users']}</b>")
-        lines.append(f"• חדשים: <b>{bundle['new_users']}</b>")
-        lines.append(
-            f"• סשנים: <b>{bundle['sessions']}</b> · ממוצע שהייה: <b>{_fmt_duration(bundle['avg_dwell_sec'])}</b>"
-        )
-        lines.append("• שימוש:")
-        for action, count in ranked:
-            if count <= 0:
-                continue
-            lines.append(f"   {ACTION_LABEL_HEBREW.get(action, action)} — {count}")
-        if not any(count > 0 for count in bundle["actions"].values()):
-            lines.append("   אין עדיין")
+        new_users = int(bundle["new_users"])
+        engaged = int(bundle.get("new_engaged") or 0)
+        if new_users and engaged:
+            new_bit = f"חדשים <b>{new_users}</b> · {engaged} כבר השתמשו"
+        else:
+            new_bit = f"חדשים <b>{new_users}</b>"
+        lines = [
+            f"<b>{title}</b>",
+            f"• קהל: פעילים <b>{bundle['active_users']}</b> · {new_bit}",
+            (
+                f"• זמן: סשנים <b>{bundle['sessions']}</b> · ממוצע "
+                f"<b>{_fmt_duration(bundle['avg_dwell_sec'])}</b> · "
+                f"{int(bundle.get('events') or 0)} פעולות"
+            ),
+        ]
+        for group_label, keys in USAGE_GROUPS:
+            line = _group_line(group_label, actions, keys)
+            if line:
+                lines.append(line)
+        detail = [
+            f"   {ACTION_LABEL_HEBREW.get(action, action)} — {count}"
+            for action, count in ranked
+            if count > 0
+        ]
+        if detail:
+            lines.append("• פירוט:")
+            lines.extend(detail)
+        else:
+            lines.append("• פירוט: אין עדיין")
         return "\n".join(lines)
 
     return (
-        "<b>סקירה</b>\n\n"
+        f"<b>סקירה</b>\n"
+        f"{stamp} · <b>{live}</b> פעילים ברבע שעה\n\n"
         f"{block('היום', data['day'])}\n\n"
         f"{block('7 ימים', data['week'])}"
     )
+
+
+def _fmt_event_when(ts: float, now: float) -> str:
+    dt = datetime.fromtimestamp(float(ts), tz=_IL_TZ)
+    now_dt = datetime.fromtimestamp(float(now), tz=_IL_TZ)
+    if dt.date() == now_dt.date():
+        return dt.strftime("%H:%M")
+    if (now_dt.date() - dt.date()).days == 1:
+        return f"אתמול {dt.strftime('%H:%M')}"
+    return dt.strftime("%d/%m %H:%M")
 
 
 def _fmt_ago(ts: float | None, now: float) -> str:
@@ -340,7 +441,7 @@ def _counts_for_users(conn, user_ids: list[int]) -> dict[int, dict[str, int]]:
     for row in rows:
         uid = int(row["user_id"])
         action = str(row["action"])
-        if uid in grouped and action in USAGE_ACTION_SET and action != "main":
+        if uid in grouped and action in USAGE_ACTION_SET and action not in NAV_ACTIONS:
             grouped[uid][action] = int(row["n"])
     return grouped
 
@@ -370,6 +471,26 @@ def _users_summary_unlocked(conn, now: float) -> dict[str, int]:
         )["access_kind"]
         summary[kind] += 1
     return summary
+
+
+def _last_actions_for_users(conn, user_ids: list[int]) -> dict[int, str]:
+    last: dict[int, str] = {}
+    if not user_ids:
+        return last
+    marks = ",".join("?" for _ in user_ids)
+    rows = conn.execute(
+        f"SELECT e.user_id, e.action FROM admin_usage_event e "
+        f"INNER JOIN ("
+        f"  SELECT user_id, MAX(ts) AS max_ts FROM admin_usage_event "
+        f"  WHERE user_id IN ({marks}) GROUP BY user_id"
+        f") t ON t.user_id = e.user_id AND t.max_ts = e.ts",
+        tuple(user_ids),
+    ).fetchall()
+    for row in rows:
+        uid = int(row["user_id"])
+        if uid not in last:
+            last[uid] = str(row["action"])
+    return last
 
 
 def _row_dwell(row) -> float:
@@ -405,6 +526,7 @@ def list_users_page(
         ).fetchall()
         ids = [int(row["user_id"]) for row in rows]
         counts = _counts_for_users(conn, ids)
+        last_actions = _last_actions_for_users(conn, ids)
         items = []
         for row in rows:
             uid = int(row["user_id"])
@@ -418,6 +540,7 @@ def list_users_page(
                 ts,
             )
             top = _top_usage(counts.get(uid, {}))
+            last_action = last_actions.get(uid)
             items.append(
                 {
                     "user_id": uid,
@@ -425,8 +548,10 @@ def list_users_page(
                     "first_seen_at": first_seen,
                     "last_seen_at": last_seen,
                     "dwell_sec": _row_dwell(row),
+                    "last_action": last_action,
+                    "last_action_label": ACTION_LABEL_HEBREW.get(last_action or "", last_action or ""),
                     "usage_line": " · ".join(
-                        f"{ACTION_LABEL_HEBREW[action]} {n}" for action, n in top
+                        f"{ACTION_LABEL_HEBREW.get(action, action)} {n}" for action, n in top
                     ),
                     **access,
                 }
@@ -494,6 +619,22 @@ def _session_count(user_id: int) -> int:
     return closed + (1 if open_row is not None else 0)
 
 
+def user_recent_events(
+    user_id: int,
+    *,
+    limit: int = RECENT_EVENTS_LIMIT,
+) -> list[tuple[float, str]]:
+    lim = max(1, int(limit))
+    conn = _connect()
+    with _db_lock:
+        rows = conn.execute(
+            "SELECT ts, action FROM admin_usage_event "
+            "WHERE user_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?",
+            (int(user_id), lim),
+        ).fetchall()
+    return [(float(row["ts"]), str(row["action"])) for row in rows]
+
+
 def format_users_page_text(
     items: list[dict],
     total: int,
@@ -528,6 +669,9 @@ def format_users_page_text(
         lines.append(item.get("access_line") or "בלי גישה")
         activity = _fmt_ago(item.get("last_seen_at"), ts) if item.get("last_seen_at") else "אין פעילות"
         detail = [activity]
+        last_label = (item.get("last_action_label") or "").strip()
+        if last_label:
+            detail.append(last_label)
         usage = (item.get("usage_line") or "").strip()
         if usage:
             detail.append(usage)
@@ -579,15 +723,27 @@ def format_user_card_text(user_id: int, *, now: float | None = None) -> str | No
 
     counts = user_action_counts(uid)
     ranked = sorted(
-        ((action, n) for action, n in counts.items() if n > 0 and action != "main"),
-        key=lambda item: (-item[1], item[0]),
+        ((action, n) for action, n in counts.items() if n > 0 and action not in NAV_ACTIONS),
+        key=lambda item: (
+            -item[1],
+            USAGE_ACTIONS.index(item[0]) if item[0] in USAGE_ACTION_SET else 99,
+        ),
     )
     if ranked:
         usage_block = "\n".join(
-            f"{ACTION_LABEL_HEBREW[action]}  {n}" for action, n in ranked
+            f"{ACTION_LABEL_HEBREW.get(action, action)}  {n}" for action, n in ranked
         )
     else:
         usage_block = "עדיין לא נרשם שימוש"
+
+    recent = user_recent_events(uid)
+    if recent:
+        recent_block = "\n".join(
+            f"{_fmt_event_when(event_ts, ts)}  {ACTION_LABEL_HEBREW.get(action, action)}"
+            for event_ts, action in recent
+        )
+    else:
+        recent_block = "אין אירועים"
 
     sessions = _session_count(uid)
     dwell = _fmt_duration(user_dwell_sec(uid, now=ts))
@@ -604,5 +760,7 @@ def format_user_card_text(user_id: int, *, now: float | None = None) -> str | No
         f"נראה {seen_line}\n"
         f"שהייה {dwell} · {sessions} סשנים\n\n"
         f"<b>שימוש</b>\n"
-        f"{usage_block}"
+        f"{usage_block}\n\n"
+        f"<b>אחרונים</b>\n"
+        f"{recent_block}"
     )

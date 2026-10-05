@@ -117,6 +117,17 @@ def build_user_card_keyboard(offset: int) -> InlineKeyboardMarkup:
     )
 
 
+def build_overview_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("רענון", callback_data="admin:overview"),
+                InlineKeyboardButton("משתמשים", callback_data="admin:users:0"),
+            ]
+        ]
+    )
+
+
 async def _admin_show(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -176,7 +187,7 @@ async def cmd_overview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if update.callback_query:
         await update.callback_query.answer()
-    await _admin_show(update, context, format_overview_text())
+    await _admin_show(update, context, format_overview_text(), build_overview_keyboard())
 
 
 async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

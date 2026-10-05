@@ -330,6 +330,17 @@ def _track_usage(update: Update, action: str | None = None) -> None:
         touch_usage(uid)
 
 
+def _track_uid(user_id: int | None, action: str) -> None:
+    if user_id is None:
+        return
+    uid = int(user_id)
+    if uid <= 0:
+        return
+    from bot.admin_usage import record_usage
+
+    record_usage(uid, action)
+
+
 _USAGE_MENU_ACTIONS: dict[str, str] = {
     "main": "main",
     "intro": "intro",
@@ -337,6 +348,11 @@ _USAGE_MENU_ACTIONS: dict[str, str] = {
     "give_exercise": "practice",
     "new": "solve",
     "center_of_gravity": "cog",
+    "cog_practice": "cog_practice",
+    "mode:notebook": "notebook",
+    "mode:assistant": "assistant",
+    "bank:notebook": "notebook",
+    "bank:assistant": "assistant",
 }
 
 
@@ -399,6 +415,7 @@ async def _ensure_practice_access(
     access = check_practice_feature_access(int(user_id))
     if access.status == ImageAccessStatus.OK:
         return True
+    _track_uid(user_id, "denied")
     await _send_denied_with_purchase(
         context,
         chat_id,
@@ -555,6 +572,7 @@ async def _delete_choose_topic_prompt(
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
+    _track_usage(update, "start")
     # מתחיל שעון 24ש' לנוסחאות (first_seen) — תואם להודעת ה-welcome.
     user = update.effective_user
     uid = int(user.id) if user is not None else None
@@ -2435,6 +2453,7 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if topic_id != "main":
         user_id = telegram_user_id(update)
         if not has_intro_access(user_id):
+            _track_usage(update, "denied")
             await query.answer("נדרשת חבילה/קופון בתוקף לגישה לשיעורים.", show_alert=True)
             chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
             await _send_denied_with_purchase(
@@ -2445,6 +2464,19 @@ async def on_intro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
 
     await query.answer()
+
+    intro_usage = {
+        "practice_inclined": "intro_practice",
+        "practice_distributed": "intro_practice",
+        "inclined_try_again": "intro_practice",
+        "distributed_try_again": "intro_practice",
+        "how_to_solve_supports": "assistant",
+        "how_to_solve_fixed": "assistant",
+        "distributed_load": "intro",
+        "inclined_load": "intro",
+    }.get(topic_id)
+    if intro_usage:
+        _track_usage(update, intro_usage)
 
     if topic_id == "how_to_solve_placeholder":
         chat_id = query.message.chat_id if query.message else telegram_chat_id(update)
@@ -3476,6 +3508,7 @@ async def on_formula_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if topic is None:
             await query.answer("נושא לא נמצא.", show_alert=True)
             return
+        _track_usage(update, "formulas")
         await query.answer()
         await _delete_callback_message(query)
         if not has_formulas_chat_trail(chat_id):
@@ -3783,6 +3816,7 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.answer()
         access = consume_solve_slot(telegram_user_id(update))
         if access.status != ImageAccessStatus.OK:
+            _track_usage(update, "denied")
             await _send_denied_with_purchase(
                 context,
                 chat_id,
@@ -4164,6 +4198,7 @@ async def _deliver_generated_exercise(
     if user_id is not None:
         access = check_practice_feature_access(int(user_id))
         if access.status != ImageAccessStatus.OK:
+            _track_uid(user_id, "denied")
             await cleanup_practice_chat(context, chat_id)
             await _leave_formulas_chat_if_needed(context, chat_id)
             await _send_denied_with_purchase(
@@ -4570,6 +4605,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _leave_formulas_chat_if_needed(context, chat_id)
         access = check_solve_access(telegram_user_id(update))
         if access.status != ImageAccessStatus.OK:
+            _track_usage(update, "denied")
             await _reply_denied_with_purchase(
                 update.message,
                 context,
@@ -4578,6 +4614,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
         prompt = select_solve_mode(chat_id, SolveMode.ASSISTANT)
+        _track_usage(update, "assistant")
         await _reply_text_safe(update.message, prompt)
         return
 
@@ -4812,6 +4849,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if draft_result.handled and draft_result.approved:
                 access = consume_solve_slot(telegram_user_id(update))
                 if access.status != ImageAccessStatus.OK:
+                    _track_usage(update, "denied")
                     await _reply_denied_with_purchase(
                         update.message,
                         context,
@@ -4982,6 +5020,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 user_id,
                 access.status.value,
             )
+            _track_usage(update, "denied")
             await _reply_denied_with_purchase(
                 update.message,
                 context,
@@ -5157,6 +5196,7 @@ async def on_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if pkg is None:
             await query.answer("החבילה לא נמצאה", show_alert=True)
             return
+        _track_usage(update, "pay")
         await query.answer()
         await _deliver_package_payment(context, chat_id, pkg, query=query)
         return
