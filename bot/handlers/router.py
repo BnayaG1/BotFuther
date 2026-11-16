@@ -4962,6 +4962,9 @@ async def reply_from_vision_extract(
         typing_task.cancel()
 
     if use_draft and extracted_partial is not None:
+        if reply:
+            ready_msg = await _reply_text_safe(update.message, reply)
+            register_draft_cleanup_id(chat_id, getattr(ready_msg, "message_id", None))
         await send_draft_with_keyboard(
             update.message, context, chat_id, extracted_partial
         )

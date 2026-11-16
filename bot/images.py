@@ -22,6 +22,7 @@ from bot.config import (
     VISION_BEAM_CROP,
     VISION_FAST_IMAGE_MIN_PX,
     VISION_FAST_MODE,
+    VISION_PROVIDER,
 )
 from bot.gemini_chat import gemini_runtime, generate_content_with_retries
 from bot.vision import parse_json_from_llm_text
@@ -184,6 +185,8 @@ def prepare_image_for_vision(
     temp = _maybe_crop_temp_image(temp)
     if min_px is None:
         min_px = VISION_FAST_IMAGE_MIN_PX if VISION_FAST_MODE else IMAGE_MIN_VISION_PX
+        if VISION_PROVIDER == "openai":
+            min_px = 0  # מסלול OpenAI: בלי הגדלת תמונה
     original_path = temp.path
     prepared_path = original_path.with_name(f"{original_path.stem}_vision.jpg")
     before_bytes = original_path.stat().st_size

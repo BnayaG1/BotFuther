@@ -37,6 +37,7 @@ from bot.vision import (
     format_vision_extract_only_reply,
     package_extraction_response,
 )
+from bot.vision_openai import analyze_exercise_image, openai_provider_enabled
 
 log = logging.getLogger("beam_telegram_bot")
 
@@ -130,11 +131,28 @@ async def run_vision_extract(
         return await _run_vision_extract_inner(chat_id, image_bytes, mime_type)
 
 
+async def _run_openai_extract(
+    chat_id: int,
+    image_bytes: bytes,
+    mime_type: str,
+) -> VisionJobResult:
+    """VISION_PROVIDER=openai: שער -> חילוץ -> ולידציה; טיוטה תמיד (אין חישוב לפני אישור)."""
+    outcome = await asyncio.to_thread(analyze_exercise_image, image_bytes, mime_type)
+    log.info("OpenAI vision chat %s status=%s", chat_id, outcome.status)
+    if outcome.extracted is None:
+        return VisionJobResult(reply=outcome.message)
+    store_extracted_exercise(chat_id, outcome.extracted)
+    set_draft_pending(chat_id, outcome.extracted, DRAFT_INSTRUCTION_TEXT)
+    return VisionJobResult(use_draft=True, extracted=outcome.extracted, reply=outcome.message)
+
+
 async def _run_vision_extract_inner(
     chat_id: int,
     image_bytes: bytes,
     mime_type: str,
 ) -> VisionJobResult:
+    if openai_provider_enabled():
+        return await _run_openai_extract(chat_id, image_bytes, mime_type)
     learned = get_vision_learned_hint()
     extra = build_vision_extra_instruction(learned_hint=learned)
     cache_key = vision_cache_key(image_bytes, mime_type, extra)
@@ -245,6 +263,11 @@ async def _deliver_result(
 ) -> None:
     await dismiss_vision_ack(context, chat_id)
     if result.use_draft and result.extracted is not None:
+        if result.reply:
+            ready_msg = await context.bot.send_message(chat_id=chat_id, text=result.reply)
+            from bot.draft_session import register_draft_cleanup_id
+
+            register_draft_cleanup_id(chat_id, ready_msg.message_id)
         await send_draft_to_chat(context, chat_id, result.extracted)
         return
     reply = result.reply or "לא הצלחתי לעבד את התמונה."

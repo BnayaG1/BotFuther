@@ -191,6 +191,14 @@ VISION_THINKING_BUDGET = _env_int("VISION_THINKING_BUDGET", 1024)
 # חיתוך אוטומטי של שרטוט הקורה (Gemini bbox + Pillow) — כבוי כברירת מחדל (חוסך קריאת API).
 VISION_BEAM_CROP = _env_bool("VISION_BEAM_CROP", False)
 
+# ספק חילוץ תמונה: gemini (ברירת מחדל) | openai (שער + חילוץ בקריאה אחת, ראו bot/vision_openai.py).
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", "gemini").strip().lower() or "gemini"
+OPENAI_GATE_MODEL = os.getenv("OPENAI_GATE_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
+OPENAI_EXTRACT_MODEL = os.getenv("OPENAI_EXTRACT_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+OPENAI_IMAGE_MAX_PX = _env_int("OPENAI_IMAGE_MAX_PX", 1600)
+OPENAI_TIMEOUT_SEC = _env_float("OPENAI_TIMEOUT_SEC", 90.0)
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+
 # מקובל בהנדסה אזרחית בישראל: 1 טון = 10 kN
 KN_PER_TON = 10.0
 CM_PER_M = 100.0
