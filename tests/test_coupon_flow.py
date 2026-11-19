@@ -77,10 +77,10 @@ def test_coupon_grants_privileged_phase_during_period(access_db, monkeypatch):
     monkeypatch.setattr(access.time, "time", lambda: t0)
     access.ensure_user_first_seen(user_id, now=t0)
 
-    # מעבר אחרי חלון חינם 24ש'
-    t1 = t0 + access.FORMULAS_FREE_WINDOW_SEC + 10
+    # בלי קופון — גישה חינמית (מכסה), גם מיד אחרי ההרשמה
+    assert access.get_user_access_phase(user_id, now=t0) == access.UserAccessPhase.RESTRICTED
+    t1 = t0 + 10
     monkeypatch.setattr(access.time, "time", lambda: t1)
-    assert access.get_user_access_phase(user_id, now=t1) == access.UserAccessPhase.RESTRICTED
 
     # פדיון קופון 60 יום
     code = generate_coupon_codes(count=1, period_days=60)[0]

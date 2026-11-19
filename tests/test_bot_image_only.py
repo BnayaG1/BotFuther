@@ -21,7 +21,10 @@ def test_welcome_text_is_image_only():
     assert "נוסחאות" in text
     assert "דיווח" in text
     assert "סטטיקה" in text
-    assert "24 שעות" in text
+    assert "24 שעות" not in text
+    assert "6 פתרונות" in text
+    assert "30 שקלים" in text
+    assert "80 שקלים" in text
     assert "בראש שקט" in text
     assert "מהנדס הדיגיטלי" not in text
     assert "מושג" not in text

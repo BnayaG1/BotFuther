@@ -83,7 +83,7 @@ async def test_on_text_assistant_button_sets_pending_mode():
 
     with patch.object(handlers, "telegram_chat_id", return_value=chat_id):
         with patch.object(handlers, "telegram_user_id", return_value=333):
-            with patch.object(handlers, "check_solve_access", return_value=handlers.ImageAccessResult(status=handlers.ImageAccessStatus.OK)):
+            with patch.object(handlers, "check_solution_entry_access", return_value=handlers.ImageAccessResult(status=handlers.ImageAccessStatus.OK)):
 
                 with patch.object(handlers, "has_active_assistant_progress", return_value=False):
                     with patch.object(

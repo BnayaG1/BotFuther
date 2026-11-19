@@ -39,8 +39,10 @@ from bot.config import (
 from bot.access import (
     ImageAccessResult,
     ImageAccessStatus,
+    check_guide_access,
     check_practice_feature_access,
-    check_solve_access,
+    check_solution_entry_access,
+    consume_guide_slot,
     consume_practice_slot,
     consume_solve_slot,
     coupon_prompt_text_hebrew,
@@ -428,14 +430,12 @@ async def _send_denied_with_purchase(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     text: str,
+    *,
+    show_purchase: bool = True,
 ) -> None:
-    """שולח הודעת דחיה עם התפריט הקבוע ואחריה כפתור רכישת חבילה."""
-    await _send_text_safe(context, chat_id, text)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="לרכישת חבילה:",
-        reply_markup=build_upgrade_options_keyboard(),
-    )
+    """שולח הודעת דחיה; כשנדרשת רכישה — עם כפתורי «רכישת חבילה» ו«ראשי» מתחתיה."""
+    markup = build_upgrade_options_keyboard() if show_purchase else None
+    await _send_text_safe(context, chat_id, text, reply_markup=markup)
 
 
 async def _reply_denied_with_purchase(
@@ -443,14 +443,12 @@ async def _reply_denied_with_purchase(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     text: str,
+    *,
+    show_purchase: bool = True,
 ) -> None:
-    """שולח הודעת דחיה (reply) עם התפריט הקבוע ואחריה כפתור רכישת חבילה."""
-    await _reply_text_safe(message, text)
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="לרכישת חבילה:",
-        reply_markup=build_upgrade_options_keyboard(),
-    )
+    """שולח הודעת דחיה (reply); כשנדרשת רכישה — עם כפתורי «רכישת חבילה» ו«ראשי» מתחתיה."""
+    markup = build_upgrade_options_keyboard() if show_purchase else None
+    await _reply_text_safe(message, text, reply_markup=markup)
 
 
 async def _deliver_approved_solve(
@@ -595,7 +593,7 @@ def build_start_welcome_text() -> str:
         "היי, אני שמח שהגעת לכאן. בניתי את הבוט הזה בשביל להכין אותך כמה שיותר טוב מ-0 ללעבור בהצלחה את המבחן של הסמסטר הראשון בסטטיקה, ואני יעשה כל מה שאני יכול בשביל שזה יקרה.\n\n"
         "השימוש בבוט פשוט: יש לך אופציה להבין כל דבר בפני עצמו בלימוד הבסיס, שם אתה תוכל לעבור על מה שאתה רוצה עם תרגולים ספציפיים לדברים ספציפיים ולהבין כל שלב ושלב, יש לך נוסחאות לדברים ספציפיים שאתה יכול לשלוף ולרשום לך או פשוט להסתכל עליהם, אתה יכול ללחוץ בתפריט הראשי על תרגול ולקבל תרגיל מהמערכת שלי ברמה של מבחן ומשם גם לקבל מדריך שיעבור איתך שלב שלב על התרגיל שיצא עד לפתרון או במקום לקבל פשוט את הפתרון המלא. אתה יכול גם חופשי לשלוח לבוט תמונה של תרגיל שאתה עובד עליו ולקבל עליו מדריך לפתרון או את הפתרון.\n\n"
         "בכל בעיה או בקשה אתה יכול ללחוץ בתפרט הקבוע על 'דיווח על תקלה', והדיווח יגיע ישירות אלי.\n\n"
-        "הבוט זמין עבורך ל24 שעות עם גישה חופשית להכל בשביל שתוכל להתרשם ולראות איך זה עובד. לאחר 24 השעות, אם תאהב ותרצה להמשיך אתה יכול לרכוש חבילה לפי חודשים כשחודש אחד עולה 39 שקלים, וכל חודש שתוסיף מההתחלה תקבל עליו 15 אחוז הנחה.\n\n"
+        "תרגילים ולימוד הבסיס פתוחים עבורך בחינם תמיד. בנוסף אתה מקבל 6 פתרונות או 6 מדריכים לפתרון בחינם, בשביל שתוכל להתרשם ולראות איך זה עובד. אם תאהב ותרצה להמשיך לקבל פתרונות ומדריכים, אתה יכול לרכוש חבילה של חודש ב-30 שקלים, או חבילה של 3.5 חודשים ב-80 שקלים.\n\n"
         "מוזמן להתחיל להשתמש, מקווה שזה יעזור לך לעבור את הקורס בראש שקט."
     )
 
@@ -604,6 +602,7 @@ def build_upgrade_options_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("רכישת חבילה", callback_data="buy:menu")],
+            [InlineKeyboardButton("ראשי", callback_data="menu:main")],
         ]
     )
 
@@ -2123,14 +2122,30 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer()
             return
         await query.answer()
-        await _delete_callback_message(query)
         pending = consume_pending_bank_exercise(chat_id)
         if pending is None:
+            await _delete_callback_message(query)
             await _send_text_safe(
                 context, chat_id, "אין תרגיל ממתין מהמאגר — לחץ/י שוב על «תרגול»."
             )
             return
         _exercise_id, bank_extracted = pending
+        if mode == SolveMode.ASSISTANT:
+            access = consume_guide_slot(telegram_user_id(update))
+        else:
+            access = consume_solve_slot(telegram_user_id(update))
+        if access.status != ImageAccessStatus.OK:
+            # התרגיל נשאר ממתין — אפשר לבחור שוב אחרי ההמתנה או אחרי רכישה.
+            set_pending_bank_exercise(chat_id, _exercise_id, bank_extracted)
+            _track_usage(update, "denied")
+            await _send_denied_with_purchase(
+                context,
+                chat_id,
+                image_access_reply_hebrew(access),
+                show_purchase=access.status != ImageAccessStatus.COOLDOWN,
+            )
+            return
+        await _delete_callback_message(query)
         if int(_exercise_id) == _GENERATED_EXERCISE_ID:
             if isinstance(bank_extracted, dict):
                 meta = dict(bank_extracted.get("meta") or {})
@@ -3814,13 +3829,14 @@ async def on_draft_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if cb.action == "approve":
         await query.answer()
-        access = consume_solve_slot(telegram_user_id(update))
+        access = check_solution_entry_access(telegram_user_id(update))
         if access.status != ImageAccessStatus.OK:
             _track_usage(update, "denied")
             await _send_denied_with_purchase(
                 context,
                 chat_id,
                 image_access_reply_hebrew(access),
+                show_purchase=access.status != ImageAccessStatus.COOLDOWN,
             )
             return
 
@@ -4603,7 +4619,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ):
             await cleanup_practice_chat(context, chat_id)
         await _leave_formulas_chat_if_needed(context, chat_id)
-        access = check_solve_access(telegram_user_id(update))
+        access = check_guide_access(telegram_user_id(update))
         if access.status != ImageAccessStatus.OK:
             _track_usage(update, "denied")
             await _reply_denied_with_purchase(
@@ -4611,6 +4627,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 context,
                 chat_id,
                 image_access_reply_hebrew(access),
+                show_purchase=access.status != ImageAccessStatus.COOLDOWN,
             )
             return
         prompt = select_solve_mode(chat_id, SolveMode.ASSISTANT)
@@ -4847,7 +4864,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             cleanup_ids = list(dict.fromkeys(cleanup_ids))
             draft_result = handle_draft_text(chat_id, text)
             if draft_result.handled and draft_result.approved:
-                access = consume_solve_slot(telegram_user_id(update))
+                access = check_solution_entry_access(telegram_user_id(update))
                 if access.status != ImageAccessStatus.OK:
                     _track_usage(update, "denied")
                     await _reply_denied_with_purchase(
@@ -4855,6 +4872,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         context,
                         chat_id,
                         image_access_reply_hebrew(access),
+                        show_purchase=access.status != ImageAccessStatus.COOLDOWN,
                     )
                     return
                 extracted = draft_result.extracted or get_stored_vision_extracted(chat_id) or {}
@@ -5016,7 +5034,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_bank_submission:
         user_id = telegram_user_id(update)
         _track_usage(update, "solve")
-        access = check_solve_access(user_id)
+        access = check_solution_entry_access(user_id)
         if access.status != ImageAccessStatus.OK:
             log.info(
                 "Image blocked user=%s status=%s",
@@ -5029,6 +5047,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 context,
                 chat_id,
                 image_access_reply_hebrew(access),
+                show_purchase=access.status != ImageAccessStatus.COOLDOWN,
             )
             return
         log.info(

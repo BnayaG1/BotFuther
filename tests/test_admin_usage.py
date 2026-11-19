@@ -105,3 +105,4 @@ def test_users_page_includes_last_action(usage_db):
     assert items[0]["last_action"] == "practice"
     text = admin_usage.format_users_page_text(items, total, 0, now=t0)
     assert "תרגול" in text
+    assert "חינם · פתרונות 0/6 · מדריכים 0/6" in text

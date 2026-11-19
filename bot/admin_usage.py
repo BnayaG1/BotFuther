@@ -7,9 +7,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from bot.access import (
-    FORMULAS_FREE_WINDOW_SEC,
+    FREE_SOLUTIONS_LIMIT,
     _connect,
     _db_lock,
+    free_limit_reached,
     get_user_info,
 )
 
@@ -385,6 +386,7 @@ def _period_short(days: int) -> str:
         30: "חודש",
         60: "חודשיים",
         90: "3 חודשים",
+        105: "3.5 חודשים",
         120: "4 חודשים",
     }.get(int(days), f"{int(days)} ימים")
 
@@ -398,7 +400,15 @@ def _active_coupon_join() -> str:
     )
 
 
-def _access_fields(first_seen: float, quota, expires_at, period_days, now: float) -> dict:
+def _access_fields(
+    quota,
+    expires_at,
+    period_days,
+    now: float,
+    *,
+    solves_used: int = 0,
+    guides_used: int = 0,
+) -> dict:
     if quota is not None and expires_at is not None:
         left = float(expires_at) - now
         is_vip = int(quota) >= 999
@@ -414,17 +424,20 @@ def _access_fields(first_seen: float, quota, expires_at, period_days, now: float
             "access_short": period,
             "access_line": f"{period} · {_fmt_left(left)}",
         }
-    window_left = FORMULAS_FREE_WINDOW_SEC - (now - first_seen)
-    if window_left > 0:
+    usage = (
+        f"פתרונות {int(solves_used)}/{FREE_SOLUTIONS_LIMIT} · "
+        f"מדריכים {int(guides_used)}/{FREE_SOLUTIONS_LIMIT}"
+    )
+    if free_limit_reached(solves_used, guides_used):
         return {
-            "access_kind": "window",
-            "access_short": "חלון",
-            "access_line": f"חלון חינם · {_fmt_left(window_left)}",
+            "access_kind": "locked",
+            "access_short": "נעול",
+            "access_line": f"חינם נוצל · {usage}",
         }
     return {
-        "access_kind": "none",
-        "access_short": "בלי",
-        "access_line": "בלי גישה",
+        "access_kind": "free",
+        "access_short": "חינם",
+        "access_line": f"חינם · {usage}",
     }
 
 
@@ -453,21 +466,24 @@ def _top_usage(counts: dict[str, int], limit: int = 3) -> list[tuple[str, int]]:
 
 def _users_summary_unlocked(conn, now: float) -> dict[str, int]:
     rows = conn.execute(
-        "SELECT f.first_seen_at, c.daily_quota AS quota, c.expires_at, c.period_days "
+        "SELECT c.daily_quota AS quota, c.expires_at, c.period_days, "
+        "u.solves_used, u.guides_used "
         "FROM user_first_seen f "
         f"{_active_coupon_join()} "
+        "LEFT JOIN user_free_usage u ON u.user_id = f.user_id "
         "WHERE f.user_id > 0",
         (now,),
     ).fetchall()
-    summary = {"total": 0, "vip": 0, "coupon": 0, "window": 0, "none": 0}
+    summary = {"total": 0, "vip": 0, "coupon": 0, "free": 0, "locked": 0}
     for row in rows:
         summary["total"] += 1
         kind = _access_fields(
-            float(row["first_seen_at"]),
             row["quota"],
             row["expires_at"],
             row["period_days"],
             now,
+            solves_used=int(row["solves_used"] or 0),
+            guides_used=int(row["guides_used"] or 0),
         )["access_kind"]
         summary[kind] += 1
     return summary
@@ -515,10 +531,12 @@ def list_users_page(
         rows = conn.execute(
             "SELECT f.user_id, f.first_seen_at, f.username, "
             "s.last_seen_at, s.session_started_at, s.total_session_sec, "
-            "c.daily_quota AS quota, c.expires_at, c.period_days "
+            "c.daily_quota AS quota, c.expires_at, c.period_days, "
+            "u.solves_used, u.guides_used "
             "FROM user_first_seen f "
             "LEFT JOIN admin_user_session s ON s.user_id = f.user_id "
             f"{_active_coupon_join()} "
+            "LEFT JOIN user_free_usage u ON u.user_id = f.user_id "
             "WHERE f.user_id > 0 "
             "ORDER BY COALESCE(s.last_seen_at, 0) DESC, f.first_seen_at DESC, f.user_id DESC "
             "LIMIT ? OFFSET ?",
@@ -533,11 +551,12 @@ def list_users_page(
             first_seen = float(row["first_seen_at"])
             last_seen = float(row["last_seen_at"]) if row["last_seen_at"] is not None else None
             access = _access_fields(
-                first_seen,
                 row["quota"],
                 row["expires_at"],
                 row["period_days"],
                 ts,
+                solves_used=int(row["solves_used"] or 0),
+                guides_used=int(row["guides_used"] or 0),
             )
             top = _top_usage(counts.get(uid, {}))
             last_action = last_actions.get(uid)
@@ -651,8 +670,8 @@ def format_users_page_text(
             f"{total} רשומים · "
             f"VIP {counts.get('vip', 0)} · "
             f"קופון {counts.get('coupon', 0)} · "
-            f"חלון {counts.get('window', 0)} · "
-            f"בלי {counts.get('none', 0)}"
+            f"חינם {counts.get('free', 0)} · "
+            f"נעול {counts.get('locked', 0)}"
         ),
     ]
     if items:
@@ -699,11 +718,12 @@ def format_user_card_text(user_id: int, *, now: float | None = None) -> str | No
 
     coupon = info.get("active_coupon")
     access = _access_fields(
-        float(info["first_seen_at"]),
         999999 if coupon and coupon.get("is_vip") else (1 if coupon else None),
         coupon["expires_at"] if coupon else None,
         coupon["period_days"] if coupon else None,
         ts,
+        solves_used=int(info.get("free_solves_used") or 0),
+        guides_used=int(info.get("free_guides_used") or 0),
     )
     if coupon:
         exp_dt = datetime.fromtimestamp(coupon["expires_at"], tz=_IL_TZ).strftime("%d/%m/%Y %H:%M")

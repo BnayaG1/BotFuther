@@ -46,7 +46,7 @@ class PackageOption:
         return (
             f"• תקופה: <b>{period}</b>\n"
             f"• מחיר: <b>{price_str}</b>\n"
-            f"• גישה מועדפת לפתרון ותרגול "
+            f"• גישה חופשית לפתרונות ולמדריך לפתרון "
             f"(המתנה של 10 דקות בין שימושים)"
         )
 
@@ -68,10 +68,8 @@ def _period_label(days: int) -> str:
 
 
 PACKAGE_CATALOG: tuple[PackageOption, ...] = (
-    PackageOption("6_30", 6, 30, 39),
-    PackageOption("6_60", 6, 60, 72, 78),
-    PackageOption("6_90", 6, 90, 99, 117),
-    PackageOption("6_120", 6, 120, 120, 156),
+    PackageOption("6_30", 6, 30, 30),
+    PackageOption("6_105", 6, 105, 80),
 )
 
 
@@ -87,18 +85,21 @@ def get_package(package_id: str) -> PackageOption | None:
 
 
 def purchase_menu_intro_hebrew() -> str:
-    return "כמה חודשים תרצה לקבל?"
+    return "איזו חבילה תרצה לרכוש?"
 
 
 def build_purchase_menu_keyboard() -> InlineKeyboardMarkup:
-    buttons = [
-        InlineKeyboardButton(
-            _period_label(pkg.period_days),
-            callback_data=f"buy:confirm:{pkg.package_id}",
-        )
-        for pkg in PACKAGE_CATALOG
-    ]
-    return InlineKeyboardMarkup([buttons])
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    pkg.label_hebrew(),
+                    callback_data=f"buy:confirm:{pkg.package_id}",
+                )
+            ]
+            for pkg in PACKAGE_CATALOG
+        ]
+    )
 
 
 def build_package_confirm_keyboard(package_id: str) -> InlineKeyboardMarkup:

@@ -30,7 +30,7 @@ def test_admin_menu_keyboard_includes_vip_option():
     callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
     assert any("VIP ללא הגבלות" in label for label in labels)
     assert "admin:pick:vip_unlimited" in callbacks
-    assert len(callbacks) == 5  # 4 רגילות + VIP אחד
+    assert len(callbacks) == 3  # חודש + 3.5 חודשים + VIP אחד
 
 
 def test_admin_overview_keyboard_has_refresh():
@@ -59,7 +59,7 @@ def test_admin_persistent_reply_keyboard():
     assert ADMIN_KB_OVERVIEW in labels
     assert ADMIN_KB_USERS in labels
     assert ADMIN_KB_COUPONS in labels
-    assert "₪39" not in labels
+    assert "₪30" not in labels
     assert "VIP" not in labels
     assert kb.is_persistent is True
 
@@ -73,7 +73,7 @@ async def test_on_admin_text_package_button(monkeypatch):
     update = MagicMock()
     update.effective_user = User(id=99, is_bot=False, first_name="Admin")
     update.message = MagicMock()
-    update.message.text = "חודש · ₪39"
+    update.message.text = "חודש · ₪30"
     update.message.reply_text = AsyncMock()
 
     context = MagicMock()
@@ -82,7 +82,7 @@ async def test_on_admin_text_package_button(monkeypatch):
 
     update.message.reply_text.assert_awaited_once()
     args, kwargs = update.message.reply_text.await_args
-    assert "נבחרה חבילה: <b>חודש · ₪39</b>" in args[0]
+    assert "נבחרה חבילה: <b>חודש · ₪30</b>" in args[0]
     assert kwargs.get("reply_markup") is not None
 
 
@@ -137,14 +137,14 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
                     "username": None,
                     "first_seen_at": 1_700_000_060.0,
                     "last_seen_at": None,
-                    "access_line": "בלי גישה",
-                    "access_short": "בלי",
+                    "access_line": "חינם נוצל · פתרונות 6/6 · מדריכים 0/6",
+                    "access_short": "נעול",
                     "usage_line": "",
                     "dwell_sec": 0,
                 },
             ],
             2,
-            {"total": 2, "vip": 1, "coupon": 0, "window": 0, "none": 1},
+            {"total": 2, "vip": 1, "coupon": 0, "free": 0, "locked": 1},
         ),
     )
 
@@ -162,7 +162,8 @@ async def test_cmd_users_lists_first_seen(monkeypatch):
     assert "@john_doe" in text
     assert "222" in text
     assert "VIP · עוד 10 ימים" in text
-    assert "בלי גישה" in text
+    assert "חינם נוצל · פתרונות 6/6" in text
+    assert "נעול 1" in text
 
 
 @pytest.mark.anyio

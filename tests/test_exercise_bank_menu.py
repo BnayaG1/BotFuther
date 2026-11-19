@@ -26,46 +26,6 @@ from bot.access import AccessSource, ImageAccessResult, ImageAccessStatus
 
 
 @pytest.mark.anyio
-async def test_give_exercise_locked_without_access():
-    chat_id = 99005
-    update = MagicMock(spec=Update)
-    query = MagicMock(spec=CallbackQuery)
-    query.data = "menu:give_exercise"
-    query.answer = AsyncMock()
-    query.message = MagicMock(spec=Message)
-    query.message.chat_id = chat_id
-    query.message.delete = AsyncMock()
-    update.callback_query = query
-    update.effective_user = User(id=802, is_bot=False, first_name="T")
-
-    context = MagicMock()
-    context.bot.send_message = AsyncMock()
-
-    denied = ImageAccessResult(
-        status=ImageAccessStatus.DAILY_LIMIT,
-        access_source=AccessSource.RESTRICTED,
-        feature="practice",
-        cooldown_remaining_sec=3600,
-        window_reset_sec=3600,
-    )
-
-    with patch.object(handlers, "check_practice_feature_access", return_value=denied), \
-        patch("exercise_generator.pipeline.generate_exercise") as mock_gen:
-        await handlers.on_menu_callback(update, context)
-
-    query.answer.assert_awaited_once_with()
-    query.message.delete.assert_awaited_once()
-    mock_gen.assert_not_called()
-    context.bot.send_message.assert_awaited()
-    texts = [
-        (call.kwargs.get("text") or "")
-        for call in context.bot.send_message.await_args_list
-    ]
-    assert any("מגבלת" in t for t in texts)
-
-
-
-@pytest.mark.anyio
 async def test_give_exercise_sends_generated_exercise_and_mode_picker(tmp_path):
     chat_id = 99010
     update = MagicMock(spec=Update)
@@ -246,7 +206,7 @@ async def test_on_image_notebook_mode_checks_solve_access_without_consume():
         feature="solve",
     )
 
-    with patch.object(handlers, "check_solve_access", return_value=ok_result) as mock_check:
+    with patch.object(handlers, "check_solution_entry_access", return_value=ok_result) as mock_check:
         with patch.object(handlers, "begin_image_session") as mock_begin:
             mock_begin.return_value = MagicMock()
             with patch.object(

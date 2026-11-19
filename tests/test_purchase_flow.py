@@ -22,12 +22,18 @@ from bot.purchase import (
 from bot.handlers import on_buy_callback
 
 
-def test_package_catalog_contains_4_packages():
-    assert len(PACKAGE_CATALOG) == 4
-    pkg = get_package("6_30")
-    assert pkg is not None
-    assert pkg.period_days == 30
-    assert pkg.price_ils == 39
+def test_package_catalog_contains_month_and_3_5_months():
+    assert len(PACKAGE_CATALOG) == 2
+    month = get_package("6_30")
+    assert month is not None
+    assert month.period_days == 30
+    assert month.price_ils == 30
+    long_pkg = get_package("6_105")
+    assert long_pkg is not None
+    assert long_pkg.period_days == 105
+    assert long_pkg.price_ils == 80
+    assert long_pkg.label_hebrew() == "3.5 חודשים · ₪80"
+    assert "₪80" in payment_instructions_hebrew(long_pkg)
 
 
 def test_parse_buy_callback():
@@ -40,8 +46,9 @@ def test_parse_buy_callback():
 
 def test_purchase_keyboards():
     menu_kb = build_purchase_menu_keyboard()
-    assert len(menu_kb.inline_keyboard[0]) == 4
-    assert menu_kb.inline_keyboard[0][0].callback_data == "buy:confirm:6_30"
+    buttons = [btn for row in menu_kb.inline_keyboard for btn in row]
+    assert [btn.callback_data for btn in buttons] == ["buy:confirm:6_30", "buy:confirm:6_105"]
+    assert [btn.text for btn in buttons] == ["חודש · ₪30", "3.5 חודשים · ₪80"]
 
     confirm_kb = build_package_confirm_keyboard("6_30")
     assert confirm_kb.inline_keyboard[0][0].callback_data == "buy:confirm:6_30"
