@@ -15,7 +15,7 @@ COPY . .
 RUN mkdir -p /app/data
 
 ENV PYTHONUNBUFFERED=1
-ENV ACCESS_DB_PATH=/app/data/access.db
+ENV ACCESS_DB_PATH=/data/coupons.db
 ENV PORT=8080
 EXPOSE 8080
 EXPOSE 80
