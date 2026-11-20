@@ -547,6 +547,7 @@ async def _wipe_and_reset_to_main(
         reply_markup=build_persistent_keyboard(user_id=user_id),
     )
     set_chat_anchor_message_id(chat_id, getattr(root_msg, "message_id", None))
+    _track_menu_prompt(chat_id, root_msg)
     await context.bot.send_message(
         chat_id=chat_id,
         text="נושאים לבחירה:",
@@ -1332,6 +1333,34 @@ def _track_sent_message(chat_id: int, sent: object | None) -> None:
     append_practice_chat_message_id(chat_id, mid)
 
 
+_menu_prompt_message_ids: dict[int, list[int]] = {}
+
+
+def _track_menu_prompt(chat_id: int, sent: object | None) -> None:
+    try:
+        mid = int(getattr(sent, "message_id", 0) or 0)
+    except (TypeError, ValueError):
+        return
+    if mid:
+        _menu_prompt_message_ids.setdefault(int(chat_id), []).append(mid)
+
+
+async def _delete_menu_prompts(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    keep_message_id: int | None = None,
+) -> None:
+    """מוחק הודעות «בחר/י ...» שהבוט שלח, בלחיצה על כפתור בתפריט."""
+    for mid in _menu_prompt_message_ids.pop(int(chat_id), []):
+        if keep_message_id is not None and mid == int(keep_message_id):
+            continue
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+
+
 async def _send_main_action_menu(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -1351,13 +1380,15 @@ async def _send_main_action_menu(
         except Exception:
             pass
     if message is not None:
-        await _reply_text_safe(message, text, reply_markup=keyboard)
+        sent = await _reply_text_safe(message, text, reply_markup=keyboard)
+        _track_menu_prompt(chat_id, sent)
         return
-    await context.bot.send_message(
+    sent = await context.bot.send_message(
         chat_id=chat_id,
         text=text,
         reply_markup=keyboard,
     )
+    _track_menu_prompt(chat_id, sent)
 
 
 async def _send_intro_opening(
@@ -1596,6 +1627,9 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     usage_action = _USAGE_MENU_ACTIONS.get(action)
     if usage_action:
         _track_usage(update, usage_action)
+
+    clicked_menu_mid = query.message.message_id if query.message else None
+    await _delete_menu_prompts(context, chat_id, keep_message_id=clicked_menu_mid)
 
     if action == "admin":
         await _delete_callback_message(query)
@@ -2013,11 +2047,12 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             await query.edit_message_text("בחר/י פעולה:", reply_markup=keyboard)
         except Exception:
-            await context.bot.send_message(
+            sent = await context.bot.send_message(
                 chat_id=chat_id,
                 text="בחר/י פעולה:",
                 reply_markup=keyboard,
             )
+            _track_menu_prompt(chat_id, sent)
         return
 
     if action == "root":
@@ -2025,11 +2060,12 @@ async def on_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             await query.edit_message_text("בחר/י נושא:", reply_markup=build_root_keyboard())
         except Exception:
-            await context.bot.send_message(
+            sent = await context.bot.send_message(
                 chat_id=chat_id,
                 text="בחר/י נושא:",
                 reply_markup=build_root_keyboard(),
             )
+            _track_menu_prompt(chat_id, sent)
         return
 
     # יציאה מתרגול לנושא אחר — מוחקים את הודעות התרגיל מהצ'אט.
@@ -4422,6 +4458,22 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     chat_id = telegram_chat_id(update)
     text = update.message.text.strip()
+    if text in (
+        _PERSISTENT_MAIN_LABEL,
+        _PERSISTENT_FORMULAS_LABEL,
+        _PERSISTENT_QUOTA_LABEL,
+        _PERSISTENT_BUY_LABEL,
+        _PERSISTENT_BUG_REPORT_LABEL,
+        _PERSISTENT_ADMIN_LABEL,
+        _PERSISTENT_ENGINEER_LABEL,
+        _PERSISTENT_ASSISTANT_LABEL,
+        _START_INTRO_LABEL,
+        _START_STATICS_LABEL,
+        _START_CENTER_OF_GRAVITY_LABEL,
+        _START_SEND_IMAGE_LABEL,
+        _START_GIVE_EXERCISE_LABEL,
+    ):
+        await _delete_menu_prompts(context, chat_id)
     usage_action = {
         _PERSISTENT_MAIN_LABEL: "main",
         _START_INTRO_LABEL: "intro",
