@@ -490,7 +490,12 @@ async def _deliver_approved_solve(
         if notebook_path is not None:
             try:
                 kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("ראשי", callback_data="menu:main")]]
+                    [
+                        [
+                            InlineKeyboardButton("ראשי", callback_data="menu:main"),
+                            InlineKeyboardButton("לתרגול", callback_data="menu:give_exercise"),
+                        ]
+                    ]
                 )
                 with notebook_path.open("rb") as photo:
                     sent = await context.bot.send_photo(
